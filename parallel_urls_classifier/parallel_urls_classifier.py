@@ -82,12 +82,12 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
                            torch.sum(torch.logical_and(labels == 1, outputs_argmax == 1))])
             fp = np.array([torch.sum(torch.logical_and(labels != 0, outputs_argmax == 0)),
                            torch.sum(torch.logical_and(labels != 1, outputs_argmax == 1))])
-            fn = np.array([torch.sum(labels == 0),
-                           torch.sum(labels == 1)])
+            fn = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax != 0)),
+                           torch.sum(torch.logical_and(labels == 1, outputs_argmax != 1))])
             precision = np.array([tp[0] / (tp[0] + fp[0]) if (tp[0] + fp[0]) != 0 else 1.0 if tp[0] == 0 else 0.0,
                                   tp[1] / (tp[1] + fp[1]) if (tp[1] + fp[1]) != 0 else 1.0 if tp[1] == 0 else 0.0])
-            recall = np.array([tp[0] / fn[0] if fn[0] != 0 else 1.0 if tp[0] == 0 else 0.0,
-                               tp[1] / fn[1] if fn[1] != 0 else 1.0 if tp[1] == 0 else 0.0])
+            recall = np.array([tp[0] / (tp[0] + fn[0]) if (tp[0] + fn[0]) != 0 else 1.0 if tp[0] == 0 else 0.0,
+                               tp[1] / (tp[1] + fn[1]) if (tp[1] + fn[1]) != 0 else 1.0 if tp[1] == 0 else 0.0])
             f1 = np.array([2 * ((precision[0] * recall[0]) / (precision[0] + recall[0])) if (precision[0] + recall[0]) != 0 else 1.0 if (precision[0] * recall[0]) == 0 else 0.0,
                            2 * ((precision[1] * recall[1]) / (precision[1] + recall[1])) if (precision[1] + recall[1]) != 0 else 1.0 if (precision[1] * recall[1]) == 0 else 0.0])
 
@@ -392,12 +392,12 @@ def main(args):
                            torch.sum(torch.logical_and(labels == 1, outputs_argmax == 1))])
             fp = np.array([torch.sum(torch.logical_and(labels != 0, outputs_argmax == 0)),
                            torch.sum(torch.logical_and(labels != 1, outputs_argmax == 1))])
-            fn = np.array([torch.sum(labels == 0),
-                           torch.sum(labels == 1)])
+            fn = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax != 0)),
+                           torch.sum(torch.logical_and(labels == 1, outputs_argmax != 1))])
             precision = np.array([tp[0] / (tp[0] + fp[0]) if (tp[0] + fp[0]) != 0 else 1.0 if tp[0] == 0 else 0.0,
                                   tp[1] / (tp[1] + fp[1]) if (tp[1] + fp[1]) != 0 else 1.0 if tp[1] == 0 else 0.0])
-            recall = np.array([tp[0] / fn[0] if fn[0] != 0 else 1.0 if tp[0] == 0 else 0.0,
-                               tp[1] / fn[1] if fn[1] != 0 else 1.0 if tp[1] == 0 else 0.0])
+            recall = np.array([tp[0] / (tp[0] + fn[0]) if (tp[0] + fn[0]) != 0 else 1.0 if tp[0] == 0 else 0.0,
+                               tp[1] / (tp[1] + fn[1]) if (tp[1] + fn[1]) != 0 else 1.0 if tp[1] == 0 else 0.0])
             f1 = np.array([2 * ((precision[0] * recall[0]) / (precision[0] + recall[0])) if (precision[0] + recall[0]) != 0 else 1.0 if (precision[0] * recall[0]) == 0 else 0.0,
                            2 * ((precision[1] * recall[1]) / (precision[1] + recall[1])) if (precision[1] + recall[1]) != 0 else 1.0 if (precision[1] * recall[1]) == 0 else 0.0])
 
