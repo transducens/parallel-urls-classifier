@@ -6,7 +6,7 @@ import time
 import random
 import logging
 import argparse
-import urllib
+import urllib.parse
 
 import utils
 
@@ -84,12 +84,14 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
                            torch.sum(torch.logical_and(labels != 1, outputs_argmax == 1))])
             fn = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax != 0)),
                            torch.sum(torch.logical_and(labels == 1, outputs_argmax != 1))])
-            precision = np.array([tp[0] / (tp[0] + fp[0]) if (tp[0] + fp[0]) != 0 else 1.0 if tp[0] == 0 else 0.0,
-                                  tp[1] / (tp[1] + fp[1]) if (tp[1] + fp[1]) != 0 else 1.0 if tp[1] == 0 else 0.0])
-            recall = np.array([tp[0] / (tp[0] + fn[0]) if (tp[0] + fn[0]) != 0 else 1.0 if tp[0] == 0 else 0.0,
-                               tp[1] / (tp[1] + fn[1]) if (tp[1] + fn[1]) != 0 else 1.0 if tp[1] == 0 else 0.0])
-            f1 = np.array([2 * ((precision[0] * recall[0]) / (precision[0] + recall[0])) if (precision[0] + recall[0]) != 0 else 1.0 if (precision[0] * recall[0]) == 0 else 0.0,
-                           2 * ((precision[1] * recall[1]) / (precision[1] + recall[1])) if (precision[1] + recall[1]) != 0 else 1.0 if (precision[1] * recall[1]) == 0 else 0.0])
+            tn = np.array([torch.sum(torch.logical_and(torch.logical_and(labels != 0, outputs_argmax != 0), labels == outputs_argmax)),
+                           torch.sum(torch.logical_and(torch.logical_and(labels != 1, outputs_argmax != 1), labels == outputs_argmax))])
+            precision = np.array([tp[0] / (tp[0] + fp[0]) if (tp[0] + fp[0]) != 0 else 1.0,
+                                  tp[1] / (tp[1] + fp[1]) if (tp[1] + fp[1]) != 0 else 1.0])
+            recall = np.array([tp[0] / (tp[0] + fn[0]) if (tp[0] + fn[0]) != 0 else 1.0,
+                               tp[1] / (tp[1] + fn[1]) if (tp[1] + fn[1]) != 0 else 1.0])
+            f1 = np.array([2 * ((precision[0] * recall[0]) / (precision[0] + recall[0])) if (precision[0] + recall[0]) != 0.0 else 1.0,
+                           2 * ((precision[1] * recall[1]) / (precision[1] + recall[1])) if (precision[1] + recall[1]) != 0.0 else 1.0])
 
             assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
             assert np.isclose(np.sum(acc_per_class), acc), f"Acc and the sum of acc per classes should match ({acc} vs {np.sum(acc_per_class)})"
@@ -248,12 +250,16 @@ def main(args):
             trg_url = initial_trg_url
 
             # Decode URL
-            src_url = urllib.unquote(src_url)
-            trg_url = urllib.unquote(trg_url)
+            src_url = urllib.parse.unquote(src_url)
+            trg_url = urllib.parse.unquote(trg_url)
 
             # Stringify URL
             src_url = utils.stringify_url(src_url)
             trg_url = utils.stringify_url(trg_url)
+
+            # Lower case
+            src_url = src_url.lower()
+            trg_url = trg_url.lower()
 
             # Input
             target_urls = f"{src_url} {tokenizer.sep_token} {trg_url}"
@@ -266,15 +272,16 @@ def main(args):
             ## Tokens
             urls_tokens = urls.cpu() * attention_mask.cpu()
             urls_tokens = urls_tokens[0][urls_tokens.nonzero()[:,1]] # Get unique batch and column 1 (pytorch format...)
-            str_from_tokens = tokenizer.decode(urls_tokens) # Detokenize
+            original_str_from_tokens = tokenizer.decode(urls_tokens) # Detokenize
+            str_from_tokens = ' '.join([tokenizer.decode(t) for t in urls_tokens]) # Detokenize adding a space between tokens
             ## Unk
             unk = torch.sum((urls_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
-            sp_unk_vs_tokens_len = f"{len(target_urls.split(' '))} vs {len(str_from_tokens.split(' '))}"
-            sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, target_urls.split(' ')))} vs " \
+            sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(' '))} vs {len(str_from_tokens.split(' '))}"
+            sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(' ')))} vs " \
                                        f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(' ')))}"
 
             logging.debug("Tokenization info (model input, from model input to tokens, from tokens to str): "
-                          "(%s, %s, %s)", target_urls, str(urls_tokens).replace('\n', ' '), str_from_tokens)
+                          "(%s, %s, %s)", original_str_from_tokens, str(urls_tokens).replace('\n', ' '), str_from_tokens)
             logging.debug("Unk. info (unk chars, initial tokens vs detokenized tokens, "
                           "len=1 -> initial tokens vs detokenized tokens): (%d, %s, %s)",
                           unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
@@ -304,7 +311,7 @@ def main(args):
                   (file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
                   (file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
         for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size * 10,
-                                                                      f=lambda u: utils.stringify_url(urllib.unquote(u)))):
+                                                                      f=lambda u: utils.stringify_url(urllib.parse.unquote(u)).lower())):
             l.extend(batch_urls)
 
     logging.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
@@ -394,12 +401,14 @@ def main(args):
                            torch.sum(torch.logical_and(labels != 1, outputs_argmax == 1))])
             fn = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax != 0)),
                            torch.sum(torch.logical_and(labels == 1, outputs_argmax != 1))])
-            precision = np.array([tp[0] / (tp[0] + fp[0]) if (tp[0] + fp[0]) != 0 else 1.0 if tp[0] == 0 else 0.0,
-                                  tp[1] / (tp[1] + fp[1]) if (tp[1] + fp[1]) != 0 else 1.0 if tp[1] == 0 else 0.0])
-            recall = np.array([tp[0] / (tp[0] + fn[0]) if (tp[0] + fn[0]) != 0 else 1.0 if tp[0] == 0 else 0.0,
-                               tp[1] / (tp[1] + fn[1]) if (tp[1] + fn[1]) != 0 else 1.0 if tp[1] == 0 else 0.0])
-            f1 = np.array([2 * ((precision[0] * recall[0]) / (precision[0] + recall[0])) if (precision[0] + recall[0]) != 0 else 1.0 if (precision[0] * recall[0]) == 0 else 0.0,
-                           2 * ((precision[1] * recall[1]) / (precision[1] + recall[1])) if (precision[1] + recall[1]) != 0 else 1.0 if (precision[1] * recall[1]) == 0 else 0.0])
+            tn = np.array([torch.sum(torch.logical_and(torch.logical_and(labels != 0, outputs_argmax != 0), labels == outputs_argmax)),
+                           torch.sum(torch.logical_and(torch.logical_and(labels != 1, outputs_argmax != 1), labels == outputs_argmax))])
+            precision = np.array([tp[0] / (tp[0] + fp[0]) if (tp[0] + fp[0]) != 0 else 1.0,
+                                  tp[1] / (tp[1] + fp[1]) if (tp[1] + fp[1]) != 0 else 1.0])
+            recall = np.array([tp[0] / (tp[0] + fn[0]) if (tp[0] + fn[0]) != 0 else 1.0,
+                               tp[1] / (tp[1] + fn[1]) if (tp[1] + fn[1]) != 0 else 1.0])
+            f1 = np.array([2 * ((precision[0] * recall[0]) / (precision[0] + recall[0])) if (precision[0] + recall[0]) != 0 else 1.0,
+                           2 * ((precision[1] * recall[1]) / (precision[1] + recall[1])) if (precision[1] + recall[1]) != 0 else 1.0])
 
             assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
             assert np.isclose(np.sum(acc_per_class), acc), f"Acc and the sum of acc per classes should match ({acc} vs {np.sum(acc_per_class)})"
@@ -538,7 +547,7 @@ def main(args):
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                     description="URLs classifier")
+                                     description="Parallel URLs classifier")
 
     parser.add_argument('parallel_urls_train_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
     parser.add_argument('parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
