@@ -31,6 +31,8 @@ def main(args):
             trg_gs_urls.append(urls[1])
             gs_pairs.add(f"{urls[0]}\t{urls[1]}")
 
+    logging.info("GS pairs: %d", len(gs_pairs))
+
     with utils.open_xz_or_gzip_or_plain(urls_file) as f:
         for l in f:
             urls = l.strip().split('\t')
@@ -62,9 +64,14 @@ def main(args):
                 else:
                     tn += 1
 
-    precision = tp / (tp + fp)
-    recall = tp / (tp + fn)
-    f1 = 2 * ((precision * recall) / (precision + recall))
+    logging.info("Provided URL pairs: %d", len(parallel_src_urls) + len(non_parallel_src_urls))
+
+    logging.info("tp, tn: %d, %d", tp, tn)
+    logging.info("fp, fn: %d, %d", fp, fn)
+
+    precision = tp / (tp + fp) if tp != 0 else 0.0
+    recall = tp / (tp + fn) if tp != 0 else 0.0
+    f1 = 2 * ((precision * recall) / (precision + recall)) if tp != 0 else 0.0
 
     print(f"Precision: {precision}")
     print(f"Recall: {recall}")
