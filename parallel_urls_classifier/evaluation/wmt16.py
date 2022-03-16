@@ -86,7 +86,8 @@ def main(args):
 
     for line in input_file:
         lang, url, doc = line.rstrip('\n').split('\t')
-        d = url.lstrip("http://").lstrip("https://").split('/')[0]
+        d = url[8:] if url[:8] == "https://" else url[7:] if url[:7] == "http://" else url
+        d = d.split('/')[0]
 
         if domain is None:
             domain = d
@@ -110,8 +111,10 @@ def main(args):
 
     for line in gold_standard_file:
         src, trg = line.strip().split('\t')
-        src_domain = src.lstrip("http://").lstrip("https://").split('/')[0]
-        trg_domain = trg.lstrip("http://").lstrip("https://").split('/')[0]
+        src_domain = src[8:] if src[:8] == "https://" else src[7:] if src[:7] == "http://" else src
+        trg_domain = trg[8:] if trg[:8] == "https://" else trg[7:] if trg[:7] == "http://" else trg
+        src_domain = src_domain.split('/')[0]
+        trg_domain = trg_domain.split('/')[0]
 
         if src_domain != trg_domain:
             logging.warning(f"Different GS src and trg domain: '{src_domain}' vs '{trg_domain}'")
