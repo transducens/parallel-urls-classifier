@@ -13,15 +13,15 @@ def get_urls_from_sent(sent_file, src_url_idx, trg_url_idx):
         for line in fd:
             line = line.split('\t')
             line[-1] = line[-1].rstrip('\n')
-            src_url = line[src_url_idx].replace('\t', ' ')
-            trg_url = line[trg_url_idx].replace('\t', ' ')
+            src_url = line[src_url_idx]
+            trg_url = line[trg_url_idx]
             url = f"{src_url}\t{trg_url}"
 
             if url not in urls:
                 urls[url] = 0
 
             urls[url] += 1
-    
+
     return urls
 
 def get_nolines_from_url_and_sentences(url_files, sentences_files):
@@ -30,13 +30,13 @@ def get_nolines_from_url_and_sentences(url_files, sentences_files):
     for url_file, sentences_file in zip(url_files, sentences_files):
         with utils.open_xz_or_gzip_or_plain(url_file) as url_fd, utils.open_xz_or_gzip_or_plain(sentences_file) as sentences_fd:
             for url_line, sentences_line in zip(url_fd, sentences_fd):
-                url_line = url_line.strip().replace('\t', '')
+                url_line = url_line.strip().replace('\t', ' ')
                 sentences_line = sentences_line.strip()
 
                 # URL should not be the same twice
                 sentences_line = base64.b64decode(sentences_line).decode('utf-8', errors="ignore").strip()
 
-                urls_nolines[url_line] = sentences_line.count('\n') + 1
+                urls_nolines[url_line] = sentences_line.count('\n') + (1 if sentences_line != '' else 0)
 
             logging.debug("Read url.gz and sentences.gz number of lines: %d", len(urls_nolines))
 
@@ -96,11 +96,11 @@ def main(args):
             pass
         elif max_url_nolines < 10 and urls_diff > 2:
             continue
-        elif max_url_nolines < 20 and urls_diff > 4:
+        elif max_url_nolines < 20 and urls_diff > 6:
             continue
-        elif max_url_nolines < 40 and urls_diff > 6:
+        elif max_url_nolines < 40 and urls_diff > 10:
             continue
-        elif urls_diff > 10:
+        elif urls_diff > 15:
             continue
 
         print(f"{src_url}\t{trg_url}")

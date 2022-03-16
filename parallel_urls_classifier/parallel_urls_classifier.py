@@ -8,7 +8,7 @@ import logging
 import argparse
 import urllib.parse
 
-import utils
+import utils.utils as utils
 
 import numpy as np
 import torch
@@ -149,12 +149,16 @@ def plot_statistics(args, path=None, time_wait=5.0):
         plt.pause(time_wait)
 
 def main(args):
-    file_parallel_urls_train = args.parallel_urls_train_filename
-    file_non_parallel_urls_train = args.non_parallel_urls_train_filename
-    file_parallel_urls_dev = args.parallel_urls_dev_filename
-    file_non_parallel_urls_dev = args.non_parallel_urls_dev_filename
-    file_parallel_urls_test = args.parallel_urls_test_filename
-    file_non_parallel_urls_test = args.non_parallel_urls_test_filename
+    apply_inference = args.inference
+
+    if not apply_inference:
+        file_parallel_urls_train = args.parallel_urls_train_filename
+        file_non_parallel_urls_train = args.non_parallel_urls_train_filename
+        file_parallel_urls_dev = args.parallel_urls_dev_filename
+        file_non_parallel_urls_dev = args.non_parallel_urls_dev_filename
+        file_parallel_urls_test = args.parallel_urls_test_filename
+        file_non_parallel_urls_test = args.non_parallel_urls_test_filename
+
     parallel_urls_train = []
     non_parallel_urls_train = []
     parallel_urls_dev = []
@@ -173,7 +177,6 @@ def main(args):
     seed = args.seed
     plot = args.plot
     plot_path = utils.resolve_path(args.plot_path)
-    apply_inference = args.inference
     inference_from_stdin = args.inference_from_stdin
     waiting_time = 20
 
@@ -215,9 +218,11 @@ def main(args):
         max_length_tokens = 512
 
     logging.info("Device: %s", device)
-    logging.debug("Train URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_train, file_non_parallel_urls_train)
-    logging.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
-    logging.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
+
+    if not apply_inference:
+        logging.debug("Train URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_train, file_non_parallel_urls_train)
+        logging.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
+        logging.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
     model = AutoModelForSequenceClassification.from_pretrained(pretrained_model).to(device)
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
@@ -434,7 +439,7 @@ def main(args):
                                         (batch_acc, epoch_acc * 100.0 / (idx + 1)),
                                         (batch_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0 / (idx + 1)),
                                         (batch_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0 / (idx + 1)))
-                
+
                 plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
                              "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "epochs": epochs,
                              "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
@@ -548,13 +553,15 @@ def main(args):
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Parallel URLs classifier")
+    inference = "--inference" in sys.argv
 
-    parser.add_argument('parallel_urls_train_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
-    parser.add_argument('parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
-    parser.add_argument('parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
-    parser.add_argument('non_parallel_urls_train_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
-    parser.add_argument('non_parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
-    parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
+    if not inference:
+        parser.add_argument('parallel_urls_train_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
+        parser.add_argument('parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
+        parser.add_argument('parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
+        parser.add_argument('non_parallel_urls_train_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
+        parser.add_argument('non_parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
+        parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
