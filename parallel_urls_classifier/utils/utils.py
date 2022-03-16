@@ -178,3 +178,10 @@ def set_up_logging(filename=None, level=logging.INFO, format="[%(asctime)s] [%(l
 
     logging.basicConfig(handlers=handlers, level=level,
                         format=format)
+
+def update_defined_variables_from_dict(d, provided_locals, smash=False):
+    for v, _ in d.items():
+        if v in provided_locals and not smash:
+            raise Exception(f"Variable '{v}' is already defined and smash=False")
+
+    provided_locals.update(d)

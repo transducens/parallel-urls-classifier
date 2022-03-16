@@ -44,6 +44,49 @@ class URLsDataset(Dataset):
 
         return {"bert_url_str": self.data[idx], "label": self.labels[idx]}
 
+def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, log=False):
+    acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
+
+    acc_per_class = np.zeros(classes)
+    tp, fp, fn, tn = np.zeros(classes), np.zeros(classes), np.zeros(classes), np.zeros(classes)
+    precision, recall, f1 = np.zeros(classes), np.zeros(classes), np.zeros(classes)
+
+    for c in range(classes):
+        # How many times have we classify correctly the target class taking into account all the data? -> we get how many percentage is from each class
+        acc_per_class[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c))
+
+        # Multiclass confusion matrix
+        # https://www.analyticsvidhya.com/blog/2021/06/confusion-matrix-for-multi-class-classification/
+        tp[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c))
+        fp[c] = torch.sum(torch.logical_and(labels != c, outputs_argmax == c))
+        fn[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax != c))
+        tn[c] = torch.sum(torch.logical_and(labels != c, outputs_argmax != c))
+
+        # Metrics
+        # http://rali.iro.umontreal.ca/rali/sites/default/files/publis/SokolovaLapalme-JIPM09.pdf
+        # https://developers.google.com/machine-learning/crash-course/classification/precision-and-recall
+        precision[c] = tp[c] / (tp[c] + fp[c]) if (tp[c] + fp[c]) != 0 else 1.0
+        recall[c] = tp[c] / (tp[c] + fn[c]) if (tp[c] + fn[c]) != 0 else 1.0
+        f1[c] = 2 * ((precision[c] * recall[c]) / (precision[c] + recall[c])) if (precision[c] + recall[c]) != 0 else 1.0
+
+    #assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
+    assert np.isclose(np.sum(acc_per_class), acc), f"Acc and the sum of acc per classes should match ({acc} vs {np.sum(acc_per_class)})"
+
+    if log:
+        logging.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
+        logging.debug("[train:batch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
+                        idx + 1, precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
+
+    return {"acc": acc,
+            "acc_per_class": acc_per_class,
+            "tp": tp,
+            "fp": fp,
+            "fn": fn,
+            "tn": tn,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,}
+
 def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device):
     model.eval()
 
@@ -75,33 +118,14 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
 
             loss = criterion(outputs, labels).cpu().detach().numpy()
             labels = labels.cpu()
-            acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
-            acc_per_class = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax == 0)),
-                                      torch.sum(torch.logical_and(labels == 1, outputs_argmax == 1))]) / current_batch_size
-            tp = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax == 0)),
-                           torch.sum(torch.logical_and(labels == 1, outputs_argmax == 1))])
-            fp = np.array([torch.sum(torch.logical_and(labels != 0, outputs_argmax == 0)),
-                           torch.sum(torch.logical_and(labels != 1, outputs_argmax == 1))])
-            fn = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax != 0)),
-                           torch.sum(torch.logical_and(labels == 1, outputs_argmax != 1))])
-            tn = np.array([torch.sum(torch.logical_and(torch.logical_and(labels != 0, outputs_argmax != 0), labels == outputs_argmax)),
-                           torch.sum(torch.logical_and(torch.logical_and(labels != 1, outputs_argmax != 1), labels == outputs_argmax))])
-            precision = np.array([tp[0] / (tp[0] + fp[0]) if (tp[0] + fp[0]) != 0 else 1.0,
-                                  tp[1] / (tp[1] + fp[1]) if (tp[1] + fp[1]) != 0 else 1.0])
-            recall = np.array([tp[0] / (tp[0] + fn[0]) if (tp[0] + fn[0]) != 0 else 1.0,
-                               tp[1] / (tp[1] + fn[1]) if (tp[1] + fn[1]) != 0 else 1.0])
-            f1 = np.array([2 * ((precision[0] * recall[0]) / (precision[0] + recall[0])) if (precision[0] + recall[0]) != 0.0 else 1.0,
-                           2 * ((precision[1] * recall[1]) / (precision[1] + recall[1])) if (precision[1] + recall[1]) != 0.0 else 1.0])
-
-            assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
-            assert np.isclose(np.sum(acc_per_class), acc), f"Acc and the sum of acc per classes should match ({acc} vs {np.sum(acc_per_class)})"
+            metrics = get_metrics(outputs_argmax, labels, current_batch_size)
 
             total_loss += loss
-            total_acc += acc
-            total_acc_per_class += acc_per_class
-            total_acc_per_class_abs_precision += precision
-            total_acc_per_class_abs_recall += recall
-            total_acc_per_class_abs_f1 += f1
+            total_acc += metrics["acc"]
+            total_acc_per_class += metrics["acc_per_class"]
+            total_acc_per_class_abs_precision += metrics["precision"]
+            total_acc_per_class_abs_recall += metrics["recall"]
+            total_acc_per_class_abs_f1 += metrics["f1"]
 
         total_loss /= idx + 1
         total_acc /= idx + 1
@@ -395,39 +419,17 @@ def main(args):
             loss = criterion(outputs, labels)
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
-            acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
-            # How many times have we classify correctly the target class taking into account all the data? -> we get how many percentage is from each class
-            acc_per_class = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax == 0)),
-                                      torch.sum(torch.logical_and(labels == 1, outputs_argmax == 1))]) / current_batch_size
-            # How many times have we classify correctly the target class taking into account only the data of the specific class?
-            tp = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax == 0)),
-                           torch.sum(torch.logical_and(labels == 1, outputs_argmax == 1))])
-            fp = np.array([torch.sum(torch.logical_and(labels != 0, outputs_argmax == 0)),
-                           torch.sum(torch.logical_and(labels != 1, outputs_argmax == 1))])
-            fn = np.array([torch.sum(torch.logical_and(labels == 0, outputs_argmax != 0)),
-                           torch.sum(torch.logical_and(labels == 1, outputs_argmax != 1))])
-            tn = np.array([torch.sum(torch.logical_and(torch.logical_and(labels != 0, outputs_argmax != 0), labels == outputs_argmax)),
-                           torch.sum(torch.logical_and(torch.logical_and(labels != 1, outputs_argmax != 1), labels == outputs_argmax))])
-            precision = np.array([tp[0] / (tp[0] + fp[0]) if (tp[0] + fp[0]) != 0 else 1.0,
-                                  tp[1] / (tp[1] + fp[1]) if (tp[1] + fp[1]) != 0 else 1.0])
-            recall = np.array([tp[0] / (tp[0] + fn[0]) if (tp[0] + fn[0]) != 0 else 1.0,
-                               tp[1] / (tp[1] + fn[1]) if (tp[1] + fn[1]) != 0 else 1.0])
-            f1 = np.array([2 * ((precision[0] * recall[0]) / (precision[0] + recall[0])) if (precision[0] + recall[0]) != 0 else 1.0,
-                           2 * ((precision[1] * recall[1]) / (precision[1] + recall[1])) if (precision[1] + recall[1]) != 0 else 1.0])
+            log = (idx + 1) % show_statistics_every_batches == 0
 
-            assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
-            assert np.isclose(np.sum(acc_per_class), acc), f"Acc and the sum of acc per classes should match ({acc} vs {np.sum(acc_per_class)})"
+            metrics = get_metrics(outputs_argmax, labels, current_batch_size, idx=idx, log=log)
 
-            if (idx + 1) % show_statistics_every_batches == 0:
+            if log:
                 logging.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
-                logging.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
-                logging.debug("[train:batch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
-                              idx + 1, precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
 
             epoch_loss += loss_value
-            epoch_acc += acc
-            epoch_acc_per_class += acc_per_class
-            epoch_acc_per_class_abs += f1
+            epoch_acc += metrics["acc"]
+            epoch_acc_per_class += metrics["acc_per_class"]
+            epoch_acc_per_class_abs += metrics["f1"]
 
             if epoch == 0 and idx == 0:
                 utils.append_from_tuple((batch_loss, epoch_loss),
