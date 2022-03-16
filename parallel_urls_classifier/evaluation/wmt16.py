@@ -1,12 +1,18 @@
 
+import os
+import sys
 import base64
 import logging
 import argparse
 import itertools
 import subprocess
 
-from ..utils import levenshtein
-from ..utils import utils
+cdir = os.path.dirname(os.path.realpath(__file__))
+
+sys.path.insert(0, f"{cdir}/..")
+
+import utils.levenshtein as levenshtein
+import utils.utils as utils
 
 def process_pairs(pairs, command):
     results = []
