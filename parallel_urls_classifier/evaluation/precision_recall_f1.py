@@ -10,6 +10,8 @@ sys.path.insert(0, f"{cdir}/..")
 
 import utils.utils as utils
 
+import numpy as np
+
 def main(args):
     urls_file = args.urls_file
     gold_standard_file = args.gold_standard_file
@@ -69,9 +71,9 @@ def main(args):
     logging.info("tp, tn: %d, %d", tp, tn)
     logging.info("fp, fn: %d, %d", fp, fn)
 
-    precision = tp / (tp + fp) if tp != 0 else 0.0
-    recall = tp / (tp + fn) if tp != 0 else 0.0
-    f1 = 2 * ((precision * recall) / (precision + recall)) if tp != 0 else 0.0
+    precision = tp / (tp + fp) if (tp + fp) != 0 else 1.0
+    recall = tp / (tp + fn) if (tp + fn) != 0 else 1.0
+    f1 = 2 * ((precision * recall) / (precision + recall)) if not np.isclose(precision + recall, 0.0) else 1.0
 
     print(f"Precision: {precision}")
     print(f"Recall: {recall}")

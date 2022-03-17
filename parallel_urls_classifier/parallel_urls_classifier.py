@@ -53,7 +53,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
 
     for c in range(classes):
         # How many times have we classify correctly the target class taking into account all the data? -> we get how many percentage is from each class
-        acc_per_class[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c))
+        acc_per_class[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c)) / current_batch_size
 
         # Multiclass confusion matrix
         # https://www.analyticsvidhya.com/blog/2021/06/confusion-matrix-for-multi-class-classification/
@@ -67,7 +67,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
         # https://developers.google.com/machine-learning/crash-course/classification/precision-and-recall
         precision[c] = tp[c] / (tp[c] + fp[c]) if (tp[c] + fp[c]) != 0 else 1.0
         recall[c] = tp[c] / (tp[c] + fn[c]) if (tp[c] + fn[c]) != 0 else 1.0
-        f1[c] = 2 * ((precision[c] * recall[c]) / (precision[c] + recall[c])) if (precision[c] + recall[c]) != 0 else 1.0
+        f1[c] = 2 * ((precision[c] * recall[c]) / (precision[c] + recall[c])) if not np.isclose(precision[c] + recall[c], 0.0) else 1.0
 
     #assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
     assert np.isclose(np.sum(acc_per_class), acc), f"Acc and the sum of acc per classes should match ({acc} vs {np.sum(acc_per_class)})"
@@ -87,7 +87,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
             "recall": recall,
             "f1": f1,}
 
-def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device):
+def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, classes=2):
     model.eval()
 
     total_loss = 0.0
@@ -118,7 +118,7 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
 
             loss = criterion(outputs, labels).cpu().detach().numpy()
             labels = labels.cpu()
-            metrics = get_metrics(outputs_argmax, labels, current_batch_size)
+            metrics = get_metrics(outputs_argmax, labels, current_batch_size, classes=classes)
 
             total_loss += loss
             total_acc += metrics["acc"]
@@ -203,21 +203,29 @@ def main(args):
     plot_path = utils.resolve_path(args.plot_path)
     inference_from_stdin = args.inference_from_stdin
     waiting_time = 20
+    parallel_likelihood = args.parallel_likelihood
+    threshold = args.threshold
+    classes = 2 # False / True
 
     if apply_inference and not model_input:
         logging.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed",
                         waiting_time)
 
         time.sleep(waiting_time)
+    if model_output and utils.exists(model_output, f=os.path.isdir):
+        logging.warning("Provided path to model output already exists: waiting %d seconds before proceed",
+                        waiting_time)
+
+        time.sleep(waiting_time)
 
     logging.debug("Pretrained model architecture: %s", pretrained_model)
 
-    if model_input and not utils.exists(model_input):
+    if model_input and not utils.exists(model_input, f=os.path.isdir):
         raise Exception(f"Provided input model does not exist: '{model_input}'")
     if model_output:
         logging.info("Model will be stored: '%s'", model_output)
 
-        if utils.exists(model_output):
+        if utils.exists(model_output, f=os.path.isdir):
             logging.warning("Provided output model does exist (file: '%s'): waiting %d seconds before proceed",
                             model_input, waiting_time)
 
@@ -248,14 +256,17 @@ def main(args):
         logging.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
         logging.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
-    model = AutoModelForSequenceClassification.from_pretrained(pretrained_model).to(device)
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
-    fine_tuning = args.fine_tuning
+    model = AutoModelForSequenceClassification
 
     if model_input:
         logging.info("Loading model: '%s'", model_input)
 
-        model.load_state_dict(torch.load(model_input))
+        model = model.from_pretrained(model_input).to(device)
+    else:
+        model = model.from_pretrained(pretrained_model, num_labels=classes).to(device)
+
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+    fine_tuning = args.fine_tuning
 
     if apply_inference:
         logging.info("Inference mode enabled: insert 2 blank lines in order to end")
@@ -316,10 +327,16 @@ def main(args):
                           unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
             outputs = model(urls, attention_mask).logits
-            outputs = F.softmax(outputs, dim=1)
-            outputs_argmax = torch.argmax(outputs.cpu(), dim=1).cpu().detach().numpy()[0]
+            outputs = F.softmax(outputs, dim=1).cpu().detach()
+            outputs_argmax = torch.argmax(outputs, dim=1).numpy()[0]
 
-            print(f"{'parallel' if outputs_argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
+            if parallel_likelihood:
+                likelihood = outputs.numpy()[0][1] # parallel
+
+                if likelihood >= threshold:
+                    print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
+            else:
+                print(f"{'parallel' if outputs_argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
 
         # Stop execution
         return
@@ -421,7 +438,7 @@ def main(args):
             labels = labels.cpu()
             log = (idx + 1) % show_statistics_every_batches == 0
 
-            metrics = get_metrics(outputs_argmax, labels, current_batch_size, idx=idx, log=log)
+            metrics = get_metrics(outputs_argmax, labels, current_batch_size, classes=classes, idx=idx, log=log)
 
             if log:
                 logging.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
@@ -478,7 +495,7 @@ def main(args):
                      epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
 
         dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, dev_acc_per_class_abs_f1 = \
-            inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device)
+            inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
         logging.info("[dev:epoch#%d] Loss: %f", epoch + 1, dev_loss)
         logging.info("[dev:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -497,7 +514,7 @@ def main(args):
 
             # Store model
             if model_output:
-                torch.save(model.state_dict(), model_output)
+                model.save_pretrained(model_output)
 
         if plot:
             utils.append_from_tuple((epoch_train_loss, epoch_loss),
@@ -529,7 +546,7 @@ def main(args):
                  final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
 
     dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, dev_acc_per_class_abs_f1 = \
-        inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device)
+        inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
     logging.info("[dev] Loss: %f", dev_loss)
     logging.info("[dev] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -539,7 +556,7 @@ def main(args):
                  dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
 
     test_loss, test_acc, test_acc_per_class, test_acc_per_class_abs_precision, test_acc_per_class_abs_recall, test_acc_per_class_abs_f1 = \
-        inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device)
+        inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, classes=classes)
 
     logging.info("[test] Loss: %f", test_loss)
     logging.info("[test] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -575,6 +592,8 @@ def initialization():
     parser.add_argument('--model-output', help="Model output path where the model will be stored")
     parser.add_argument('--inference', action="store_true", help="Do not train, just apply inference (flag --model-input is recommended)")
     parser.add_argument('--inference-from-stdin', action="store_true", help="Read inference from stdin")
+    parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
+    parser.add_argument('--threshold', type=float, default=-1.0, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action='store_true', help="Plot statistics (matplotlib pyplot) in real time")
