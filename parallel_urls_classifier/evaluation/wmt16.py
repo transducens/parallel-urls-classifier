@@ -20,12 +20,12 @@ def process_pairs(pairs, command, results_are_fp=False):
     results = []
 
     sp_result = subprocess.Popen(f"{command} | cut -f1", shell=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    aux_result, _ = sp_result.communicate('\n'.join(pairs).encode())
+    aux_result, _ = sp_result.communicate('\n'.join(pairs).encode(errors="ignore"))
 
     if results_are_fp:
-        results = list(map(float, aux_result.decode("utf-8").strip().split('\n')))
+        results = list(map(float, aux_result.decode("utf-8", errors="ignore").strip().split('\n')))
     else:
-        results = list(map(lambda r: r == "parallel", aux_result.decode("utf-8").strip().split('\n')))
+        results = list(map(lambda r: r == "parallel", aux_result.decode("utf-8", errors="ignore").strip().split('\n')))
 
     return results
 
@@ -131,7 +131,7 @@ def main(args):
         if lang not in ("en", "fr"):
             raise Exception(f"Unexpected lang (expected: en, fr): {lang}")
 
-        doc = base64.b64decode(doc).decode("utf-8").strip()
+        doc = base64.b64decode(doc).decode("utf-8", errors="ignore").strip()
 
         if lang == "en":
             src_urls.append(url)
