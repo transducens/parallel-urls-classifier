@@ -14,6 +14,8 @@ sys.path.insert(0, f"{cdir}/..")
 import utils.levenshtein as levenshtein
 import utils.utils as utils
 
+import numpy as np
+
 def process_pairs(pairs, command, results_are_fp=False):
     results = []
 
@@ -72,7 +74,8 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                         url_1 = src_pair
                         url_2 = src_gs_pairs[trg_gs_pairs.index(trg_pair)]
 
-                    similarity = levenshtein.levenshtein_opt_space_and_band(doc_1, doc_2, nfactor=max(len(doc_1), len(doc_2)), percentage=0.06)["similarity"]
+                    early_stopping = abs(doc_1.count('\n') - doc_2.count('\n')) * 75.0 if max(doc_1.count('\n'), doc_2.count('\n')) > 10 else np.inf
+                    similarity = levenshtein.levenshtein_opt_space_and_band(doc_1, doc_2, nfactor=max(len(doc_1), len(doc_2)), percentage=0.06, early_stopping=early_stopping)["similarity"]
 
                     logging.debug("Near-match similarity (url_1, url_2, similarity_score): ('%s', '%s', %f)", url_1, url_2, similarity)
 
