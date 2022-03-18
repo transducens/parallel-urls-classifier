@@ -14,37 +14,49 @@ sys.path.insert(0, f"{cdir}/..")
 import utils.levenshtein as levenshtein
 import utils.utils as utils
 
-def process_pairs(pairs, command):
+def process_pairs(pairs, command, results_are_fp=False):
     results = []
 
     sp_result = subprocess.Popen(f"{command} | cut -f1", shell=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
     aux_result, _ = sp_result.communicate('\n'.join(pairs).encode())
 
-    results = list(map(lambda r: r == "parallel", aux_result.decode("utf-8").strip().split('\n')))
+    if results_are_fp:
+        results = list(map(float, aux_result.decode("utf-8").strip().split('\n')))
+    else:
+        results = list(map(lambda r: r == "parallel", aux_result.decode("utf-8").strip().split('\n')))
 
     return results
 
-def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, trg_urls, src_docs, trg_docs):
+def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, trg_urls, src_docs, trg_docs, rule_1_1=True):
     tp = 0
     seen_src_pairs, seen_trg_pairs = set(), set()
     gs_pairs = set(f"{src_gs_pair}\t{trg_gs_pair}" for src_gs_pair, trg_gs_pair in zip(src_gs_pairs, trg_gs_pairs))
 
-    for src_pair, trg_pair in itertools.product(src_pairs, trg_pairs):
+    for src_pair, trg_pair in zip(src_pairs, trg_pairs):
         pair = f"{src_pair}\t{trg_pair}"
 
-        if pair in gs_pairs and src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs:
-            tp += 1
+        #if pair in gs_pairs and src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs:
+        if pair in gs_pairs:
+            if rule_1_1:
+                if src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs:
+                    tp += 1
+            else:
+                tp += 1
         else:
             if src_pair in src_gs_pairs and trg_pair in src_gs_pairs:
                 pass
             else:
                 # Near-matches
-                near_match_src = src_pair in src_gs_pairs and trg_pair not in trg_gs_pairs and src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs
-                near_match_trg = trg_pair in trg_gs_pairs and src_pair not in src_gs_pairs and trg_pair not in seen_trg_pairs and src_pair not in seen_src_pairs
+                near_match_src = src_pair in src_gs_pairs and trg_pair not in trg_gs_pairs
+                near_match_trg = trg_pair in trg_gs_pairs and src_pair not in src_gs_pairs
+
+                if rule_1_1:
+                    near_match_src = near_match_src and src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs
+                    near_match_trg = near_match_trg and trg_pair not in seen_trg_pairs and src_pair not in seen_src_pairs
 
                 if near_match_src and near_match_trg:
                     pass
-                elif near_match_src or near_match_trg:
+                elif rule_1_1 and (near_match_src or near_match_trg):
                     if near_match_src:
                         doc_1_idx = trg_urls.index(trg_pair)
                         doc_2_idx = trg_urls.index(trg_gs_pairs[src_gs_pairs.index(src_pair)])
@@ -84,6 +96,9 @@ def main(args):
     gold_standard_file = args.gold_standard_file
     classifier_command = args.classifier_command
     batch_size = args.batch_size
+    results_are_fp = args.results_are_fp
+    parallel_threshold = args.parallel_threshold
+    rule_1_1 = not args.disable_rule_1_1
 
     src_urls, trg_urls = [], []
     src_docs, trg_docs = [], []
@@ -146,14 +161,14 @@ def main(args):
         if len(pairs) >= batch_size:
             logging.info("Batch size %d", idx // batch_size)
 
-            parallel.extend(process_pairs(pairs, classifier_command))
+            parallel.extend(process_pairs(pairs, classifier_command, results_are_fp=results_are_fp))
 
             pairs = []
 
     if len(pairs) != 0:
         logging.info("Batch size %f", idx / batch_size)
 
-        parallel.extend(process_pairs(pairs, classifier_command))
+        parallel.extend(process_pairs(pairs, classifier_command, results_are_fp=results_are_fp))
 
         pairs = []
 
@@ -161,21 +176,44 @@ def main(args):
 
     assert expected_values  == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
 
-    parallel_values = parallel.count(True)
-    non_parallel_values = parallel.count(False)
+    if results_are_fp:
+        parallel_values = sum(i >= parallel_threshold for i in parallel)
+        non_parallel_values = sum(i < parallel_threshold for i in parallel)
+    else:
+        parallel_values = parallel.count(True)
+        non_parallel_values = parallel.count(False)
+
+    assert parallel_values + non_parallel_values == len(parallel), f"Unexpected parallel and non-parallel values: {parallel_values + non_parallel_values} vs {len(parallel)}"
 
     logging.info(f"(parallel, non-parallel): (%d, %d)", parallel_values, non_parallel_values)
 
     for v, (src_url, trg_url) in zip(parallel, itertools.product(src_urls, trg_urls)):
-        logging.debug(f"{'parallel' if v else 'non-parallel'}\t{src_url}\t{trg_url}")
+        v = v if results_are_fp else ('parallel' if v else 'non-parallel')
 
-    src_pairs = [url[0] for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p]
-    trg_pairs = [url[1] for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p]
+        logging.debug(f"{v}\t{src_url}\t{trg_url}")
+
+    if results_are_fp:
+        src_pairs = [(p, url[0]) for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p >= parallel_threshold]
+        trg_pairs = [(p, url[1]) for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p >= parallel_threshold]
+
+        logging.debug("Sorting by score")
+
+        # Sort by score
+        src_pairs = list(map(lambda t: t[1], sorted(src_pairs, key=lambda v: v[0], reverse=True)))
+        trg_pairs = list(map(lambda t: t[1], sorted(trg_pairs, key=lambda v: v[0], reverse=True)))
+    else:
+        src_pairs = [url[0] for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p]
+        trg_pairs = [url[1] for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p]
+
+    logging.debug("Pairs:")
+
+    for src_pair, trg_pair in zip(src_pairs, trg_pairs):
+        logging.debug(" - %s\t%s", src_pair, trg_pair)
 
     assert len(src_pairs) == len(trg_pairs), f"Different src and trg parallel URLs: {len(src_pairs)} vs {len(trg_pairs)}"
     assert len(src_pairs) == parallel_values, f"Unexpected quantity of parallel values: {len(src_pairs)} vs {parallel_values}"
 
-    evaluate_recall(src_pairs, trg_pairs, src_gs, trg_gs, src_urls, trg_urls, src_docs, trg_docs)
+    evaluate_recall(src_pairs, trg_pairs, src_gs, trg_gs, src_urls, trg_urls, src_docs, trg_docs, rule_1_1=rule_1_1)
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -186,6 +224,9 @@ def initialization():
 
     parser.add_argument('--classifier-command', required=True, help="Classifier command")
     parser.add_argument('--batch-size', type=int, default=256, help="Batch size")
+    parser.add_argument('--results-are-fp', action='store_true', help="Classification results are FP values intead of 'parallel'/'non-parallel'")
+    parser.add_argument('--parallel-threshold', type=float, default=0.5, help="Take URLs as parallel when the score is greater than the provided (only applied when flag --results-are-fp is set)")
+    parser.add_argument('--disable-rule-1-1', action='store_true', help="Disable WMT16 rule 1-1")
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
 
     args = parser.parse_args()
