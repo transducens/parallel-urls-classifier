@@ -30,7 +30,7 @@ def process_pairs(pairs, command, results_are_fp=False):
     return results
 
 def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, trg_urls, src_docs, trg_docs, rule_1_1=True):
-    tp, fp = 0
+    tp, fp = 0, 0
     seen_src_pairs, seen_trg_pairs = set(), set()
     gs_pairs = set(f"{src_gs_pair}\t{trg_gs_pair}" for src_gs_pair, trg_gs_pair in zip(src_gs_pairs, trg_gs_pairs))
 
