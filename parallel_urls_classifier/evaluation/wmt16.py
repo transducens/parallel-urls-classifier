@@ -30,20 +30,23 @@ def process_pairs(pairs, command, results_are_fp=False):
     return results
 
 def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, trg_urls, src_docs, trg_docs, rule_1_1=True):
-    tp = 0
+    tp, fp = 0
     seen_src_pairs, seen_trg_pairs = set(), set()
     gs_pairs = set(f"{src_gs_pair}\t{trg_gs_pair}" for src_gs_pair, trg_gs_pair in zip(src_gs_pairs, trg_gs_pairs))
 
     for src_pair, trg_pair in zip(src_pairs, trg_pairs):
         pair = f"{src_pair}\t{trg_pair}"
+        pair_hit = False
 
         #if pair in gs_pairs and src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs:
         if pair in gs_pairs:
             if rule_1_1:
                 if src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs:
                     tp += 1
+                    pair_hit = True
             else:
                 tp += 1
+                pair_hit = True
         else:
             if src_pair in src_gs_pairs and trg_pair in src_gs_pairs:
                 pass
@@ -83,16 +86,23 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                         logging.debug("Near-match found")
 
                         tp += 1
+                        pair_hit = True
+
+        if not pair_hit:
+            fp += 1
 
         seen_src_pairs.add(src_pair)
         seen_trg_pairs.add(trg_pair)
 
-    logging.info("True positives: %d", tp)
+    logging.info("(True, False) positives: (%d, %d)", tp, fp)
     logging.info("GS pairs: %d", len(gs_pairs))
+    logging.debug("GS is not exhaustive, so we cannot trust false positives, so we cannot trust precision")
 
     recall = tp / len(gs_pairs)
+    precision = tp / (tp + fp)
 
     print(f"Recall: {recall}")
+    print(f"Precision (not trustworthy because GS is not exhaustive): {precision}")
 
 def main(args):
     input_file = args.input_file
