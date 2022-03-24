@@ -1,11 +1,21 @@
 
+import os
 import sys
+import random
 import logging
+import itertools
 
 logging.basicConfig(level=logging.INFO)
 
 input_file_parallel_urls = sys.argv[1]
 output_file_urls_prefix = sys.argv[2]
+
+if "PYTHONHASHSEED" not in os.environ:
+    logging.warning("You did not provide PYTHONHASHSEED: the results will not be deterministc")
+
+random_seed = 71213
+
+random.seed(random_seed)
 
 train_perc = 0.8
 dev_perc = 0.1
@@ -102,24 +112,31 @@ def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2)
         logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
         logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
 
-    # Create negative samples -> same domain and N*N but the positive samples
+    # Create negative samples -> same domain and get all combinations
     no_non_parallel_urls = 0
     no_non_parallel_domains = 0
     last_perc_shown = -1
-    max_alignments_per_url = 100
+    limit_alignments = True
 
     # Store non-parallel URLs
     with open(non_parallel_filename, "w") as f:
         for idx, domain in enumerate(target_domains):
             any_url = False
+            parallel_urls_domain = list(parallel_urls[domain]) # WARNING: you will need to set PYTHONHASHSEED if you want deterministic results across different executions
+            idxs2 = list(range(len(parallel_urls_domain)))
 
-            for idx1, pair1 in enumerate(parallel_urls[domain]):
-                for idx2, pair2 in enumerate(parallel_urls[domain]):
-                    if idx1 == idx2:
-                        # Skip the parallel URLs
+            for idx1 in range(len(parallel_urls_domain)):
+                max_alignments_per_url = 10
+
+                random.shuffle(idxs2)
+
+                for sort_idx2, idx2 in enumerate(idxs2):
+                    if idx1 >= idx2:
+                        # Skip parallel URLs and pairs which have been already seen before (get only combinations)
+                        max_alignments_per_url += 1
                         continue
 
-                    if idx2 > max_alignments_per_url:
+                    if limit_alignments and sort_idx2 >= max_alignments_per_url:
                         # Try to avoid very large combinations
                         break
 
@@ -127,6 +144,8 @@ def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2)
                         any_url = True
                         no_non_parallel_domains += 1
 
+                    pair1 = parallel_urls_domain[idx1]
+                    pair2 = parallel_urls_domain[idx2]
                     url1 = pair1[0]
                     url2 = pair2[1]
 

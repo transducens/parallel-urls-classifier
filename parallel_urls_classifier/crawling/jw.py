@@ -103,7 +103,7 @@ def process(args):
                 lang = link["hreflang"]
                 href = link["href"]
 
-                if lang in langs:
+                if lang in langs or '*' in langs:
                     en_url = _loc.replace('\t', ' ')
                     trg_url = href.replace('\t', ' ')
 

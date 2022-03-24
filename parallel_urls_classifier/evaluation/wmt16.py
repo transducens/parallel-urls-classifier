@@ -169,7 +169,9 @@ def main(args):
 
     # Prepare pairs in order to classify them
     for idx, (src_url, trg_url) in enumerate(itertools.product(src_urls, trg_urls), 1):
-        pairs.append(f"{src_url}\t{trg_url}")
+        if src_url in src_gs or trg_url in trg_gs:
+            # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
+            pairs.append(f"{src_url}\t{trg_url}")
 
         if len(pairs) >= batch_size:
             logging.info("Batch size %d", idx // batch_size)
@@ -230,7 +232,7 @@ def main(args):
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                     description="WMT16 evaluation")
+                                     description="WMT16 evaluation for a single domain")
 
     parser.add_argument('input_file', type=argparse.FileType('rt'), help="Input file with the following format: lang<tab>URL<tab>base64-doc")
     parser.add_argument('gold_standard_file', type=argparse.FileType('rt'), help="Gold standard file")
