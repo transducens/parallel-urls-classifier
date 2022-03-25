@@ -47,11 +47,14 @@ class URLsDataset(Dataset):
 def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, log=False):
     acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
 
+    no_values_per_class = np.zeros(classes)
     acc_per_class = np.zeros(classes)
     tp, fp, fn, tn = np.zeros(classes), np.zeros(classes), np.zeros(classes), np.zeros(classes)
     precision, recall, f1 = np.zeros(classes), np.zeros(classes), np.zeros(classes)
 
     for c in range(classes):
+        no_values_per_class[c] = torch.sum(labels == c)
+
         # How many times have we classify correctly the target class taking into account all the data? -> we get how many percentage is from each class
         acc_per_class[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c)) / current_batch_size
 
@@ -74,11 +77,12 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
 
     if log:
         logging.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
-        logging.debug("[train:batch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
-                        idx + 1, precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
+        logging.debug("[train:batch#%d] Acc per class (non-parallel->precision|recall|f1, parallel->precision|recall|f1): (%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)",
+                        idx + 1, no_values_per_class[0], precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, no_values_per_class[1], precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
 
     return {"acc": acc,
             "acc_per_class": acc_per_class,
+            "no_values_per_class": no_values_per_class,
             "tp": tp,
             "fp": fp,
             "fn": fn,
@@ -367,6 +371,13 @@ def main(args):
     logging.info("%d pairs of parallel URLs loaded (test)", len(parallel_urls_test))
     logging.info("%d pairs of non-parallel URLs loaded (test)", len(non_parallel_urls_test))
 
+    min_train_samples = min(len(non_parallel_urls_train), len(parallel_urls_train))
+    classes_weights = [min_train_samples / len(non_parallel_urls_train), min_train_samples / len(parallel_urls_train)] # non-parallel URLs label is 0, and parallel URLs label is 1
+
+    logging.debug("Classes weights: %s", str(classes_weights))
+
+    classes_weights = torch.tensor(classes_weights, dtype=torch.float)
+
     no_workers = args.dataset_workers
     dataset_train = URLsDataset(parallel_urls_train, non_parallel_urls_train)
     dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=RandomSampler(dataset_train), num_workers=no_workers)
@@ -379,7 +390,7 @@ def main(args):
     #logging.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
     #logging.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
-    criterion = nn.CrossEntropyLoss().to(device)
+    criterion = nn.CrossEntropyLoss(weight=classes_weights).to(device)
     #optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()))
     optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
                       lr=2e-5,
