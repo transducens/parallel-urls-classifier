@@ -3,7 +3,6 @@ import os
 import sys
 import random
 import logging
-import itertools
 
 logging.basicConfig(level=logging.INFO)
 
@@ -11,7 +10,7 @@ input_file_parallel_urls = sys.argv[1]
 output_file_urls_prefix = sys.argv[2]
 
 if "PYTHONHASHSEED" not in os.environ:
-    logging.warning("You did not provide PYTHONHASHSEED: the results will not be deterministc")
+    logging.warning("You did not provide PYTHONHASHSEED: the results will not be deterministic")
 
 random_seed = 71213
 
@@ -109,8 +108,8 @@ def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2)
                             finished_perc, idx + 1, no_parallel_domains, no_parallel_urls)
                 last_perc_shown = int(finished_perc * 100.0)
 
-        logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
-        logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
+    logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
+    logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
 
     # Create negative samples -> same domain and get all combinations
     no_non_parallel_urls = 0
@@ -161,8 +160,8 @@ def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2)
                             finished_perc, idx + 1, no_parallel_domains, no_non_parallel_urls)
                 last_perc_shown = int(finished_perc * 100.0)
 
-        logging.info("Total URLs for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_urls)
-        logging.info("Total domains for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_domains)
+    logging.info("Total URLs for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_urls)
+    logging.info("Total domains for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_domains)
 
 store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.train", logging_cte=50)
 store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.dev", logging_cte=100)
