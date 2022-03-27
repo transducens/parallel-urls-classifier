@@ -82,6 +82,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
         logging.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
         logging.debug("[train:batch#%d] Acc per class (non-parallel->precision|recall|f1, parallel->precision|recall|f1): (%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)",
                         idx + 1, no_values_per_class[0], precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, no_values_per_class[1], precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
+        logging.debug("[train:batch#%d] Macro F1: %.2f %%", idx + 1, macro_f1 * 100.0)
 
     return {"acc": acc,
             "acc_per_class": acc_per_class,
@@ -524,7 +525,7 @@ def main(args):
                      epoch + 1, epoch_acc * 100.0, epoch_acc_per_class[0] * 100.0, epoch_acc_per_class[1] * 100.0)
         logging.info("[train:epoch#%d] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
                      epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
-        logging.info("[dev:epoch#%d] Macro F1: %f", epoch + 1, epoch_macro_f1)
+        logging.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
         dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, \
             dev_acc_per_class_abs_f1, dev_macro_f1 = \
@@ -536,7 +537,7 @@ def main(args):
         logging.info("[dev:epoch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1,
                      dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
                      dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
-        logging.info("[dev:epoch#%d] Macro F1: %f", epoch + 1, dev_macro_f1)
+        logging.info("[dev:epoch#%d] Macro F1: %.2f %%", epoch + 1, dev_macro_f1 * 100.0)
 
         # Get best dev result
         dev_target = dev_macro_f1 # Might be acc, loss, ...
@@ -582,7 +583,7 @@ def main(args):
                  final_acc * 100.0, final_acc_per_class[0] * 100.0, final_acc_per_class[1] * 100.0)
     logging.info("[train] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
                  final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
-    logging.info("[train] Macro F1: %f", final_macro_f1)
+    logging.info("[train] Macro F1: %.2f %%", final_macro_f1 * 100.0)
 
     dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, \
         dev_acc_per_class_abs_f1, dev_macro_f1 = \
@@ -594,7 +595,7 @@ def main(args):
     logging.info("[dev] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
                  dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
                  dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
-    logging.info("[dev] Macro F1: %f", dev_macro_f1)
+    logging.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
     test_loss, test_acc, test_acc_per_class, test_acc_per_class_abs_precision, test_acc_per_class_abs_recall, \
         test_acc_per_class_abs_f1, test_macro_f1 = \
@@ -606,7 +607,7 @@ def main(args):
     logging.info("[test] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
                  test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
                  test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
-    logging.info("[test] Macro F1: %f", test_macro_f1)
+    logging.info("[test] Macro F1: %.2f %%", test_macro_f1 * 100.0)
 
     if not args.plot_path:
         # Let the user finish the execution
