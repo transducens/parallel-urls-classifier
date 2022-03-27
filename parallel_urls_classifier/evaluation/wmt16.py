@@ -187,9 +187,9 @@ def main(args):
 
         pairs = []
 
-    expected_values = len(src_urls) * len(trg_urls)
+    expected_values = len(src_gs) * len(trg_url) + len(trg_gs) * len(src_url) - len(src_gs) - len(trg_gs)
 
-    assert expected_values  == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
+    #assert expected_values == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
 
     if results_are_fp:
         parallel_values = sum(i >= parallel_threshold for i in parallel)
