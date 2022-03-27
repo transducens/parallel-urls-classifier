@@ -51,6 +51,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
     acc_per_class = np.zeros(classes)
     tp, fp, fn, tn = np.zeros(classes), np.zeros(classes), np.zeros(classes), np.zeros(classes)
     precision, recall, f1 = np.zeros(classes), np.zeros(classes), np.zeros(classes)
+    macro_f1 = 0.0
 
     for c in range(classes):
         no_values_per_class[c] = torch.sum(labels == c)
@@ -75,6 +76,8 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
     #assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
     assert np.isclose(np.sum(acc_per_class), acc), f"Acc and the sum of acc per classes should match ({acc} vs {np.sum(acc_per_class)})"
 
+    macro_f1 = np.sum(f1) / f1.shape[0]
+
     if log:
         logging.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
         logging.debug("[train:batch#%d] Acc per class (non-parallel->precision|recall|f1, parallel->precision|recall|f1): (%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)",
@@ -89,7 +92,8 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
             "tn": tn,
             "precision": precision,
             "recall": recall,
-            "f1": f1,}
+            "f1": f1,
+            "macro_f1": macro_f1,}
 
 def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, classes=2):
     model.eval()
@@ -100,6 +104,7 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
     total_acc_per_class_abs_precision = np.zeros(2)
     total_acc_per_class_abs_recall = np.zeros(2)
     total_acc_per_class_abs_f1 = np.zeros(2)
+    total_macro_f1 = 0.0
 
     with torch.no_grad():
         for idx, batch in enumerate(dataloader):
@@ -130,6 +135,7 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
             total_acc_per_class_abs_precision += metrics["precision"]
             total_acc_per_class_abs_recall += metrics["recall"]
             total_acc_per_class_abs_f1 += metrics["f1"]
+            total_macro_f1 += metrics["macro_f1"]
 
         total_loss /= idx + 1
         total_acc /= idx + 1
@@ -137,9 +143,10 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
         total_acc_per_class_abs_precision /= idx + 1
         total_acc_per_class_abs_recall /= idx + 1
         total_acc_per_class_abs_f1 /= idx + 1
+        total_macro_f1 /= idx + 1
 
     return total_loss, total_acc, total_acc_per_class, total_acc_per_class_abs_precision, \
-           total_acc_per_class_abs_recall, total_acc_per_class_abs_f1
+           total_acc_per_class_abs_recall, total_acc_per_class_abs_f1, total_macro_f1
 
 def plot_statistics(args, path=None, time_wait=5.0):
     plt.clf()
@@ -404,6 +411,7 @@ def main(args):
     final_acc = 0.0
     final_acc_per_class = np.zeros(2)
     final_acc_per_class_abs = np.zeros(2)
+    final_macro_f1 = 0.0
     best_dev = -np.inf
 
     # Statistics
@@ -421,6 +429,7 @@ def main(args):
         epoch_acc = 0.0
         epoch_acc_per_class = np.zeros(2)
         epoch_acc_per_class_abs = np.zeros(2)
+        epoch_macro_f1 = 0.0
 
         model.train()
 
@@ -458,6 +467,7 @@ def main(args):
             epoch_acc += metrics["acc"]
             epoch_acc_per_class += metrics["acc_per_class"]
             epoch_acc_per_class_abs += metrics["f1"]
+            epoch_macro_f1 += metrics["macro_f1"]
 
             if epoch == 0 and idx == 0:
                 utils.append_from_tuple((batch_loss, epoch_loss),
@@ -494,19 +504,23 @@ def main(args):
         epoch_acc /= idx + 1
         epoch_acc_per_class /= idx + 1
         epoch_acc_per_class_abs /= idx + 1
+        epoch_macro_f1 /= idx + 1
         final_loss += epoch_loss
         final_acc += epoch_acc
         final_acc_per_class += epoch_acc_per_class
         final_acc_per_class_abs += epoch_acc_per_class_abs
+        final_macro_f1 += epoch_macro_f1
 
         logging.info("[train:epoch#%d] Loss: %f", epoch + 1, epoch_loss)
         logging.info("[train:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                      epoch + 1, epoch_acc * 100.0, epoch_acc_per_class[0] * 100.0, epoch_acc_per_class[1] * 100.0)
         logging.info("[train:epoch#%d] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
                      epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
+        logging.info("[dev:epoch#%d] Macro F1: %f", epoch + 1, epoch_macro_f1)
 
-        dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, dev_acc_per_class_abs_f1 = \
-            inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
+        dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, \
+            dev_acc_per_class_abs_f1, dev_total_macro_f1 = \
+                inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
         logging.info("[dev:epoch#%d] Loss: %f", epoch + 1, dev_loss)
         logging.info("[dev:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -514,9 +528,10 @@ def main(args):
         logging.info("[dev:epoch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1,
                      dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
                      dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
+        logging.info("[dev:epoch#%d] Macro F1: %f", epoch + 1, dev_total_macro_f1)
 
         # Get best dev result
-        dev_target = dev_acc # Might be acc, loss, ...
+        dev_target = dev_total_macro_f1 # Might be acc, loss, ...
 
         if best_dev < dev_target:
             logging.debug("Dev has been improved: from %s to %s", str(best_dev), str(dev_target))
@@ -549,15 +564,18 @@ def main(args):
     final_acc /= epochs
     final_acc_per_class /= epochs
     final_acc_per_class_abs /= epochs
+    final_macro_f1 /= epochs
 
     logging.info("[train] Loss: %f", final_loss)
     logging.info("[train] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                  final_acc * 100.0, final_acc_per_class[0] * 100.0, final_acc_per_class[1] * 100.0)
     logging.info("[train] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
                  final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
+    logging.info("[train] Macro F1: %f", final_macro_f1)
 
-    dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, dev_acc_per_class_abs_f1 = \
-        inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
+    dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, \
+        dev_acc_per_class_abs_f1, dev_total_macro_f1 = \
+            inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
     logging.info("[dev] Loss: %f", dev_loss)
     logging.info("[dev] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -565,9 +583,11 @@ def main(args):
     logging.info("[dev] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
                  dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
                  dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
+    logging.info("[dev] Macro F1: %f", dev_total_macro_f1)
 
-    test_loss, test_acc, test_acc_per_class, test_acc_per_class_abs_precision, test_acc_per_class_abs_recall, test_acc_per_class_abs_f1 = \
-        inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, classes=classes)
+    test_loss, test_acc, test_acc_per_class, test_acc_per_class_abs_precision, test_acc_per_class_abs_recall, \
+        test_acc_per_class_abs_f1, test_total_macro_f1 = \
+            inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, classes=classes)
 
     logging.info("[test] Loss: %f", test_loss)
     logging.info("[test] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -575,6 +595,7 @@ def main(args):
     logging.info("[test] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
                  test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
                  test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
+    logging.info("[test] Macro F1: %f", test_total_macro_f1)
 
     if not args.plot_path:
         # Let the user finish the execution
