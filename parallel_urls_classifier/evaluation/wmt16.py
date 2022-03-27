@@ -98,8 +98,11 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
     logging.info("GS pairs: %d", len(gs_pairs))
     logging.debug("GS is not exhaustive, so we cannot trust false positives, so we cannot trust precision")
 
-    recall = tp / len(gs_pairs)
-    precision = tp / (tp + fp)
+    if len(gs_pairs) == 0:
+        logging.warning("GS does not contain values")
+
+    recall = tp / len(gs_pairs) if len(gs_pairs) != 0 else 1.0
+    precision = tp / (tp + fp) if (tp + fp) != 0 else 1.0
 
     print(f"Recall: {recall}")
     print(f"Precision (not trustworthy because GS is not exhaustive): {precision}")
@@ -187,6 +190,7 @@ def main(args):
 
         pairs = []
 
+    # TODO fix expected_values
     expected_values = len(src_gs) * len(trg_url) + len(trg_gs) * len(src_url) - len(src_gs) - len(trg_gs)
 
     #assert expected_values == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
