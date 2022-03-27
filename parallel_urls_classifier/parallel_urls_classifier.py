@@ -159,6 +159,7 @@ def plot_statistics(args, path=None, time_wait=5.0):
     plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc"]))))), args["batch_acc"], label="Train acc")
     plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][0]))))), args["batch_acc_classes"][0], label="Train F1 class 0")
     plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][1]))))), args["batch_acc_classes"][1], label="Train F1 class 1")
+    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_macro_f1"]))))), args["batch_macro_f1"], label="Train macro F1")
     plt.legend()
 
     plt.subplot(3, 2, 2)
@@ -170,12 +171,14 @@ def plot_statistics(args, path=None, time_wait=5.0):
     plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_acc"], label="Train acc")
     plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_acc_classes"][0], label="Train F1 class 0")
     plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_acc_classes"][1], label="Train F1 class 1")
+    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_macro_f1"], label="Train macro F1")
     plt.legend()
 
     plt.subplot(3, 2, 5)
     plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_acc"], label="Dev acc")
     plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_acc_classes"][0], label="Dev F1 class 0")
     plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_acc_classes"][1], label="Dev F1 class 1")
+    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_macro_f1"], label="Dev macro F1")
     plt.legend()
 
     if path:
@@ -418,9 +421,11 @@ def main(args):
     batch_loss = []
     batch_acc = []
     batch_acc_classes = {0: [], 1: []}
+    batch_macro_f1 = []
     epoch_train_loss, epoch_dev_loss = [], []
     epoch_train_acc, epoch_dev_acc = [], []
     epoch_train_acc_classes, epoch_dev_acc_classes = {0: [], 1: []}, {0: [], 1: []}
+    epoch_train_macro_f1, epoch_dev_macro_f1 = [], []
 
     for epoch in range(epochs):
         logging.info("Epoch %d", epoch + 1)
@@ -473,18 +478,21 @@ def main(args):
                 utils.append_from_tuple((batch_loss, epoch_loss),
                                         (batch_acc, epoch_acc * 100.0),
                                         (batch_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0),
-                                        (batch_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0))
+                                        (batch_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0),
+                                        (batch_macro_f1, epoch_macro_f1 * 100.0))
             elif plot and (idx + 1) % show_statistics_every_batches == 0:
                 utils.append_from_tuple((batch_loss, epoch_loss / (idx + 1)),
                                         (batch_acc, epoch_acc * 100.0 / (idx + 1)),
                                         (batch_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0 / (idx + 1)),
-                                        (batch_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0 / (idx + 1)))
+                                        (batch_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0 / (idx + 1)),
+                                        (batch_macro_f1, epoch_macro_f1 * 100.0 / (idx + 1)))
 
                 plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
-                             "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "epochs": epochs,
-                             "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
-                             "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_dev_loss": epoch_dev_loss,
-                             "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes}
+                             "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
+                             "epochs": epochs, "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
+                             "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
+                             "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
+                             "epoch_dev_macro_f1": epoch_dev_macro_f1}
 
                 plot_statistics(plot_args, path=args.plot_path)
 
@@ -519,7 +527,7 @@ def main(args):
         logging.info("[dev:epoch#%d] Macro F1: %f", epoch + 1, epoch_macro_f1)
 
         dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, \
-            dev_acc_per_class_abs_f1, dev_total_macro_f1 = \
+            dev_acc_per_class_abs_f1, dev_macro_f1 = \
                 inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
         logging.info("[dev:epoch#%d] Loss: %f", epoch + 1, dev_loss)
@@ -528,10 +536,10 @@ def main(args):
         logging.info("[dev:epoch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1,
                      dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
                      dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
-        logging.info("[dev:epoch#%d] Macro F1: %f", epoch + 1, dev_total_macro_f1)
+        logging.info("[dev:epoch#%d] Macro F1: %f", epoch + 1, dev_macro_f1)
 
         # Get best dev result
-        dev_target = dev_total_macro_f1 # Might be acc, loss, ...
+        dev_target = dev_macro_f1 # Might be acc, loss, ...
 
         if best_dev < dev_target:
             logging.debug("Dev has been improved: from %s to %s", str(best_dev), str(dev_target))
@@ -546,17 +554,20 @@ def main(args):
             utils.append_from_tuple((epoch_train_loss, epoch_loss),
                                     (epoch_train_acc, epoch_acc * 100.0),
                                     (epoch_train_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0),
-                                    (epoch_train_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0))
+                                    (epoch_train_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0),
+                                    (epoch_train_macro_f1, epoch_macro_f1 * 100.0))
             utils.append_from_tuple((epoch_dev_loss, dev_loss),
                                     (epoch_dev_acc, dev_acc * 100.0),
                                     (epoch_dev_acc_classes[0], dev_acc_per_class_abs_f1[0] * 100.0),
-                                    (epoch_dev_acc_classes[1], dev_acc_per_class_abs_f1[1] * 100.0))
+                                    (epoch_dev_acc_classes[1], dev_acc_per_class_abs_f1[1] * 100.0),
+                                    (epoch_dev_macro_f1, dev_macro_f1 * 100.0))
 
             plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
-                         "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "epochs": epochs + 1,
-                         "epoch": epoch + 1, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
-                         "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_dev_loss": epoch_dev_loss,
-                         "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes}
+                         "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
+                         "epochs": epochs + 1, "epoch": epoch + 1, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
+                         "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
+                         "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
+                         "epoch_dev_macro_f1": epoch_dev_macro_f1}
 
             plot_statistics(plot_args, path=args.plot_path)
 
@@ -574,7 +585,7 @@ def main(args):
     logging.info("[train] Macro F1: %f", final_macro_f1)
 
     dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, \
-        dev_acc_per_class_abs_f1, dev_total_macro_f1 = \
+        dev_acc_per_class_abs_f1, dev_macro_f1 = \
             inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
     logging.info("[dev] Loss: %f", dev_loss)
@@ -583,10 +594,10 @@ def main(args):
     logging.info("[dev] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
                  dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
                  dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
-    logging.info("[dev] Macro F1: %f", dev_total_macro_f1)
+    logging.info("[dev] Macro F1: %f", dev_macro_f1)
 
     test_loss, test_acc, test_acc_per_class, test_acc_per_class_abs_precision, test_acc_per_class_abs_recall, \
-        test_acc_per_class_abs_f1, test_total_macro_f1 = \
+        test_acc_per_class_abs_f1, test_macro_f1 = \
             inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, classes=classes)
 
     logging.info("[test] Loss: %f", test_loss)
@@ -595,7 +606,7 @@ def main(args):
     logging.info("[test] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
                  test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
                  test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
-    logging.info("[test] Macro F1: %f", test_total_macro_f1)
+    logging.info("[test] Macro F1: %f", test_macro_f1)
 
     if not args.plot_path:
         # Let the user finish the execution
