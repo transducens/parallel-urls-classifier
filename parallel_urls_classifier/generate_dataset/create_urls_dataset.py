@@ -85,39 +85,12 @@ logging.info("Test domains: %d", len(test_domains))
 
 assert len(train_domains) + len(dev_domains) + len(test_domains) == len(parallel_urls.keys()), "Not all the domains have been set to a set"
 
-def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2):
-    parallel_filename = f"{filename_prefix}.parallel"
-    non_parallel_filename = f"{filename_prefix}.non-parallel"
-    no_parallel_urls = 0
+def store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=10, logging_cte=2):
     no_parallel_domains = len(target_domains)
-    last_perc_shown = -1
-
-    # Store parallel URLs
-    with open(parallel_filename, "w") as f:
-        for idx, domain in enumerate(target_domains):
-            for url1, url2 in parallel_urls[domain]:
-                f.write(f"{url1}\t{url2}\n")
-
-                no_parallel_urls += 1
-
-            finished_perc = (idx + 1) * 100.0 / no_parallel_domains
-
-            # Show every (logging_cte / 100) %
-            if int(finished_perc * 100.0) % logging_cte == 0 and int(finished_perc * 100.0) != last_perc_shown:
-                logging.info("%.2f %% of positive samples generated (%d out of %d domains were already processed): %d positive samples loaded",
-                            finished_perc, idx + 1, no_parallel_domains, no_parallel_urls)
-                last_perc_shown = int(finished_perc * 100.0)
-
-    logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
-    logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
-
-    # Create negative samples -> same domain and get all combinations
     no_non_parallel_urls = 0
     no_non_parallel_domains = 0
     last_perc_shown = -1
-    limit_alignments = True
 
-    # Store non-parallel URLs
     with open(non_parallel_filename, "w") as f:
         for idx, domain in enumerate(target_domains):
             any_url = False
@@ -125,7 +98,7 @@ def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2)
             idxs2 = list(range(len(parallel_urls_domain)))
 
             for idx1 in range(len(parallel_urls_domain)):
-                max_alignments_per_url = 10
+                max_alignments_per_url = limit_max_alignments_per_url
 
                 random.shuffle(idxs2)
 
@@ -159,6 +132,37 @@ def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2)
                 logging.info("%.2f %% of negative samples generated (%d out of %d domains were already processed): %d negative samples loaded",
                             finished_perc, idx + 1, no_parallel_domains, no_non_parallel_urls)
                 last_perc_shown = int(finished_perc * 100.0)
+
+    return no_non_parallel_urls, no_non_parallel_domains
+
+def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2):
+    parallel_filename = f"{filename_prefix}.parallel"
+    non_parallel_filename = f"{filename_prefix}.non-parallel"
+    no_parallel_urls = 0
+    no_parallel_domains = len(target_domains)
+    last_perc_shown = -1
+
+    # Store parallel URLs
+    with open(parallel_filename, "w") as f:
+        for idx, domain in enumerate(target_domains):
+            for url1, url2 in parallel_urls[domain]:
+                f.write(f"{url1}\t{url2}\n")
+
+                no_parallel_urls += 1
+
+            finished_perc = (idx + 1) * 100.0 / no_parallel_domains
+
+            # Show every (logging_cte / 100) %
+            if int(finished_perc * 100.0) % logging_cte == 0 and int(finished_perc * 100.0) != last_perc_shown:
+                logging.info("%.2f %% of positive samples generated (%d out of %d domains were already processed): %d positive samples loaded",
+                            finished_perc, idx + 1, no_parallel_domains, no_parallel_urls)
+                last_perc_shown = int(finished_perc * 100.0)
+
+    logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
+    logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
+
+    # Create negative samples -> same domain and get all combinations (store non-parallel URLs)
+    no_non_parallel_urls, no_non_parallel_domains = store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=10, logging_cte=logging_cte)
 
     logging.info("Total URLs for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_urls)
     logging.info("Total domains for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_domains)
