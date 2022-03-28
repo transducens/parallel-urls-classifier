@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomSampler, SequentialSampler
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW, get_linear_schedule_with_warmup
 import matplotlib.pyplot as plt
 
@@ -42,7 +42,7 @@ class URLsDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        return {"bert_url_str": self.data[idx], "label": self.labels[idx]}
+        return {"url_str": self.data[idx], "label": self.labels[idx]}
 
 def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, log=False):
     acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
@@ -109,7 +109,7 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
 
     with torch.no_grad():
         for idx, batch in enumerate(dataloader):
-            batch_urls_str = batch["bert_url_str"]
+            batch_urls_str = batch["url_str"]
             tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
             urls = tokens["input_ids"].to(device)
             attention_mask = tokens["attention_mask"].to(device)
@@ -221,6 +221,7 @@ def main(args):
     parallel_likelihood = args.parallel_likelihood
     threshold = args.threshold
     classes = 2 # False / True
+    imbalanced_strategy = args.imbalanced_strategy
 
     if apply_inference and not model_input:
         logging.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed",
@@ -383,7 +384,17 @@ def main(args):
     logging.info("%d pairs of non-parallel URLs loaded (test)", len(non_parallel_urls_test))
 
     min_train_samples = min(len(non_parallel_urls_train), len(parallel_urls_train))
-    classes_weights = [min_train_samples / len(non_parallel_urls_train), min_train_samples / len(parallel_urls_train)] # non-parallel URLs label is 0, and parallel URLs label is 1
+    classes_count = np.array([len(non_parallel_urls_train), len(parallel_urls_train)]) # non-parallel URLs label is 0, and parallel URLs label is 1
+    classes_weights = 1.0 / classes_count
+    min_classes_weights = min_train_samples / classes_count
+
+    if imbalanced_strategy == "none":
+        # Is the data imbalanced? If so, warn about it
+
+        for cw in min_classes_weights:
+            if cw < 0.9:
+                logging.warning("Your data seems to be imbalanced and you did not selected any imbalanced data strategy")
+                break
 
     logging.debug("Classes weights: %s", str(classes_weights))
 
@@ -391,7 +402,26 @@ def main(args):
 
     no_workers = args.dataset_workers
     dataset_train = URLsDataset(parallel_urls_train, non_parallel_urls_train)
-    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=RandomSampler(dataset_train), num_workers=no_workers)
+
+    if imbalanced_strategy == "over-sampling":
+        target_list = []
+
+        for t in dataset_train:
+            target_list.append(t["label"])
+
+        target_list = torch.tensor(target_list)
+        classes_weights_all = classes_weights[target_list]
+
+        # Over-sampling
+        train_sampler = WeightedRandomSampler(
+            weights=classes_weights_all,
+            num_samples=len(classes_weights_all),
+            replacement=True
+        )
+    else:
+        train_sampler = RandomSampler(dataset_train)
+
+    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler, num_workers=no_workers)
     dataset_dev = URLsDataset(parallel_urls_dev, non_parallel_urls_dev)
     dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev), num_workers=no_workers)
     dataset_test = URLsDataset(parallel_urls_test, non_parallel_urls_test)
@@ -401,7 +431,8 @@ def main(args):
     #logging.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
     #logging.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
-    criterion = nn.CrossEntropyLoss(weight=classes_weights).to(device)
+    loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
+    criterion = nn.CrossEntropyLoss(weight=loss_weight).to(device)
     #optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()))
     optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
                       lr=2e-5,
@@ -440,7 +471,7 @@ def main(args):
         model.train()
 
         for idx, batch in enumerate(dataloader_train):
-            batch_urls_str = batch["bert_url_str"]
+            batch_urls_str = batch["url_str"]
             tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
             urls = tokens["input_ids"].to(device)
             attention_mask = tokens["attention_mask"].to(device)
@@ -638,6 +669,7 @@ def initialization():
     parser.add_argument('--inference-from-stdin', action="store_true", help="Read inference from stdin")
     parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
     parser.add_argument('--threshold', type=float, default=-1.0, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
+    parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action='store_true', help="Plot statistics (matplotlib pyplot) in real time")
