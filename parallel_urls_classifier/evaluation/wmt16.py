@@ -22,10 +22,21 @@ def process_pairs(pairs, command, results_are_fp=False):
     sp_result = subprocess.Popen(f"{command} | cut -f1", shell=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
     aux_result, _ = sp_result.communicate('\n'.join(pairs).encode(errors="ignore"))
 
-    if results_are_fp:
-        results = list(map(float, aux_result.decode("utf-8", errors="ignore").strip().split('\n')))
-    else:
-        results = list(map(lambda r: r == "parallel", aux_result.decode("utf-8", errors="ignore").strip().split('\n')))
+    for idx, v in enumerate(aux_result.decode("utf-8", errors="ignore").strip().split('\n')):
+        if results_are_fp:
+            try:
+                results.append(float(v))
+            except ValueError as e:
+                logging.error("%s: returning scores of 0.0 (idx %d)", str(e), idx)
+
+                results.append(0.0)
+        else:
+            if v not in ("non-parallel", "parallel"):
+                logging.error("Unexpected value from URL classifier: returning URL pair as non-parallel (idx %d): %s", idx, str(v))
+
+                results.append(False)
+            else:
+                results.append(v == "parallel")
 
     return results
 
@@ -111,7 +122,6 @@ def main(args):
     input_file = args.input_file
     gold_standard_file = args.gold_standard_file
     classifier_command = args.classifier_command
-    batch_size = args.batch_size
     results_are_fp = args.results_are_fp
     parallel_threshold = args.parallel_threshold
     rule_1_1 = not args.disable_rule_1_1
@@ -174,26 +184,15 @@ def main(args):
     for idx, (src_url, trg_url) in enumerate(itertools.product(src_urls, trg_urls), 1):
         if src_url in src_gs or trg_url in trg_gs:
             # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
-            pairs.append(f"{src_url}\t{trg_url}")
-
-        if len(pairs) >= batch_size:
-            logging.info("Batch size %d", idx // batch_size)
-
-            parallel.extend(process_pairs(pairs, classifier_command, results_are_fp=results_are_fp))
-
-            pairs = []
+            pairs.append((src_url ,trg_url))
 
     if len(pairs) != 0:
-        logging.info("Batch size %f", idx / batch_size)
-
-        parallel.extend(process_pairs(pairs, classifier_command, results_are_fp=results_are_fp))
-
-        pairs = []
+        parallel = process_pairs(list(map(lambda p: '\t'.join(p), pairs)), classifier_command, results_are_fp=results_are_fp)
 
     # TODO fix expected_values
-    expected_values = len(src_gs) * len(trg_url) + len(trg_gs) * len(src_url) - len(src_gs) - len(trg_gs)
+    expected_values = len(src_gs) * len(trg_urls) + len(trg_gs) * len(src_urls) - len(src_gs)
 
-    #assert expected_values == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
+    assert expected_values == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
 
     if results_are_fp:
         parallel_values = sum(i >= parallel_threshold for i in parallel)
@@ -206,14 +205,14 @@ def main(args):
 
     logging.info(f"(parallel, non-parallel): (%d, %d)", parallel_values, non_parallel_values)
 
-    for v, (src_url, trg_url) in zip(parallel, itertools.product(src_urls, trg_urls)):
+    for v, (src_url, trg_url) in zip(parallel, pairs):
         v = v if results_are_fp else ('parallel' if v else 'non-parallel')
 
         logging.debug(f"{v}\t{src_url}\t{trg_url}")
 
     if results_are_fp:
-        src_pairs = [(p, url[0]) for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p >= parallel_threshold]
-        trg_pairs = [(p, url[1]) for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p >= parallel_threshold]
+        src_pairs = [(p, url[0]) for p, url in zip(parallel, pairs) if p >= parallel_threshold]
+        trg_pairs = [(p, url[1]) for p, url in zip(parallel, pairs) if p >= parallel_threshold]
 
         logging.debug("Sorting by score")
 
@@ -221,8 +220,8 @@ def main(args):
         src_pairs = list(map(lambda t: t[1], sorted(src_pairs, key=lambda v: v[0], reverse=True)))
         trg_pairs = list(map(lambda t: t[1], sorted(trg_pairs, key=lambda v: v[0], reverse=True)))
     else:
-        src_pairs = [url[0] for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p]
-        trg_pairs = [url[1] for p, url in zip(parallel, itertools.product(src_urls, trg_urls)) if p]
+        src_pairs = [url[0] for p, url in zip(parallel, pairs) if p]
+        trg_pairs = [url[1] for p, url in zip(parallel, pairs) if p]
 
     logging.debug("Pairs:")
 
@@ -242,7 +241,6 @@ def initialization():
     parser.add_argument('gold_standard_file', type=argparse.FileType('rt'), help="Gold standard file")
 
     parser.add_argument('--classifier-command', required=True, help="Classifier command")
-    parser.add_argument('--batch-size', type=int, default=256, help="Batch size")
     parser.add_argument('--results-are-fp', action='store_true', help="Classification results are FP values intead of 'parallel'/'non-parallel'")
     parser.add_argument('--parallel-threshold', type=float, default=0.5, help="Take URLs as parallel when the score is greater than the provided (only applied when flag --results-are-fp is set)")
     parser.add_argument('--disable-rule-1-1', action='store_true', help="Disable WMT16 rule 1-1")
