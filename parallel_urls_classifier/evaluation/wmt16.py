@@ -189,8 +189,7 @@ def main(args):
     if len(pairs) != 0:
         parallel = process_pairs(list(map(lambda p: '\t'.join(p), pairs)), classifier_command, results_are_fp=results_are_fp)
 
-    # TODO fix expected_values
-    expected_values = len(src_gs) * len(trg_urls) + len(trg_gs) * len(src_urls) - len(src_gs)
+    expected_values = len(src_gs) * len(trg_urls) + len(trg_gs) * len(src_urls) - len(src_gs) * len(trg_gs)
 
     assert expected_values == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
 
