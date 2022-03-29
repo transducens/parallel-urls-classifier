@@ -3,13 +3,8 @@ import os
 import sys
 import random
 import logging
-import itertools
 
-cdir = os.path.dirname(os.path.realpath(__file__))
-
-sys.path.insert(0, f"{cdir}/..")
-
-import utils.utils as utils
+import negative_samples_generator as nsg
 
 logging.basicConfig(level=logging.INFO)
 
@@ -92,64 +87,8 @@ logging.info("Test domains: %d", len(test_domains))
 
 assert len(train_domains) + len(dev_domains) + len(test_domains) == len(parallel_urls.keys()), "Not all the domains have been set to a set"
 
-def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10):
-    parallel_urls_stringify = {}
-    urls = []
-
-    for src_pair, trg_pair in itertools.combinations(parallel_urls, r=2):
-        src_url = src_pair[0]
-        trg_url = trg_pair[1]
-
-        if src_url not in parallel_urls_stringify:
-            parallel_urls_stringify[src_url] = {}
-
-        stringify_src_url = utils.stringify_url(src_url)
-        stringify_trg_url = utils.stringify_url(trg_url)
-        metric = len(set(stringify_src_url.split(' ')).intersection(set(stringify_trg_url.split(' '))))
-
-        parallel_urls_stringify[src_url][trg_url] = metric
-
-    for src_url in parallel_urls_stringify:
-        sorted_trg_parallel_urls_stringify = sorted(parallel_urls_stringify[src_url].items(), key=lambda item: item[1], reverse=True)
-
-        for idx, (trg_url, metric) in enumerate(sorted_trg_parallel_urls_stringify):
-            if limit_alignments and idx >= limit_max_alignments_per_url:
-                break
-
-            urls.append((src_url, trg_url))
-
-    return urls
-
-def get_negative_samples_random(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10):
-    idxs2 = list(range(len(parallel_urls)))
-    urls = []
-
-    for idx1 in range(len(parallel_urls)):
-        max_alignments_per_url = limit_max_alignments_per_url
-
-        random.shuffle(idxs2)
-
-        for sort_idx2, idx2 in enumerate(idxs2):
-            if idx1 >= idx2:
-                # Skip parallel URLs and pairs which have been already seen before (get only combinations)
-                max_alignments_per_url += 1
-                continue
-
-            if limit_alignments and sort_idx2 >= max_alignments_per_url:
-                # Try to avoid very large combinations
-                break
-
-            src_pair = parallel_urls[idx1]
-            trg_pair = parallel_urls[idx2]
-            src_url = src_pair[0]
-            trg_url = trg_pair[1]
-
-            urls.append((src_url, trg_url))
-
-    return urls
-
 def store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=10,
-                           logging_cte=2, negative_samples_generator=get_negative_samples_random):
+                           logging_cte=2, negative_samples_generator=nsg.get_negative_samples_random):
     no_parallel_domains = len(target_domains)
     no_non_parallel_urls = 0
     no_non_parallel_domains = 0
@@ -202,8 +141,9 @@ def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2)
     logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
     logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
 
-    #negative_samples_generator = get_negative_samples_random
-    negative_samples_generator = get_negative_samples_intersection_metric
+    # TODO change to option with argparse
+    #negative_samples_generator = nsg.get_negative_samples_random
+    negative_samples_generator = nsg.get_negative_samples_intersection_metric
 
     # Create negative samples -> same domain and get all combinations (store non-parallel URLs)
     no_non_parallel_urls, no_non_parallel_domains = store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=10,
@@ -212,6 +152,27 @@ def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2)
     logging.info("Total URLs for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_urls)
     logging.info("Total domains for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_domains)
 
-store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.train", logging_cte=50)
-store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.dev", logging_cte=100)
-store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.test", logging_cte=100)
+if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
+    logging.warning("Some set has been detected to contain 0 domains (train, dev, test: %d, %d, %d): merging all the domains")
+
+    all_parallel_urls = set()
+    all_domain = "all"
+
+    for domain in train_domains.union(dev_domains).union(test_domains):
+        all_parallel_urls.update(parallel_urls[domain])
+
+    all_parallel_urls = list(all_parallel_urls)
+
+    logging.info("Processing %d URL pairs at once", len(all_parallel_urls))
+
+    train_max_idx = int(train_perc * len(all_parallel_urls))
+    dev_max_idx = train_max_idx + int(dev_perc * len(all_parallel_urls))
+    test_max_idx = len(all_parallel_urls)
+
+    store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.train", logging_cte=50)
+    store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.dev", logging_cte=100)
+    store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.test", logging_cte=100)
+else:
+    store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.train", logging_cte=50)
+    store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.dev", logging_cte=100)
+    store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.test", logging_cte=100)
