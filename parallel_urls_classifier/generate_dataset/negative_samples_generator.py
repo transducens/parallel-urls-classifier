@@ -2,6 +2,7 @@
 import os
 import sys
 import random
+import logging
 import itertools
 
 cdir = os.path.dirname(os.path.realpath(__file__))
@@ -10,9 +11,13 @@ sys.path.insert(0, f"{cdir}/..")
 
 import utils.utils as utils
 
-def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10):
+def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10,
+                                             append_metric=False, log_debug=False):
     parallel_urls_stringify = {}
     urls = []
+
+    # TODO something is WRONG! This generator is not returning the expected value, and even worse: is returning even parallel alignments!!!!
+    # TODO why stringify_{src,trg}_url is not stringified?????
 
     for src_pair, trg_pair in itertools.combinations(parallel_urls, r=2):
         src_url = src_pair[0]
@@ -27,6 +32,9 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=Tru
 
         parallel_urls_stringify[src_url][trg_url] = metric
 
+        if log_debug:
+            logging.debug("stringify_src_url <tab> stringify_trg_url <tab> metric: %s\t%s\t%d", stringify_src_url, stringify_trg_url, metric)
+
     for src_url in parallel_urls_stringify:
         sorted_trg_parallel_urls_stringify = sorted(parallel_urls_stringify[src_url].items(), key=lambda item: item[1], reverse=True)
 
@@ -34,7 +42,10 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=Tru
             if limit_alignments and idx >= limit_max_alignments_per_url:
                 break
 
-            urls.append((src_url, trg_url))
+            if append_metric:
+                urls.append((src_url, trg_url, metric))
+            else:
+                urls.append((src_url, trg_url))
 
     return urls
 
@@ -65,3 +76,24 @@ def get_negative_samples_random(parallel_urls, limit_alignments=True, limit_max_
             urls.append((src_url, trg_url))
 
     return urls
+
+def show_info_from_fd(fd, generator, generator_kwargs=None, sample_size=None):
+    urls = []
+
+    for idx, url_pair in enumerate(fd):
+        if sample_size is not None and idx >= sample_size:
+            break
+
+        url_pair = url_pair.strip().split('\t')
+
+        assert len(url_pair) == 2, f"The provided line does not have 2 tab-separated values (line #{idx + 1})"
+
+        urls.append((url_pair[0], url_pair[1]))
+
+    if generator_kwargs:
+        result = generator(urls, **generator_kwargs)
+    else:
+        result = generator(urls)
+
+    for r in result:
+        print(str(r))

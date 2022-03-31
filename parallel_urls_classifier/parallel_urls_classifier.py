@@ -138,6 +138,8 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
             total_acc_per_class_abs_f1 += metrics["f1"]
             total_macro_f1 += metrics["macro_f1"]
 
+        # TODO do not average acc, recall, precision nor F1 -> return confussion matrix values and sum up the values -> when we have finished the loop, calculate all those values
+
         total_loss /= idx + 1
         total_acc /= idx + 1
         total_acc_per_class /= idx + 1
@@ -188,6 +190,9 @@ def plot_statistics(args, path=None, time_wait=5.0):
         plt.pause(time_wait)
 
 def main(args):
+    # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
+    logging.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
+
     apply_inference = args.inference
 
     if not apply_inference:
