@@ -115,9 +115,7 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
 
     return no_non_parallel_urls, no_non_parallel_domains
 
-def store_dataset(parallel_urls, target_domains, filename_prefix, logging_cte=2):
-    parallel_filename = f"{filename_prefix}.parallel"
-    non_parallel_filename = f"{filename_prefix}.non-parallel"
+def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2):
     no_parallel_urls = 0
     no_parallel_domains = len(target_domains)
     last_perc_shown = -1
@@ -169,10 +167,10 @@ if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
     dev_max_idx = train_max_idx + int(dev_perc * len(all_parallel_urls))
     test_max_idx = len(all_parallel_urls)
 
-    store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.train", logging_cte=50)
-    store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.dev", logging_cte=100)
-    store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.test", logging_cte=100)
+    store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50)
+    store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100)
+    store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100)
 else:
-    store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.train", logging_cte=50)
-    store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.dev", logging_cte=100)
-    store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.test", logging_cte=100)
+    store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50)
+    store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100)
+    store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100)
