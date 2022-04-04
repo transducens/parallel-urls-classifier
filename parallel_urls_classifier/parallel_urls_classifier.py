@@ -44,27 +44,38 @@ class URLsDataset(Dataset):
 
         return {"url_str": self.data[idx], "label": self.labels[idx]}
 
-def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, log=False):
-    acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
-
-    no_values_per_class = np.zeros(classes)
-    acc_per_class = np.zeros(classes)
+def get_confusion_matrix(outputs_argmax, labels, classes=2):
     tp, fp, fn, tn = np.zeros(classes), np.zeros(classes), np.zeros(classes), np.zeros(classes)
-    precision, recall, f1 = np.zeros(classes), np.zeros(classes), np.zeros(classes)
-    macro_f1 = 0.0
 
     for c in range(classes):
-        no_values_per_class[c] = torch.sum(labels == c)
-
-        # How many times have we classify correctly the target class taking into account all the data? -> we get how many percentage is from each class
-        acc_per_class[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c)) / current_batch_size
-
         # Multiclass confusion matrix
         # https://www.analyticsvidhya.com/blog/2021/06/confusion-matrix-for-multi-class-classification/
         tp[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c))
         fp[c] = torch.sum(torch.logical_and(labels != c, outputs_argmax == c))
         fn[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax != c))
         tn[c] = torch.sum(torch.logical_and(labels != c, outputs_argmax != c))
+
+    return {"tp": tp,
+            "fp": fp,
+            "fn": fn,
+            "tn": tn,}
+
+def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, log=False):
+    acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
+
+    no_values_per_class = np.zeros(classes)
+    acc_per_class = np.zeros(classes)
+    precision, recall, f1 = np.zeros(classes), np.zeros(classes), np.zeros(classes)
+    macro_f1 = 0.0
+
+    conf_mat = get_confusion_matrix(outputs_argmax, labels, classes=classes)
+    tp, fp, fn, tn = conf_mat["tp"], conf_mat["fp"], conf_mat["fn"], conf_mat["tn"]
+
+    for c in range(classes):
+        no_values_per_class[c] = torch.sum(labels == c)
+
+        # How many times have we classify correctly the target class taking into account all the data? -> we get how many percentage is from each class
+        acc_per_class[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c)) / current_batch_size
 
         # Metrics
         # http://rali.iro.umontreal.ca/rali/sites/default/files/publis/SokolovaLapalme-JIPM09.pdf
@@ -106,6 +117,8 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
     total_acc_per_class_abs_recall = np.zeros(2)
     total_acc_per_class_abs_f1 = np.zeros(2)
     total_macro_f1 = 0.0
+    all_outputs = []
+    all_labels = []
 
     with torch.no_grad():
         for idx, batch in enumerate(dataloader):
@@ -113,40 +126,33 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
             tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
             urls = tokens["input_ids"].to(device)
             attention_mask = tokens["attention_mask"].to(device)
-            #urls = batch["pair_urls"][:,0].to(device)
-            #attention_mask = batch["pair_urls"][:,1].to(device)
             labels = batch["label"].to(device)
-            current_batch_size = labels.reshape(-1).shape[0]
 
-            #bert_output = apply_model(urls)
-            #pooler_output = bert_output.pooler_output
-
-            #outputs = model(pooler_output)
+            # Inference
             outputs = model(urls, attention_mask).logits
             outputs = F.softmax(outputs, dim=1)
             outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
 
+            # Results
             loss = criterion(outputs, labels).cpu().detach().numpy()
             labels = labels.cpu()
-            metrics = get_metrics(outputs_argmax, labels, current_batch_size, classes=classes)
 
             total_loss += loss
-            total_acc += metrics["acc"]
-            total_acc_per_class += metrics["acc_per_class"]
-            total_acc_per_class_abs_precision += metrics["precision"]
-            total_acc_per_class_abs_recall += metrics["recall"]
-            total_acc_per_class_abs_f1 += metrics["f1"]
-            total_macro_f1 += metrics["macro_f1"]
 
-        # TODO do not average acc, recall, precision nor F1 -> return confussion matrix values and sum up the values -> when we have finished the loop, calculate all those values
+            all_outputs.extend(outputs_argmax.tolist())
+            all_labels.extend(labels.tolist())
 
-        total_loss /= idx + 1
-        total_acc /= idx + 1
-        total_acc_per_class /= idx + 1
-        total_acc_per_class_abs_precision /= idx + 1
-        total_acc_per_class_abs_recall /= idx + 1
-        total_acc_per_class_abs_f1 /= idx + 1
-        total_macro_f1 /= idx + 1
+    all_outputs = torch.tensor(all_outputs)
+    all_labels = torch.tensor(all_labels)
+    metrics = get_metrics(all_outputs, all_labels, 1, classes=classes)
+
+    total_loss /= idx + 1
+    total_acc += metrics["acc"]
+    total_acc_per_class += metrics["acc_per_class"]
+    total_acc_per_class_abs_precision += metrics["precision"]
+    total_acc_per_class_abs_recall += metrics["recall"]
+    total_acc_per_class_abs_f1 += metrics["f1"]
+    total_macro_f1 += metrics["macro_f1"]
 
     return total_loss, total_acc, total_acc_per_class, total_acc_per_class_abs_precision, \
            total_acc_per_class_abs_recall, total_acc_per_class_abs_f1, total_macro_f1
@@ -227,6 +233,7 @@ def main(args):
     threshold = args.threshold
     classes = 2 # False / True
     imbalanced_strategy = args.imbalanced_strategy
+    patience = args.patience
 
     if apply_inference and not model_input:
         logging.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed",
@@ -438,10 +445,11 @@ def main(args):
 
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     criterion = nn.CrossEntropyLoss(weight=loss_weight).to(device)
-    #optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()))
-    optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
-                      lr=2e-5,
-                      eps=1e-8)
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
+                                 lr=2e-5, eps=1e-8)
+    #optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
+    #                  lr=2e-5,
+    #                  eps=1e-8)
     scheduler = get_linear_schedule_with_warmup(optimizer,
                                                 num_warmup_steps=0,
                                                 num_training_steps=len(dataloader_train) * epochs)
@@ -453,6 +461,9 @@ def main(args):
     final_acc_per_class_abs = np.zeros(2)
     final_macro_f1 = 0.0
     best_dev = -np.inf
+    stop_training = False
+    epoch = 0
+    current_patience = 0
 
     # Statistics
     batch_loss = []
@@ -464,7 +475,7 @@ def main(args):
     epoch_train_acc_classes, epoch_dev_acc_classes = {0: [], 1: []}, {0: [], 1: []}
     epoch_train_macro_f1, epoch_dev_macro_f1 = [], []
 
-    for epoch in range(epochs):
+    while not stop_training:
         logging.info("Epoch %d", epoch + 1)
 
         epoch_loss = 0.0
@@ -472,6 +483,8 @@ def main(args):
         epoch_acc_per_class = np.zeros(2)
         epoch_acc_per_class_abs = np.zeros(2)
         epoch_macro_f1 = 0.0
+        all_outputs = []
+        all_labels = []
 
         model.train()
 
@@ -486,20 +499,21 @@ def main(args):
             #optimizer.zero_grad() # https://discuss.pytorch.org/t/model-zero-grad-or-optimizer-zero-grad/28426/6
             model.zero_grad()
 
-            #bert_output = apply_model(urls)
-            #last_hidden_state = bert_output.last_hidden_state
-            #pooler_output = bert_output.pooler_output
-
-            #outputs = model(pooler_output)
+            # Inference
             outputs = model(urls, attention_mask).logits
             outputs = F.softmax(outputs, dim=1)
             outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
 
+            # Results
             loss = criterion(outputs, labels)
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
-            log = (idx + 1) % show_statistics_every_batches == 0
 
+            all_outputs.extend(outputs_argmax.tolist())
+            all_labels.extend(labels.tolist())
+
+            # Get metrics
+            log = (idx + 1) % show_statistics_every_batches == 0
             metrics = get_metrics(outputs_argmax, labels, current_batch_size, classes=classes, idx=idx, log=log)
 
             if log:
@@ -511,27 +525,22 @@ def main(args):
             epoch_acc_per_class_abs += metrics["f1"]
             epoch_macro_f1 += metrics["macro_f1"]
 
-            if epoch == 0 and idx == 0:
-                utils.append_from_tuple((batch_loss, epoch_loss),
-                                        (batch_acc, epoch_acc * 100.0),
-                                        (batch_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0),
-                                        (batch_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0),
-                                        (batch_macro_f1, epoch_macro_f1 * 100.0))
-            elif plot and (idx + 1) % show_statistics_every_batches == 0:
+            if plot and ((epoch == 0 and idx == 0) or (idx + 1) % show_statistics_every_batches == 0):
                 utils.append_from_tuple((batch_loss, epoch_loss / (idx + 1)),
                                         (batch_acc, epoch_acc * 100.0 / (idx + 1)),
                                         (batch_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0 / (idx + 1)),
                                         (batch_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0 / (idx + 1)),
                                         (batch_macro_f1, epoch_macro_f1 * 100.0 / (idx + 1)))
 
-                plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
-                             "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
-                             "epochs": epochs, "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
-                             "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
-                             "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
-                             "epoch_dev_macro_f1": epoch_dev_macro_f1}
+                if epoch != 0 or idx != 0:
+                    plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
+                                "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
+                                "epochs": epochs, "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
+                                "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
+                                "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
+                                "epoch_dev_macro_f1": epoch_dev_macro_f1}
 
-                plot_statistics(plot_args, path=args.plot_path)
+                    plot_statistics(plot_args, path=args.plot_path)
 
             loss.backward()
 
@@ -545,18 +554,22 @@ def main(args):
 
         logging.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
 
+        all_outputs = torch.tensor(all_outputs)
+        all_labels = torch.tensor(all_labels)
+        metrics = get_metrics(all_outputs, all_labels, 1, classes=classes)
+
         epoch_loss /= idx + 1
-        epoch_acc /= idx + 1
-        epoch_acc_per_class /= idx + 1
-        epoch_acc_per_class_abs /= idx + 1
-        epoch_macro_f1 /= idx + 1
+        epoch_acc = metrics["acc"]
+        epoch_acc_per_class = metrics["acc_per_class"]
+        epoch_acc_per_class_abs = metrics["f1"]
+        epoch_macro_f1 = metrics["macro_f1"]
         final_loss += epoch_loss
         final_acc += epoch_acc
         final_acc_per_class += epoch_acc_per_class
         final_acc_per_class_abs += epoch_acc_per_class_abs
         final_macro_f1 += epoch_macro_f1
 
-        logging.info("[train:epoch#%d] Loss: %f", epoch + 1, epoch_loss)
+        logging.info("[train:epoch#%d] Avg. loss: %f", epoch + 1, epoch_loss)
         logging.info("[train:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                      epoch + 1, epoch_acc * 100.0, epoch_acc_per_class[0] * 100.0, epoch_acc_per_class[1] * 100.0)
         logging.info("[train:epoch#%d] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
@@ -567,7 +580,7 @@ def main(args):
             dev_acc_per_class_abs_f1, dev_macro_f1 = \
                 inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
-        logging.info("[dev:epoch#%d] Loss: %f", epoch + 1, dev_loss)
+        logging.info("[dev:epoch#%d] Avg. loss: %f", epoch + 1, dev_loss)
         logging.info("[dev:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                      epoch + 1, dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
         logging.info("[dev:epoch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1,
@@ -586,6 +599,10 @@ def main(args):
             # Store model
             if model_output:
                 model.save_pretrained(model_output)
+
+            current_patience = 0
+        else:
+            current_patience += 1
 
         if plot:
             utils.append_from_tuple((epoch_train_loss, epoch_loss),
@@ -608,24 +625,34 @@ def main(args):
 
             plot_statistics(plot_args, path=args.plot_path)
 
+        epoch += 1
+
+        # Stop training?
+        if patience > 0 and current_patience >= patience:
+            # End of patience
+
+            stop_training = True
+        elif not args.train_until_patience:
+            stop_training = epoch >= epochs
+
     final_loss /= epochs
     final_acc /= epochs
     final_acc_per_class /= epochs
     final_acc_per_class_abs /= epochs
     final_macro_f1 /= epochs
 
-    logging.info("[train] Loss: %f", final_loss)
-    logging.info("[train] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+    logging.info("[train] Avg. loss: %f", final_loss)
+    logging.info("[train] Avg. acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                  final_acc * 100.0, final_acc_per_class[0] * 100.0, final_acc_per_class[1] * 100.0)
-    logging.info("[train] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
+    logging.info("[train] Avg. acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
                  final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
-    logging.info("[train] Macro F1: %.2f %%", final_macro_f1 * 100.0)
+    logging.info("[train] Avg. macro F1: %.2f %%", final_macro_f1 * 100.0)
 
     dev_loss, dev_acc, dev_acc_per_class, dev_acc_per_class_abs_precision, dev_acc_per_class_abs_recall, \
         dev_acc_per_class_abs_f1, dev_macro_f1 = \
             inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
-    logging.info("[dev] Loss: %f", dev_loss)
+    logging.info("[dev] Avg. loss: %f", dev_loss)
     logging.info("[dev] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                  dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
     logging.info("[dev] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
@@ -637,7 +664,7 @@ def main(args):
         test_acc_per_class_abs_f1, test_macro_f1 = \
             inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, classes=classes)
 
-    logging.info("[test] Loss: %f", test_loss)
+    logging.info("[test] Avg. loss: %f", test_loss)
     logging.info("[test] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                  test_acc * 100.0, test_acc_per_class[0] * 100.0, test_acc_per_class[1] * 100.0)
     logging.info("[test] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
@@ -664,7 +691,7 @@ def initialization():
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
-    parser.add_argument('--fine-tuning', action='store_true', help="Apply fine-tuning")
+    parser.add_argument('--fine-tuning', action="store_true", help="Apply fine-tuning")
     parser.add_argument('--dataset-workers', type=int, default=8, help="No. workers when loading the data in the dataset")
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")
     parser.add_argument('--max-length-tokens', type=int, default=256, help="Max. length for the generated tokens")
@@ -675,12 +702,14 @@ def initialization():
     parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
     parser.add_argument('--threshold', type=float, default=-1.0, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
     parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="")
+    parser.add_argument('--patience', type=int, default=0, help="Patience before stopping the training")
+    parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
-    parser.add_argument('--plot', action='store_true', help="Plot statistics (matplotlib pyplot) in real time")
+    parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
     parser.add_argument('--plot-path', help="If set, the plot will be stored instead of displayed")
 
-    parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
+    parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 
     args = parser.parse_args()
 
