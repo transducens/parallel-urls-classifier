@@ -162,49 +162,71 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
             "f1": total_acc_per_class_abs_f1,
             "macro_f1": total_macro_f1,}
 
-def plot_statistics(args, path=None, time_wait=5.0):
-    plt_plot_common_params = {"marker": 'o', "markersize": 5}
+def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
+    plt_plot_common_params = {"marker": 'o', "markersize": 2,}
+    plt_scatter_common_params = {"marker": 'o', "s": 2,}
+    plt_legend_common_params = {"loc": "center left", "bbox_to_anchor": (1, 0.5), "fontsize": "x-small",}
 
     plt.clf()
 
     plt.subplot(3, 2, 1)
     plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_loss"]))))), args["batch_loss"], label="Train loss", **plt_plot_common_params)
-    plt.legend()
+    plt.legend(**plt_legend_common_params)
 
-    plt.subplot(3, 2, 3)
+    plt.subplot(3, 2, 5)
     plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc"]))))), args["batch_acc"], label="Train acc", **plt_plot_common_params)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][0]))))), args["batch_acc_classes"][0], label="Train F1 class 0", **plt_plot_common_params)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][1]))))), args["batch_acc_classes"][1], label="Train F1 class 1", **plt_plot_common_params)
+    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][0]))))), args["batch_acc_classes"][0], label="Train F1: no p.", **plt_plot_common_params)
+    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][1]))))), args["batch_acc_classes"][1], label="Train F1: para.", **plt_plot_common_params)
     plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_macro_f1"]))))), args["batch_macro_f1"], label="Train macro F1", **plt_plot_common_params)
-    plt.legend()
+    plt.legend(**plt_legend_common_params)
 
     plt.subplot(3, 2, 2)
     plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_loss"], label="Train loss", **plt_plot_common_params)
     plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_loss"], label="Dev loss", **plt_plot_common_params)
-    plt.legend()
+    plt.legend(**plt_legend_common_params)
+
+    plt.subplot(3, 2, 3)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc"], label="Train acc", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc_classes"][0], label="Train F1: no p.", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc_classes"][1], label="Train F1: para.", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_macro_f1"], label="Train macro F1", **plt_plot_common_params)
+    plt.legend(**plt_legend_common_params)
 
     plt.subplot(3, 2, 4)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc"], label="Train acc", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc_classes"][0], label="Train F1 class 0", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc_classes"][1], label="Train F1 class 1", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_macro_f1"], label="Train macro F1", **plt_plot_common_params)
-    plt.legend()
-
-    plt.subplot(3, 2, 5)
     plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc"], label="Dev acc", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc_classes"][0], label="Dev F1 class 0", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc_classes"][1], label="Dev F1 class 1", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc_classes"][0], label="Dev F1: no p.", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc_classes"][1], label="Dev F1: para.", **plt_plot_common_params)
     plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_macro_f1"], label="Dev macro F1", **plt_plot_common_params)
-    plt.legend()
+    plt.legend(**plt_legend_common_params)
+
+    plot_final = True if args["final_dev_acc"] else False
+
+    plt.subplot(3, 2, 6)
+    plt.scatter(0 if plot_final else None, args["final_dev_acc"] if plot_final else None, label="Dev acc", **plt_scatter_common_params)
+    plt.scatter(0 if plot_final else None, args["final_test_acc"] if plot_final else None, label="Test acc", **plt_scatter_common_params)
+    plt.scatter(1 if plot_final else None, args["final_dev_macro_f1"] if plot_final else None, label="Dev macro F1", **plt_scatter_common_params)
+    plt.scatter(1 if plot_final else None, args["final_test_macro_f1"] if plot_final else None, label="Test macro F1", **plt_scatter_common_params)
+    plt.legend(**plt_legend_common_params)
+
+    #plt.tight_layout()
+    plt.subplots_adjust(left=0.08,
+                        bottom=0.07,
+                        right=0.8,
+                        top=0.95,
+                        wspace=1.0,
+                        hspace=0.4)
 
     if path:
         plt.savefig(path, dpi=1200)
     else:
-        plt.pause(time_wait)
+        if freeze:
+            plt.show()
+        else:
+            plt.pause(time_wait)
 
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
-    logging.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
+    #logging.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
 
     apply_inference = args.inference
 
@@ -241,14 +263,10 @@ def main(args):
     classes = 2 # False / True
     imbalanced_strategy = args.imbalanced_strategy
     patience = args.patience
+    do_not_load_best_model = args.do_not_load_best_model
 
     if apply_inference and not model_input:
         logging.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed",
-                        waiting_time)
-
-        time.sleep(waiting_time)
-    if model_output and utils.exists(model_output, f=os.path.isdir):
-        logging.warning("Provided path to model output already exists: waiting %d seconds before proceed",
                         waiting_time)
 
         time.sleep(waiting_time)
@@ -261,10 +279,16 @@ def main(args):
         logging.info("Model will be stored: '%s'", model_output)
 
         if utils.exists(model_output, f=os.path.isdir):
-            logging.warning("Provided output model does exist (file: '%s'): waiting %d seconds before proceed",
-                            model_input, waiting_time)
+            if args.overwrite_output_model:
+                logging.warning("Provided output model does exist (file: '%s'): it will be updated: waiting %d seconds before proceed",
+                                model_output, waiting_time)
 
-            time.sleep(waiting_time)
+                time.sleep(waiting_time)
+            else:
+                raise Exception(f"Provided output model does exist: '{model_output}'")
+
+    if do_not_load_best_model or not model_output:
+        logging.warning("Final dev and test evaluation will not be carried out with the best model")
 
     if plot_path and not plot:
         raise Exception("--plot is mandatory if you set --plot-path")
@@ -545,7 +569,8 @@ def main(args):
                                  "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
                                  "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
                                  "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
-                                 "epoch_dev_macro_f1": epoch_dev_macro_f1}
+                                 "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
+                                 "final_test_acc": None, "final_test_macro_f1": None,}
 
                     plot_statistics(plot_args, path=args.plot_path)
 
@@ -616,6 +641,8 @@ def main(args):
 
             current_patience = 0
         else:
+            logging.debug("Dev has not been improved (best and current value): %s and %s", str(best_dev), str(dev_target))
+
             current_patience += 1
 
         if plot:
@@ -635,7 +662,8 @@ def main(args):
                          "epoch": epoch + 1, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
                          "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
                          "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
-                         "epoch_dev_macro_f1": epoch_dev_macro_f1}
+                         "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
+                         "final_test_acc": None, "final_test_macro_f1": None,}
 
             plot_statistics(plot_args, path=args.plot_path)
 
@@ -661,6 +689,15 @@ def main(args):
     logging.info("[train] Avg. acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
                  final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
     logging.info("[train] Avg. macro F1: %.2f %%", final_macro_f1 * 100.0)
+
+    if do_not_load_best_model or not model_output:
+        logging.warning("Using last model for dev and test evaluation")
+    else:
+        # Evaluate dev and test with best model
+
+        logging.info("Loading best model: '%s' (best dev: %s)", model_output, str(best_dev))
+
+        model = model.from_pretrained(model_output).to(device)
 
     dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
@@ -700,9 +737,17 @@ def main(args):
                  test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
     logging.info("[test] Macro F1: %.2f %%", test_macro_f1 * 100.0)
 
-    if not args.plot_path:
-        # Let the user finish the execution
-        plt.show()
+    if plot:
+        plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
+                     "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
+                     # '"epoch": epoch' and not '"epoch": epoch + 1' because we have not added new values
+                     "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
+                     "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
+                     "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
+                     "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": dev_acc, "final_dev_macro_f1": dev_macro_f1,
+                     "final_test_acc": test_acc, "final_test_macro_f1": test_macro_f1,}
+
+        plot_statistics(plot_args, path=args.plot_path, freeze=True) # Let the user finish the execution if necessary
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -732,6 +777,8 @@ def initialization():
     parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="")
     parser.add_argument('--patience', type=int, default=0, help="Patience before stopping the training")
     parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored)")
+    parser.add_argument('--do-not-load-best-model', action="store_true", help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
+    parser.add_argument('--overwrite-output-model', action="store_true", help="Overwrite output model if it exists (initial loading)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
