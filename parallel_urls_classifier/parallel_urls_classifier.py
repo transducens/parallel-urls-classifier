@@ -144,7 +144,7 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
 
     all_outputs = torch.tensor(all_outputs)
     all_labels = torch.tensor(all_labels)
-    metrics = get_metrics(all_outputs, all_labels, 1, classes=classes)
+    metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
 
     total_loss /= idx + 1
     total_acc += metrics["acc"]
@@ -163,36 +163,38 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
             "macro_f1": total_macro_f1,}
 
 def plot_statistics(args, path=None, time_wait=5.0):
+    plt_plot_common_params = {"marker": 'o', "markersize": 5}
+
     plt.clf()
 
     plt.subplot(3, 2, 1)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_loss"]))))), args["batch_loss"], label="Train loss")
+    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_loss"]))))), args["batch_loss"], label="Train loss", **plt_plot_common_params)
     plt.legend()
 
     plt.subplot(3, 2, 3)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc"]))))), args["batch_acc"], label="Train acc")
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][0]))))), args["batch_acc_classes"][0], label="Train F1 class 0")
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][1]))))), args["batch_acc_classes"][1], label="Train F1 class 1")
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_macro_f1"]))))), args["batch_macro_f1"], label="Train macro F1")
+    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc"]))))), args["batch_acc"], label="Train acc", **plt_plot_common_params)
+    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][0]))))), args["batch_acc_classes"][0], label="Train F1 class 0", **plt_plot_common_params)
+    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][1]))))), args["batch_acc_classes"][1], label="Train F1 class 1", **plt_plot_common_params)
+    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_macro_f1"]))))), args["batch_macro_f1"], label="Train macro F1", **plt_plot_common_params)
     plt.legend()
 
     plt.subplot(3, 2, 2)
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_loss"], label="Train loss")
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_loss"], label="Dev loss")
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_loss"], label="Train loss", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_loss"], label="Dev loss", **plt_plot_common_params)
     plt.legend()
 
     plt.subplot(3, 2, 4)
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_acc"], label="Train acc")
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_acc_classes"][0], label="Train F1 class 0")
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_acc_classes"][1], label="Train F1 class 1")
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_train_macro_f1"], label="Train macro F1")
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc"], label="Train acc", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc_classes"][0], label="Train F1 class 0", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc_classes"][1], label="Train F1 class 1", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_macro_f1"], label="Train macro F1", **plt_plot_common_params)
     plt.legend()
 
     plt.subplot(3, 2, 5)
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_acc"], label="Dev acc")
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_acc_classes"][0], label="Dev F1 class 0")
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_acc_classes"][1], label="Dev F1 class 1")
-    plt.plot(list(range(1, args["epochs"]))[:args["epoch"]], args["epoch_dev_macro_f1"], label="Dev macro F1")
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc"], label="Dev acc", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc_classes"][0], label="Dev F1 class 0", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc_classes"][1], label="Dev F1 class 1", **plt_plot_common_params)
+    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_macro_f1"], label="Dev macro F1", **plt_plot_common_params)
     plt.legend()
 
     if path:
@@ -540,7 +542,7 @@ def main(args):
                 if epoch != 0 or idx != 0:
                     plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
                                  "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
-                                 "epochs": epochs, "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
+                                 "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
                                  "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
                                  "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
                                  "epoch_dev_macro_f1": epoch_dev_macro_f1}
@@ -561,7 +563,7 @@ def main(args):
 
         all_outputs = torch.tensor(all_outputs)
         all_labels = torch.tensor(all_labels)
-        metrics = get_metrics(all_outputs, all_labels, 1, classes=classes)
+        metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
 
         epoch_loss /= idx + 1
         epoch_acc = metrics["acc"]
@@ -630,7 +632,7 @@ def main(args):
 
             plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
                          "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
-                         "epochs": epochs + 1, "epoch": epoch + 1, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
+                         "epoch": epoch + 1, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
                          "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
                          "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
                          "epoch_dev_macro_f1": epoch_dev_macro_f1}
