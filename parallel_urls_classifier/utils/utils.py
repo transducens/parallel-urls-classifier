@@ -63,7 +63,7 @@ def apply_model(model, tokenizer, tokens, encode=False):
 
     return output
 
-def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False):
+def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False):
     urls = []
     initial_urls = []
 
@@ -91,8 +91,12 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False)
             trg_url = url[1]
 
         urls.append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
-                                                                  #  (or other special tokens) since they are automatically added
+                                                                #  (or other special tokens) since they are automatically added
         initial_urls.append((url[0], url[1]))
+
+        if add_symmetric_samples:
+            urls.append(f"{trg_url}{tokenizer.sep_token}{src_url}")
+            initial_urls.append((url[1], url[0]))
 
         if len(urls) >= batch_size:
             if return_urls:

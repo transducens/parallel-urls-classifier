@@ -224,13 +224,19 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
         else:
             plt.pause(time_wait)
 
-def preprocess_url(url):
+def preprocess_url(url, remove_protocol_and_authority=False):
     urls = []
 
     if isinstance(url, str):
         url = [url]
 
     for u in url:
+        if remove_protocol_and_authority:
+            ur = u.split('/')
+
+            if ur[0] in ("http:", "https:") and ur[1] == '':
+                u = '/'.join(ur[3:])
+
         preprocessed_url = utils.stringify_url(urllib.parse.unquote(u)).lower()
 
         urls.append(preprocessed_url)
@@ -277,6 +283,8 @@ def main(args):
     imbalanced_strategy = args.imbalanced_strategy
     patience = args.patience
     do_not_load_best_model = args.do_not_load_best_model
+    remove_authority = args.remove_authority
+    add_symmetric_samples = args.add_symmetric_samples
 
     if apply_inference and not model_input:
         logging.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed",
@@ -346,7 +354,7 @@ def main(args):
         while True:
             if inference_from_stdin:
                 try:
-                    target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=preprocess_url, return_urls=True))
+                    target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: preprocess_url(u, remove_protocol_and_authority=remove_authority), return_urls=True))
                 except StopIteration:
                     break
 
@@ -361,7 +369,7 @@ def main(args):
 
                 src_url = initial_src_urls[0]
                 trg_url = initial_trg_urls[0]
-                target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=preprocess_url))
+                target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: preprocess_url(u, remove_protocol_and_authority=remove_authority)))
 
             # Tokens
             tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
@@ -420,10 +428,13 @@ def main(args):
 
     logging.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
-    for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train), 
-                  (file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
+    for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train)):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: preprocess_url(u, remove_protocol_and_authority=remove_authority), add_symmetric_samples=add_symmetric_samples)):
+            l.extend(batch_urls)
+
+    for fd, l in ((file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
                   (file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size * 10, f=preprocess_url)):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: preprocess_url(u, remove_protocol_and_authority=remove_authority))):
             l.extend(batch_urls)
 
     logging.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
@@ -802,6 +813,8 @@ def initialization():
     parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored)")
     parser.add_argument('--do-not-load-best-model', action="store_true", help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
     parser.add_argument('--overwrite-output-model', action="store_true", help="Overwrite output model if it exists (initial loading)")
+    parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
+    parser.add_argument('--add-symmetric-samples', action="store_true", help="Add symmetric samples for training (if (src, trg) URL pair is provided, (trg, src) URL pair will be provided as well)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
