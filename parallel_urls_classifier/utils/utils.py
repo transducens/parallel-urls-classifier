@@ -63,27 +63,54 @@ def apply_model(model, tokenizer, tokens, encode=False):
 
     return output
 
-def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None):
+def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False):
     urls = []
+    initial_urls = []
 
     for url in fd:
         url = url.strip().split('\t')
 
         assert len(url) == 2, f"It was expected 2 URLs per line URLs"
 
-        src_url = f(url[0]) if f else url[0]
-        trg_url = f(url[1]) if f else url[1]
+        if f:
+            src_url = f(url[0])
+            trg_url = f(url[1])
 
-        urls.append(f"{src_url} {tokenizer.sep_token} {trg_url}") # We don't need to add [CLS] and final [SEP]
+            if isinstance(src_url, list):
+                if len(src_url) != 1:
+                    raise Exception(f"Unexpected size of list after applying function to URL: {len(src_url)}")
+
+                src_url = src_url[0]
+            if isinstance(trg_url, list):
+                if len(trg_url) != 1:
+                    raise Exception(f"Unexpected size of list after applying function to URL: {len(trg_url)}")
+
+                trg_url = trg_url[0]
+        else:
+            src_url = url[0]
+            trg_url = url[1]
+
+        urls.append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
                                                                   #  (or other special tokens) since they are automatically added
+        initial_urls.append((url[0], url[1]))
 
         if len(urls) >= batch_size:
-            yield urls
+            if return_urls:
+                yield urls, initial_urls
+            else:
+                yield urls
+
             urls = []
+            initial_urls = []
 
     if len(urls) != 0:
-        yield urls
+        if return_urls:
+            yield urls, initial_urls
+        else:
+            yield urls
+
         urls = []
+        initial_urls = []
 
 def get_current_allocated_memory_size():
     process = psutil.Process(os.getpid())

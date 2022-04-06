@@ -224,6 +224,19 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
         else:
             plt.pause(time_wait)
 
+def preprocess_url(url):
+    urls = []
+
+    if isinstance(url, str):
+        url = [url]
+
+    for u in url:
+        preprocessed_url = utils.stringify_url(urllib.parse.unquote(u)).lower()
+
+        urls.append(preprocessed_url)
+
+    return urls
+
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logging.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
@@ -333,35 +346,23 @@ def main(args):
         while True:
             if inference_from_stdin:
                 try:
-                    src_and_trg_urls = next(sys.stdin).strip()
+                    target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=preprocess_url, return_urls=True))
                 except StopIteration:
                     break
 
-                initial_src_url, initial_trg_url = src_and_trg_urls.split('\t')
+                initial_src_urls = [u[0] for u in initial_urls]
+                initial_trg_urls = [u[1] for u in initial_urls]
             else:
-                initial_src_url = input("src url: ").strip()
-                initial_trg_url = input("trg url: ").strip()
+                initial_src_urls = [input("src url: ").strip()]
+                initial_trg_urls = [input("trg url: ").strip()]
 
-                if not initial_src_url and not initial_trg_url:
+                if not initial_src_urls[0] and not initial_trg_urls[0]:
                     break
 
-            src_url = initial_src_url
-            trg_url = initial_trg_url
+                src_url = initial_src_urls[0]
+                trg_url = initial_trg_urls[0]
+                target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=preprocess_url))
 
-            # Decode URL
-            src_url = urllib.parse.unquote(src_url)
-            trg_url = urllib.parse.unquote(trg_url)
-
-            # Stringify URL
-            src_url = utils.stringify_url(src_url)
-            trg_url = utils.stringify_url(trg_url)
-
-            # Lower case
-            src_url = src_url.lower()
-            trg_url = trg_url.lower()
-
-            # Input
-            target_urls = f"{src_url} {tokenizer.sep_token} {trg_url}"
             # Tokens
             tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
             urls = tokens["input_ids"].to(device)
@@ -370,32 +371,39 @@ def main(args):
             # Debug info
             ## Tokens
             urls_tokens = urls.cpu() * attention_mask.cpu()
-            urls_tokens = urls_tokens[0][urls_tokens.nonzero()[:,1]] # Get unique batch and column 1 (pytorch format...)
-            original_str_from_tokens = tokenizer.decode(urls_tokens) # Detokenize
-            str_from_tokens = ' '.join([tokenizer.decode(t) for t in urls_tokens]) # Detokenize adding a space between tokens
-            ## Unk
-            unk = torch.sum((urls_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
-            sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(' '))} vs {len(str_from_tokens.split(' '))}"
-            sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(' ')))} vs " \
-                                       f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(' ')))}"
 
-            logging.debug("Tokenization info (model input, from model input to tokens, from tokens to str): "
-                          "(%s, %s, %s)", original_str_from_tokens, str(urls_tokens).replace('\n', ' '), str_from_tokens)
-            logging.debug("Unk. info (unk chars, initial tokens vs detokenized tokens, "
-                          "len=1 -> initial tokens vs detokenized tokens): (%d, %s, %s)",
-                          unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
+            for ut in urls_tokens:
+                url_tokens = ut[ut.nonzero()][:,0]
+                original_str_from_tokens = tokenizer.decode(url_tokens) # Detokenize
+                str_from_tokens = ' '.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a space between tokens
+                ## Unk
+                unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
+                sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(' '))} vs {len(str_from_tokens.split(' '))}"
+                sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(' ')))} vs " \
+                                        f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(' ')))}"
+
+                logging.debug("Tokenization info (model input, from model input to tokens, from tokens to str): "
+                            "(%s, %s, %s)", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens)
+                logging.debug("Unk. info (unk chars, initial tokens vs detokenized tokens, "
+                            "len=1 -> initial tokens vs detokenized tokens): (%d, %s, %s)",
+                            unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
             outputs = model(urls, attention_mask).logits
             outputs = F.softmax(outputs, dim=1).cpu().detach()
-            outputs_argmax = torch.argmax(outputs, dim=1).numpy()[0]
+            outputs_argmax = torch.argmax(outputs, dim=1).numpy()
+
+            assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {initial_src_urls})"
+            assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {initial_trg_urls})"
 
             if parallel_likelihood:
-                likelihood = outputs.numpy()[0][1] # parallel
+                for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
+                    likelihood = data[1] # parallel
 
-                if likelihood >= threshold:
-                    print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
+                    if likelihood >= threshold:
+                        print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
             else:
-                print(f"{'parallel' if outputs_argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
+                for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
+                    print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
 
         # Stop execution
         return
@@ -415,8 +423,7 @@ def main(args):
     for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train), 
                   (file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
                   (file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size * 10,
-                                                                      f=lambda u: utils.stringify_url(urllib.parse.unquote(u)).lower())):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size * 10, f=preprocess_url)):
             l.extend(batch_urls)
 
     logging.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
@@ -485,13 +492,22 @@ def main(args):
                                                 num_warmup_steps=0,
                                                 num_training_steps=len(dataloader_train) * epochs)
 
+    best_values_minimize = False
+    best_values_maximize = True
+    best_values_binary_func_comp = (lambda a, b: a > b) if best_values_minimize else (lambda a, b: a < b)
+
+    assert best_values_minimize ^ best_values_maximize, "You can either minimize or maximize"
+
+    logging.debug("Best values are being %s", "minimized" if best_values_minimize else "maximized")
+
     show_statistics_every_batches = 50
     final_loss = 0.0
     final_acc = 0.0
     final_acc_per_class = np.zeros(2)
     final_acc_per_class_abs = np.zeros(2)
     final_macro_f1 = 0.0
-    best_dev = -np.inf
+    best_dev = np.inf * (1 if best_values_minimize else -1)
+    best_train = np.inf * (1 if best_values_minimize else -1)
     stop_training = False
     epoch = 0
     current_patience = 0
@@ -627,13 +643,20 @@ def main(args):
                      dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
         logging.info("[dev:epoch#%d] Macro F1: %.2f %%", epoch + 1, dev_macro_f1 * 100.0)
 
-        # Get best dev result
+        # Get best dev and train result (check out best_values_minimize and best_values_maximize if you modify these values)
         dev_target = dev_macro_f1 # Might be acc, loss, ...
+        train_target = epoch_macro_f1 # It should be the same metric that dev_target
 
-        if best_dev < dev_target: # '<' in order to maximize (e.g. F1) and '>' in order to minimize (e.g. loss)
-            logging.debug("Dev has been improved: from %s to %s", str(best_dev), str(dev_target))
+        if best_values_binary_func_comp(best_dev, dev_target) or (best_dev == dev_target and best_values_binary_func_comp(train_target, best_train)):
+            if best_dev == dev_target:
+                logging.debug("Dev is equal but train has been improved from %s to %s: checkpoint", str(best_train), str(train_target))
+            else:
+                logging.debug("Dev has been improved from %s to %s: checkpoint", str(best_dev), str(dev_target))
 
             best_dev = dev_target
+
+            if best_values_binary_func_comp(best_train, train_target):
+                best_train = train_target
 
             # Store model
             if model_output:
