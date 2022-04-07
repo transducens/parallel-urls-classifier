@@ -658,7 +658,7 @@ def main(args):
         dev_target = dev_macro_f1 # Might be acc, loss, ...
         train_target = epoch_macro_f1 # It should be the same metric that dev_target
 
-        if best_values_binary_func_comp(best_dev, dev_target) or (best_dev == dev_target and best_values_binary_func_comp(train_target, best_train)):
+        if best_values_binary_func_comp(best_dev, dev_target) or (best_dev == dev_target and best_values_binary_func_comp(best_train, train_target)):
             if best_dev == dev_target:
                 logging.debug("Dev is equal but train has been improved from %s to %s: checkpoint", str(best_train), str(train_target))
             else:
