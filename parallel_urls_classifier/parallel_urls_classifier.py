@@ -21,6 +21,8 @@ logging.getLogger("matplotlib").setLevel(logging.WARNING)
 logging.getLogger("PIL.PngImagePlugin").setLevel(logging.WARNING)
 
 # LOG_DIRECTORY should be defined once main() has been executed
+logger = logging
+logger_verbose = {"tokens": logging}
 
 class URLsDataset(Dataset):
     def __init__(self, parallel_urls, non_parallel_urls):
@@ -90,10 +92,10 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
     macro_f1 = np.sum(f1) / f1.shape[0]
 
     if log:
-        logging.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
-        logging.debug("[train:batch#%d] Acc per class (non-parallel->precision|recall|f1, parallel->precision|recall|f1): (%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)",
-                        idx + 1, no_values_per_class[0], precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, no_values_per_class[1], precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
-        logging.debug("[train:batch#%d] Macro F1: %.2f %%", idx + 1, macro_f1 * 100.0)
+        logger.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
+        logger.debug("[train:batch#%d] Acc per class (non-parallel->precision|recall|f1, parallel->precision|recall|f1): (%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)",
+                     idx + 1, no_values_per_class[0], precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, no_values_per_class[1], precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
+        logger.debug("[train:batch#%d] Macro F1: %.2f %%", idx + 1, macro_f1 * 100.0)
 
     return {"acc": acc,
             "acc_per_class": acc_per_class,
@@ -226,7 +228,8 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
 
 @torch.no_grad()
 def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=False, remove_authority=False, parallel_likelihood=False, threshold=-np.inf):
-    logging.info("Inference mode enabled: insert 2 blank lines in order to end")
+    logger.info("Inference mode enabled: insert 2 blank lines in order to end")
+    logger_verbose["tokens"].debug("model_input\ttokens\ttokens2str\tunk_chars\tinitial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
 
     model.eval()
 
@@ -267,13 +270,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
             sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(' '))} vs {len(str_from_tokens.split(' '))}"
             sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(' ')))} vs " \
-                                    f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(' ')))}"
+                                       f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(' ')))}"
 
-            logging.debug("Tokenization info (model input, from model input to tokens, from tokens to str): "
-                        "(%s, %s, %s)", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens)
-            logging.debug("Unk. info (unk chars, initial tokens vs detokenized tokens, "
-                        "len=1 -> initial tokens vs detokenized tokens): (%d, %s, %s)",
-                        unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
+            logger_verbose["tokens"].debug("%s\t%s\t%s\t%d\t%s\t%s", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
         outputs = model(urls, attention_mask).logits
         outputs = F.softmax(outputs, dim=1).cpu().detach()
@@ -294,7 +293,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
-    #logging.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
+    #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
 
     apply_inference = args.inference
 
@@ -337,15 +336,13 @@ def main(args):
     add_symmetric_samples = args.add_symmetric_samples
     log_directory = args.log_directory
 
-    # TODO append log info to files into log_directory instead of lots of logging messages
-
     if not utils.exists(log_directory, f=os.path.isdir):
         raise Exception(f"Provided log directory does not exist: '{log_directory}'")
     else:
         log_directory_files = os.listdir(utils.resolve_path(log_directory))
 
         if len(log_directory_files) != 0:
-            logging.warning("Log directory contain %d files: waiting %d seconds before proceed", len(log_directory_files), waiting_time)
+            logger.warning("Log directory contain %d files: waiting %d seconds before proceed", len(log_directory_files), waiting_time)
 
             time.sleep(waiting_time)
 
@@ -353,21 +350,24 @@ def main(args):
         # Add LOG_DIRECTORY to global scope
         globals()["LOG_DIRECTORY"] = log_directory
 
+    # Loggers
+    logger_verbose["tokens"] = utils.set_up_logging(logging.getLogger("parallel_urls_classifier.tokens"), level=logging.DEBUG if args.verbose else logging.INFO, filename=f"{LOG_DIRECTORY}/tokens")
+
     if apply_inference and not model_input:
-        logging.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
+        logger.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
 
         time.sleep(waiting_time)
 
-    logging.debug("Pretrained model architecture: %s", pretrained_model)
+    logger.debug("Pretrained model architecture: %s", pretrained_model)
 
     if model_input and not utils.exists(model_input, f=os.path.isdir):
         raise Exception(f"Provided input model does not exist: '{model_input}'")
     if model_output:
-        logging.info("Model will be stored: '%s'", model_output)
+        logger.info("Model will be stored: '%s'", model_output)
 
         if utils.exists(model_output, f=os.path.isdir):
             if args.overwrite_output_model:
-                logging.warning("Provided output model does exist (file: '%s'): it will be updated: waiting %d seconds before proceed",
+                logger.warning("Provided output model does exist (file: '%s'): it will be updated: waiting %d seconds before proceed",
                                 model_output, waiting_time)
 
                 time.sleep(waiting_time)
@@ -375,7 +375,7 @@ def main(args):
                 raise Exception(f"Provided output model does exist: '{model_output}'")
 
     if do_not_load_best_model or not model_output:
-        logging.warning("Final dev and test evaluation will not be carried out with the best model")
+        logger.warning("Final dev and test evaluation will not be carried out with the best model")
 
     if plot_path and not plot:
         raise Exception("--plot is mandatory if you set --plot-path")
@@ -386,26 +386,26 @@ def main(args):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-        logging.debug("Deterministic values enabled (not fully-guaranteed): seed %d", seed)
+        logger.debug("Deterministic values enabled (not fully-guaranteed): seed %d", seed)
     else:
-        logging.warning("Deterministic values disable (you set a negative seed)")
+        logger.warning("Deterministic values disable (you set a negative seed)")
 
     if max_length_tokens > 512:
-        logging.warning("BERT can handle a max. of 512 tokens at once and you set %d: changing value to 512")
+        logger.warning("BERT can handle a max. of 512 tokens at once and you set %d: changing value to 512")
 
         max_length_tokens = 512
 
-    logging.info("Device: %s", device)
+    logger.info("Device: %s", device)
 
     if not apply_inference:
-        logging.debug("Train URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_train, file_non_parallel_urls_train)
-        logging.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
-        logging.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
+        logger.debug("Train URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_train, file_non_parallel_urls_train)
+        logger.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
+        logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
     model = AutoModelForSequenceClassification
 
     if model_input:
-        logging.info("Loading model: '%s'", model_input)
+        logger.info("Loading model: '%s'", model_input)
 
         model = model.from_pretrained(model_input).to(device)
     else:
@@ -431,7 +431,7 @@ def main(args):
 
     bert_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
 
-    logging.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
+    logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
     for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train)):
         for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority), add_symmetric_samples=add_symmetric_samples)):
@@ -442,12 +442,12 @@ def main(args):
         for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority))):
             l.extend(batch_urls)
 
-    logging.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
-    logging.info("%d pairs of non-parallel URLs loaded (train)", len(non_parallel_urls_train))
-    logging.info("%d pairs of parallel URLs loaded (dev)", len(parallel_urls_dev))
-    logging.info("%d pairs of non-parallel URLs loaded (dev)", len(non_parallel_urls_dev))
-    logging.info("%d pairs of parallel URLs loaded (test)", len(parallel_urls_test))
-    logging.info("%d pairs of non-parallel URLs loaded (test)", len(non_parallel_urls_test))
+    logger.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
+    logger.info("%d pairs of non-parallel URLs loaded (train)", len(non_parallel_urls_train))
+    logger.info("%d pairs of parallel URLs loaded (dev)", len(parallel_urls_dev))
+    logger.info("%d pairs of non-parallel URLs loaded (dev)", len(non_parallel_urls_dev))
+    logger.info("%d pairs of parallel URLs loaded (test)", len(parallel_urls_test))
+    logger.info("%d pairs of non-parallel URLs loaded (test)", len(non_parallel_urls_test))
 
     min_train_samples = min(len(non_parallel_urls_train), len(parallel_urls_train))
     classes_count = np.array([len(non_parallel_urls_train), len(parallel_urls_train)]) # non-parallel URLs label is 0, and parallel URLs label is 1
@@ -459,10 +459,10 @@ def main(args):
 
         for cw in min_classes_weights:
             if cw < 0.9:
-                logging.warning("Your data seems to be imbalanced and you did not selected any imbalanced data strategy")
+                logger.warning("Your data seems to be imbalanced and you did not selected any imbalanced data strategy")
                 break
 
-    logging.debug("Classes weights: %s", str(classes_weights))
+    logger.debug("Classes weights: %s", str(classes_weights))
 
     classes_weights = torch.tensor(classes_weights, dtype=torch.float)
 
@@ -493,9 +493,9 @@ def main(args):
     dataset_test = URLsDataset(parallel_urls_test, non_parallel_urls_test)
     dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test), num_workers=no_workers)
 
-    #logging.info("Train URLs: %.2f GB", dataset_train.size_gb)
-    #logging.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
-    #logging.info("Test URLs: %.2f GB", dataset_test.size_gb)
+    #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
+    #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
+    #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     criterion = nn.CrossEntropyLoss(weight=loss_weight).to(device)
@@ -514,7 +514,7 @@ def main(args):
 
     assert best_values_minimize ^ best_values_maximize, "You can either minimize or maximize"
 
-    logging.debug("Best values are being %s", "minimized" if best_values_minimize else "maximized")
+    logger.debug("Best values are being %s", "minimized" if best_values_minimize else "maximized")
 
     show_statistics_every_batches = 50
     final_loss = 0.0
@@ -539,7 +539,7 @@ def main(args):
     epoch_train_macro_f1, epoch_dev_macro_f1 = [], []
 
     while not stop_training:
-        logging.info("Epoch %d", epoch + 1)
+        logger.info("Epoch %d", epoch + 1)
 
         epoch_loss = 0.0
         epoch_acc = 0.0
@@ -580,7 +580,7 @@ def main(args):
             metrics = get_metrics(outputs_argmax, labels, current_batch_size, classes=classes, idx=idx, log=log)
 
             if log:
-                logging.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
+                logger.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
 
             epoch_loss += loss_value
             epoch_acc += metrics["acc"]
@@ -616,7 +616,7 @@ def main(args):
         current_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
         layer_updated = (current_last_layer_output != bert_last_layer_output).any().cpu().detach().numpy()
 
-        logging.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
+        logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
 
         all_outputs = torch.tensor(all_outputs)
         all_labels = torch.tensor(all_labels)
@@ -633,12 +633,12 @@ def main(args):
         final_acc_per_class_abs += epoch_acc_per_class_abs
         final_macro_f1 += epoch_macro_f1
 
-        logging.info("[train:epoch#%d] Avg. loss: %f", epoch + 1, epoch_loss)
-        logging.info("[train:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                     epoch + 1, epoch_acc * 100.0, epoch_acc_per_class[0] * 100.0, epoch_acc_per_class[1] * 100.0)
-        logging.info("[train:epoch#%d] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
-                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
-        logging.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
+        logger.info("[train:epoch#%d] Avg. loss: %f", epoch + 1, epoch_loss)
+        logger.info("[train:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+                    epoch + 1, epoch_acc * 100.0, epoch_acc_per_class[0] * 100.0, epoch_acc_per_class[1] * 100.0)
+        logger.info("[train:epoch#%d] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
+                    epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
+        logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
         dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
 
@@ -651,13 +651,13 @@ def main(args):
         dev_acc_per_class_abs_f1 = dev_inference_metrics["f1"]
         dev_macro_f1 = dev_inference_metrics["macro_f1"]
 
-        logging.info("[dev:epoch#%d] Avg. loss: %f", epoch + 1, dev_loss)
-        logging.info("[dev:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                     epoch + 1, dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
-        logging.info("[dev:epoch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1,
-                     dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
-                     dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
-        logging.info("[dev:epoch#%d] Macro F1: %.2f %%", epoch + 1, dev_macro_f1 * 100.0)
+        logger.info("[dev:epoch#%d] Avg. loss: %f", epoch + 1, dev_loss)
+        logger.info("[dev:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+                    epoch + 1, dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
+        logger.info("[dev:epoch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1,
+                    dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
+                    dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
+        logger.info("[dev:epoch#%d] Macro F1: %.2f %%", epoch + 1, dev_macro_f1 * 100.0)
 
         # Get best dev and train result (check out best_values_minimize and best_values_maximize if you modify these values)
         dev_target = dev_macro_f1 # Might be acc, loss, ...
@@ -665,9 +665,9 @@ def main(args):
 
         if best_values_binary_func_comp(best_dev, dev_target) or (best_dev == dev_target and best_values_binary_func_comp(best_train, train_target)):
             if best_dev == dev_target:
-                logging.debug("Dev is equal but train has been improved from %s to %s: checkpoint", str(best_train), str(train_target))
+                logger.debug("Dev is equal but train has been improved from %s to %s: checkpoint", str(best_train), str(train_target))
             else:
-                logging.debug("Dev has been improved from %s to %s: checkpoint", str(best_dev), str(dev_target))
+                logger.debug("Dev has been improved from %s to %s: checkpoint", str(best_dev), str(dev_target))
 
             best_dev = dev_target
 
@@ -680,7 +680,7 @@ def main(args):
 
             current_patience = 0
         else:
-            logging.debug("Dev has not been improved (best and current value): %s and %s", str(best_dev), str(dev_target))
+            logger.debug("Dev has not been improved (best and current value): %s and %s", str(best_dev), str(dev_target))
 
             current_patience += 1
 
@@ -722,19 +722,19 @@ def main(args):
     final_acc_per_class_abs /= epochs
     final_macro_f1 /= epochs
 
-    logging.info("[train] Avg. loss: %f", final_loss)
-    logging.info("[train] Avg. acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                 final_acc * 100.0, final_acc_per_class[0] * 100.0, final_acc_per_class[1] * 100.0)
-    logging.info("[train] Avg. acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
-                 final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
-    logging.info("[train] Avg. macro F1: %.2f %%", final_macro_f1 * 100.0)
+    logger.info("[train] Avg. loss: %f", final_loss)
+    logger.info("[train] Avg. acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+                final_acc * 100.0, final_acc_per_class[0] * 100.0, final_acc_per_class[1] * 100.0)
+    logger.info("[train] Avg. acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
+                final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
+    logger.info("[train] Avg. macro F1: %.2f %%", final_macro_f1 * 100.0)
 
     if do_not_load_best_model or not model_output:
-        logging.warning("Using last model for dev and test evaluation")
+        logger.warning("Using last model for dev and test evaluation")
     else:
         # Evaluate dev and test with best model
 
-        logging.info("Loading best model: '%s' (best dev: %s)", model_output, str(best_dev))
+        logger.info("Loading best model: '%s' (best dev: %s)", model_output, str(best_dev))
 
         model = model.from_pretrained(model_output).to(device)
 
@@ -749,13 +749,13 @@ def main(args):
     dev_acc_per_class_abs_f1 = dev_inference_metrics["f1"]
     dev_macro_f1 = dev_inference_metrics["macro_f1"]
 
-    logging.info("[dev] Avg. loss: %f", dev_loss)
-    logging.info("[dev] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                 dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
-    logging.info("[dev] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
-                 dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
-                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
-    logging.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
+    logger.info("[dev] Avg. loss: %f", dev_loss)
+    logger.info("[dev] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+                dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
+    logger.info("[dev] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
+                dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
+                dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
+    logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
     test_inference_metrics = inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, classes=classes)
 
@@ -768,13 +768,13 @@ def main(args):
     test_acc_per_class_abs_f1 = test_inference_metrics["f1"]
     test_macro_f1 = test_inference_metrics["macro_f1"]
 
-    logging.info("[test] Avg. loss: %f", test_loss)
-    logging.info("[test] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                 test_acc * 100.0, test_acc_per_class[0] * 100.0, test_acc_per_class[1] * 100.0)
-    logging.info("[test] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
-                 test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
-                 test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
-    logging.info("[test] Macro F1: %.2f %%", test_macro_f1 * 100.0)
+    logger.info("[test] Avg. loss: %f", test_loss)
+    logger.info("[test] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+                test_acc * 100.0, test_acc_per_class[0] * 100.0, test_acc_per_class[1] * 100.0)
+    logger.info("[test] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
+                test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
+                test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
+    logger.info("[test] Macro F1: %.2f %%", test_macro_f1 * 100.0)
 
     if plot:
         plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
@@ -836,8 +836,8 @@ def initialization():
 if __name__ == "__main__":
     args = initialization()
 
-    utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)
+    logger = utils.set_up_logging(logging.getLogger("parallel_urls_classifier"), level=logging.DEBUG if args.verbose else logging.INFO)
 
-    logging.debug("Arguments processed: {}".format(str(args)))
+    logger.debug("Arguments processed: {}".format(str(args)))
 
     main(args)

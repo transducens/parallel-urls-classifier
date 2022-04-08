@@ -125,7 +125,7 @@ def get_current_allocated_memory_size():
 
     return size_in_bytes
 
-def set_up_logging(filename=None, level=logging.INFO, format="[%(asctime)s] [%(levelname)s] [%(module)s:%(lineno)d] %(message)s",
+def set_up_logging(logger, filename=None, level=logging.INFO, format="[%(asctime)s] [%(levelname)s] [%(module)s:%(lineno)d] %(message)s",
                    display_when_file=False):
     handlers = [
         logging.StreamHandler()
@@ -139,8 +139,15 @@ def set_up_logging(filename=None, level=logging.INFO, format="[%(asctime)s] [%(l
             # Logging messages will be stored and not displayed
             handlers[0] = logging.FileHandler(filename)
 
-    logging.basicConfig(handlers=handlers, level=level,
-                        format=format)
+    formatter = logging.Formatter(format)
+
+    for h in handlers:
+        h.setFormatter(formatter)
+        h.setLevel(level)
+
+        logger.addHandler(h)
+
+    return logger
 
 def append_from_tuple(*tuples):
     """We expect tuples where:
