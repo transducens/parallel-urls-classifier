@@ -6,6 +6,9 @@ import logging
 import gzip
 import lzma
 from contextlib import contextmanager
+import urllib.parse
+
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 def wc_l(fd, do_not_count_empty=True):
     no_lines = 0
@@ -216,3 +219,22 @@ def update_defined_variables_from_dict(d, provided_locals, smash=False):
             raise Exception(f"Variable '{v}' is already defined and smash=False")
 
     provided_locals.update(d)
+
+def preprocess_url(url, remove_protocol_and_authority=False):
+    urls = []
+
+    if isinstance(url, str):
+        url = [url]
+
+    for u in url:
+        if remove_protocol_and_authority:
+            ur = u.split('/')
+
+            if ur[0] in ("http:", "https:") and ur[1] == '':
+                u = '/'.join(ur[3:])
+
+        preprocessed_url = stringify_url(urllib.parse.unquote(u)).lower()
+
+        urls.append(preprocessed_url)
+
+    return urls

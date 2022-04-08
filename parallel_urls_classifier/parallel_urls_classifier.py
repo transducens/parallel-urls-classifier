@@ -6,7 +6,6 @@ import time
 import random
 import logging
 import argparse
-import urllib.parse
 
 import utils.utils as utils
 
@@ -20,7 +19,8 @@ import matplotlib.pyplot as plt
 
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
 logging.getLogger("PIL.PngImagePlugin").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+# LOG_DIRECTORY should be defined once main() has been executed
 
 class URLsDataset(Dataset):
     def __init__(self, parallel_urls, non_parallel_urls):
@@ -107,6 +107,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
             "f1": f1,
             "macro_f1": macro_f1,}
 
+@torch.no_grad()
 def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, classes=2):
     model.eval()
 
@@ -120,27 +121,26 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
     all_outputs = []
     all_labels = []
 
-    with torch.no_grad():
-        for idx, batch in enumerate(dataloader):
-            batch_urls_str = batch["url_str"]
-            tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
-            urls = tokens["input_ids"].to(device)
-            attention_mask = tokens["attention_mask"].to(device)
-            labels = batch["label"].to(device)
+    for idx, batch in enumerate(dataloader):
+        batch_urls_str = batch["url_str"]
+        tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
+        urls = tokens["input_ids"].to(device)
+        attention_mask = tokens["attention_mask"].to(device)
+        labels = batch["label"].to(device)
 
-            # Inference
-            outputs = model(urls, attention_mask).logits
-            outputs = F.softmax(outputs, dim=1)
-            outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
+        # Inference
+        outputs = model(urls, attention_mask).logits
+        outputs = F.softmax(outputs, dim=1)
+        outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
 
-            # Results
-            loss = criterion(outputs, labels).cpu().detach().numpy()
-            labels = labels.cpu()
+        # Results
+        loss = criterion(outputs, labels).cpu().detach().numpy()
+        labels = labels.cpu()
 
-            total_loss += loss
+        total_loss += loss
 
-            all_outputs.extend(outputs_argmax.tolist())
-            all_labels.extend(labels.tolist())
+        all_outputs.extend(outputs_argmax.tolist())
+        all_labels.extend(labels.tolist())
 
     all_outputs = torch.tensor(all_outputs)
     all_labels = torch.tensor(all_labels)
@@ -224,24 +224,73 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
         else:
             plt.pause(time_wait)
 
-def preprocess_url(url, remove_protocol_and_authority=False):
-    urls = []
+@torch.no_grad()
+def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=False, remove_authority=False, parallel_likelihood=False, threshold=-np.inf):
+    logging.info("Inference mode enabled: insert 2 blank lines in order to end")
 
-    if isinstance(url, str):
-        url = [url]
+    model.eval()
 
-    for u in url:
-        if remove_protocol_and_authority:
-            ur = u.split('/')
+    while True:
+        if inference_from_stdin:
+            try:
+                target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority), return_urls=True))
+            except StopIteration:
+                break
 
-            if ur[0] in ("http:", "https:") and ur[1] == '':
-                u = '/'.join(ur[3:])
+            initial_src_urls = [u[0] for u in initial_urls]
+            initial_trg_urls = [u[1] for u in initial_urls]
+        else:
+            initial_src_urls = [input("src url: ").strip()]
+            initial_trg_urls = [input("trg url: ").strip()]
 
-        preprocessed_url = utils.stringify_url(urllib.parse.unquote(u)).lower()
+            if not initial_src_urls[0] and not initial_trg_urls[0]:
+                break
 
-        urls.append(preprocessed_url)
+            src_url = initial_src_urls[0]
+            trg_url = initial_trg_urls[0]
+            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority)))
 
-    return urls
+        # Tokens
+        tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
+        urls = tokens["input_ids"].to(device)
+        attention_mask = tokens["attention_mask"].to(device)
+
+        # Debug info
+        ## Tokens
+        urls_tokens = urls.cpu() * attention_mask.cpu()
+
+        for ut in urls_tokens:
+            url_tokens = ut[ut.nonzero()][:,0]
+            original_str_from_tokens = tokenizer.decode(url_tokens) # Detokenize
+            str_from_tokens = ' '.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a space between tokens
+            ## Unk
+            unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
+            sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(' '))} vs {len(str_from_tokens.split(' '))}"
+            sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(' ')))} vs " \
+                                    f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(' ')))}"
+
+            logging.debug("Tokenization info (model input, from model input to tokens, from tokens to str): "
+                        "(%s, %s, %s)", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens)
+            logging.debug("Unk. info (unk chars, initial tokens vs detokenized tokens, "
+                        "len=1 -> initial tokens vs detokenized tokens): (%d, %s, %s)",
+                        unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
+
+        outputs = model(urls, attention_mask).logits
+        outputs = F.softmax(outputs, dim=1).cpu().detach()
+        outputs_argmax = torch.argmax(outputs, dim=1).numpy()
+
+        assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {initial_src_urls})"
+        assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {initial_trg_urls})"
+
+        if parallel_likelihood:
+            for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
+                likelihood = data[1] # parallel
+
+                if likelihood >= threshold:
+                    print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
+        else:
+            for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
+                print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
 
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
@@ -267,7 +316,8 @@ def main(args):
     batch_size = args.batch_size
     epochs = args.epochs
     use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:0" if use_cuda else "cpu")
+    force_cpu = args.force_cpu
+    device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
     pretrained_model = args.pretrained_model
     max_length_tokens = args.max_length_tokens
     model_input = utils.resolve_path(args.model_input)
@@ -285,10 +335,26 @@ def main(args):
     do_not_load_best_model = args.do_not_load_best_model
     remove_authority = args.remove_authority
     add_symmetric_samples = args.add_symmetric_samples
+    log_directory = args.log_directory
+
+    # TODO append log info to files into log_directory instead of lots of logging messages
+
+    if not utils.exists(log_directory, f=os.path.isdir):
+        raise Exception(f"Provided log directory does not exist: '{log_directory}'")
+    else:
+        log_directory_files = os.listdir(utils.resolve_path(log_directory))
+
+        if len(log_directory_files) != 0:
+            logging.warning("Log directory contain %d files: waiting %d seconds before proceed", len(log_directory_files), waiting_time)
+
+            time.sleep(waiting_time)
+
+    if "LOG_DIRECTORY" not in globals():
+        # Add LOG_DIRECTORY to global scope
+        globals()["LOG_DIRECTORY"] = log_directory
 
     if apply_inference and not model_input:
-        logging.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed",
-                        waiting_time)
+        logging.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
 
         time.sleep(waiting_time)
 
@@ -349,69 +415,8 @@ def main(args):
     fine_tuning = args.fine_tuning
 
     if apply_inference:
-        logging.info("Inference mode enabled: insert 2 blank lines in order to end")
-
-        while True:
-            if inference_from_stdin:
-                try:
-                    target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: preprocess_url(u, remove_protocol_and_authority=remove_authority), return_urls=True))
-                except StopIteration:
-                    break
-
-                initial_src_urls = [u[0] for u in initial_urls]
-                initial_trg_urls = [u[1] for u in initial_urls]
-            else:
-                initial_src_urls = [input("src url: ").strip()]
-                initial_trg_urls = [input("trg url: ").strip()]
-
-                if not initial_src_urls[0] and not initial_trg_urls[0]:
-                    break
-
-                src_url = initial_src_urls[0]
-                trg_url = initial_trg_urls[0]
-                target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: preprocess_url(u, remove_protocol_and_authority=remove_authority)))
-
-            # Tokens
-            tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
-            urls = tokens["input_ids"].to(device)
-            attention_mask = tokens["attention_mask"].to(device)
-
-            # Debug info
-            ## Tokens
-            urls_tokens = urls.cpu() * attention_mask.cpu()
-
-            for ut in urls_tokens:
-                url_tokens = ut[ut.nonzero()][:,0]
-                original_str_from_tokens = tokenizer.decode(url_tokens) # Detokenize
-                str_from_tokens = ' '.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a space between tokens
-                ## Unk
-                unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
-                sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(' '))} vs {len(str_from_tokens.split(' '))}"
-                sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(' ')))} vs " \
-                                        f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(' ')))}"
-
-                logging.debug("Tokenization info (model input, from model input to tokens, from tokens to str): "
-                            "(%s, %s, %s)", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens)
-                logging.debug("Unk. info (unk chars, initial tokens vs detokenized tokens, "
-                            "len=1 -> initial tokens vs detokenized tokens): (%d, %s, %s)",
-                            unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
-
-            outputs = model(urls, attention_mask).logits
-            outputs = F.softmax(outputs, dim=1).cpu().detach()
-            outputs_argmax = torch.argmax(outputs, dim=1).numpy()
-
-            assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {initial_src_urls})"
-            assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {initial_trg_urls})"
-
-            if parallel_likelihood:
-                for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
-                    likelihood = data[1] # parallel
-
-                    if likelihood >= threshold:
-                        print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
-            else:
-                for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
-                    print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
+        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=inference_from_stdin,
+                              remove_authority=remove_authority, parallel_likelihood=parallel_likelihood, threshold=threshold)
 
         # Stop execution
         return
@@ -429,12 +434,12 @@ def main(args):
     logging.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
     for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: preprocess_url(u, remove_protocol_and_authority=remove_authority), add_symmetric_samples=add_symmetric_samples)):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority), add_symmetric_samples=add_symmetric_samples)):
             l.extend(batch_urls)
 
     for fd, l in ((file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
                   (file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: preprocess_url(u, remove_protocol_and_authority=remove_authority))):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority))):
             l.extend(batch_urls)
 
     logging.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
@@ -807,7 +812,7 @@ def initialization():
     parser.add_argument('--inference', action="store_true", help="Do not train, just apply inference (flag --model-input is recommended)")
     parser.add_argument('--inference-from-stdin', action="store_true", help="Read inference from stdin")
     parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
-    parser.add_argument('--threshold', type=float, default=-1.0, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
+    parser.add_argument('--threshold', type=float, default=-np.inf, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
     parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="")
     parser.add_argument('--patience', type=int, default=0, help="Patience before stopping the training")
     parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored)")
@@ -815,6 +820,8 @@ def initialization():
     parser.add_argument('--overwrite-output-model', action="store_true", help="Overwrite output model if it exists (initial loading)")
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
     parser.add_argument('--add-symmetric-samples', action="store_true", help="Add symmetric samples for training (if (src, trg) URL pair is provided, (trg, src) URL pair will be provided as well)")
+    parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
+    parser.add_argument('--log-directory', required=True, help="Directory where different log files will be stored")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
