@@ -6,87 +6,6 @@ import logging
 
 import negative_samples_generator as nsg
 
-logging.basicConfig(level=logging.INFO)
-
-input_file_parallel_urls = sys.argv[1]
-output_file_urls_prefix = sys.argv[2]
-
-if "PYTHONHASHSEED" not in os.environ:
-    logging.warning("You did not provide PYTHONHASHSEED: the results will not be deterministic")
-
-random_seed = 71213
-
-random.seed(random_seed)
-
-train_perc = 0.8
-dev_perc = 0.1
-test_perc = 0.1
-parallel_urls = {}
-non_parallel_urls = {}
-skipped_urls = 0
-no_parallel_urls = 0
-no_non_parallel_urls = 0
-
-with open(input_file_parallel_urls) as f:
-    for idx, url_pair in enumerate(f):
-        url_pair = url_pair.strip().split('\t')
-
-        assert len(url_pair) == 2, f"The provided line does not have 2 tab-separated values (line #{idx + 1})"
-
-        if len(url_pair[0]) == 0 or len(url_pair[1]) == 0:
-            logging.warning("Skipping line #%d because there are empty values", idx + 1)
-            skipped_urls += 1
-
-            continue
-        if len(url_pair[0]) > 1000 or len(url_pair[1]) > 1000:
-            logging.warning("Skipping line #%d because there are URLs too long (%d and %d)", idx + 1, len(url_pair[0]), len(url_pair[1]))
-            skipped_urls += 1
-
-            continue
-
-        domains = ((url_pair[0] + '/').split('/')[2].replace('\t', ' '), (url_pair[1] + '/').split('/')[2].replace('\t', ' '))
-
-        """
-        if domains[0] != domains[1]:
-            logging.debug("Skipping line #%d because the URLs do not belong to the same domain (%s vs %s)", idx + 1, domains[0], domains[1])
-            skipped_urls += 1
-
-            continue
-        """
-
-        domain = f"{domains[0]}\t{domains[1]}"
-
-        if domain not in parallel_urls:
-            parallel_urls[domain] = set()
-
-        parallel_urls[domain].add((url_pair[0], url_pair[1]))
-
-        no_parallel_urls += 1
-
-    logging.info("Skipped lines: %d out of %d (%.2f %%)", skipped_urls, idx + 1, skipped_urls * 100.0 / (idx + 1))
-
-logging.info("Loaded URLs (positive samples): %d", no_parallel_urls)
-logging.info("Total domains (positive samples): %d", len(parallel_urls.keys()))
-
-train_domains, train_max_idx = set(), int(train_perc * len(parallel_urls.keys()))
-dev_domains, dev_max_idx = set(), train_max_idx + int(dev_perc * len(parallel_urls.keys()))
-test_domains, test_max_idx = set(), len(parallel_urls.keys())
-idx = 0
-
-for idx, domain in enumerate(parallel_urls.keys()):
-    if idx < train_max_idx:
-        train_domains.add(domain)
-    elif idx < dev_max_idx:
-        dev_domains.add(domain)
-    elif idx < test_max_idx:
-        test_domains.add(domain)
-
-logging.info("Train domains: %d", len(train_domains))
-logging.info("Dev domains: %d", len(dev_domains))
-logging.info("Test domains: %d", len(test_domains))
-
-assert len(train_domains) + len(dev_domains) + len(test_domains) == len(parallel_urls.keys()), "Not all the domains have been set to a set"
-
 def store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=10,
                            logging_cte=2, negative_samples_generator=nsg.get_negative_samples_random):
     no_parallel_domains = len(target_domains)
@@ -115,7 +34,8 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
 
     return no_non_parallel_urls, no_non_parallel_domains
 
-def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2):
+def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2, generate_negative_samples=True,
+                  negative_samples_generator="random", max_negative_samples_alignments=10):
     no_parallel_urls = 0
     no_parallel_domains = len(target_domains)
     last_perc_shown = -1
@@ -139,38 +59,154 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
     logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
     logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
 
-    # TODO change to option with argparse
-    #negative_samples_generator = nsg.get_negative_samples_random
-    negative_samples_generator = nsg.get_negative_samples_intersection_metric
+    if negative_samples_generator != "none":
+        if negative_samples_generator == "random":
+            negative_samples_generator_f = nsg.get_negative_samples_random
+        elif negative_samples_generator == "bow-overlapping-metric":
+            negative_samples_generator_f = nsg.get_negative_samples_intersection_metric
+        else:
+            logging.warning("Unknown negative samples generator (%s): using 'random'", negative_samples_generator)
 
-    # Create negative samples -> same domain and get all combinations (store non-parallel URLs)
-    no_non_parallel_urls, no_non_parallel_domains = store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=10,
-                                                                           logging_cte=logging_cte, negative_samples_generator=negative_samples_generator)
+            negative_samples_generator_f = nsg.get_negative_samples_random
 
-    logging.info("Total URLs for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_urls)
-    logging.info("Total domains for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_domains)
+        # Create negative samples -> same domain and get all combinations (store non-parallel URLs)
+        no_non_parallel_urls, no_non_parallel_domains = store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=max_negative_samples_alignments,
+                                                                               logging_cte=logging_cte, negative_samples_generator=negative_samples_generator_f)
 
-if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
-    logging.warning("Some set has been detected to contain 0 domains (train, dev, test: %d, %d, %d): merging all the domains")
+        logging.info("Total URLs for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_urls)
+        logging.info("Total domains for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_domains)
+    else:
+        logging.debug("Skip negative samples generation")
 
-    all_parallel_urls = set()
-    all_domain = "all"
+def main(args):
+    input_file_parallel_urls = args.input_file_parallel_urls
+    output_file_urls_prefix = args.outputs_files_prefix
+    negative_samples_generator = args.negative_samples_generator
+    generate_negative_samples = not args.do_not_generate_negative_samples
+    seed = args.seed
+    max_negative_samples_alignments = args.max_negative_samples_alignments
+    same_authority = args.same_authority
 
-    for domain in train_domains.union(dev_domains).union(test_domains):
-        all_parallel_urls.update(parallel_urls[domain])
+    if "PYTHONHASHSEED" not in os.environ:
+        logging.warning("You did not provide PYTHONHASHSEED: the results will not be deterministic")
 
-    all_parallel_urls = list(all_parallel_urls)
+    if seed >= 0:
+        random.seed(seed)
 
-    logging.info("Processing %d URL pairs at once", len(all_parallel_urls))
+    train_perc = 0.8
+    dev_perc = 0.1
+    test_perc = 0.1
+    parallel_urls = {}
+    non_parallel_urls = {}
+    skipped_urls = 0
+    no_parallel_urls = 0
+    no_non_parallel_urls = 0
 
-    train_max_idx = int(train_perc * len(all_parallel_urls))
-    dev_max_idx = train_max_idx + int(dev_perc * len(all_parallel_urls))
-    test_max_idx = len(all_parallel_urls)
+    for idx, url_pair in enumerate(input_file_parallel_urls):
+        url_pair = url_pair.strip().split('\t')
 
-    store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50)
-    store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100)
-    store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100)
-else:
-    store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50)
-    store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100)
-    store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100)
+        assert len(url_pair) == 2, f"The provided line does not have 2 tab-separated values (line #{idx + 1})"
+
+        if len(url_pair[0]) == 0 or len(url_pair[1]) == 0:
+            logging.warning("Skipping line #%d because there are empty values", idx + 1)
+            skipped_urls += 1
+
+            continue
+        if len(url_pair[0]) > 1000 or len(url_pair[1]) > 1000:
+            logging.warning("Skipping line #%d because there are URLs too long (%d and %d)", idx + 1, len(url_pair[0]), len(url_pair[1]))
+            skipped_urls += 1
+
+            continue
+
+        domains = ((url_pair[0] + '/').split('/')[2].replace('\t', ' '), (url_pair[1] + '/').split('/')[2].replace('\t', ' '))
+
+        if same_authority and domains[0] != domains[1]:
+            logging.debug("Skipping line #%d because the URLs do not belong to the same domain (%s vs %s)", idx + 1, domains[0], domains[1])
+            skipped_urls += 1
+
+            continue
+
+        domain = f"{domains[0]}\t{domains[1]}"
+
+        if domain not in parallel_urls:
+            parallel_urls[domain] = set()
+
+        parallel_urls[domain].add((url_pair[0], url_pair[1]))
+
+        no_parallel_urls += 1
+
+    logging.info("Skipped lines: %d out of %d (%.2f %%)", skipped_urls, idx + 1, skipped_urls * 100.0 / (idx + 1))
+    logging.info("Loaded URLs (positive samples): %d", no_parallel_urls)
+    logging.info("Total domains (positive samples): %d", len(parallel_urls.keys()))
+
+    train_domains, train_max_idx = set(), int(train_perc * len(parallel_urls.keys()))
+    dev_domains, dev_max_idx = set(), train_max_idx + int(dev_perc * len(parallel_urls.keys()))
+    test_domains, test_max_idx = set(), len(parallel_urls.keys())
+    idx = 0
+
+    for idx, domain in enumerate(parallel_urls.keys()):
+        if idx < train_max_idx:
+            train_domains.add(domain)
+        elif idx < dev_max_idx:
+            dev_domains.add(domain)
+        elif idx < test_max_idx:
+            test_domains.add(domain)
+
+    logging.info("Train domains: %d", len(train_domains))
+    logging.info("Dev domains: %d", len(dev_domains))
+    logging.info("Test domains: %d", len(test_domains))
+
+    assert len(train_domains) + len(dev_domains) + len(test_domains) == len(parallel_urls.keys()), "Not all the domains have been set to a set"
+
+    if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
+        logging.warning("Some set has been detected to contain 0 domains (train, dev, test: %d, %d, %d): merging all the domains")
+
+        all_parallel_urls = set()
+        all_domain = "all"
+
+        for domain in train_domains.union(dev_domains).union(test_domains):
+            all_parallel_urls.update(parallel_urls[domain])
+
+        all_parallel_urls = list(all_parallel_urls)
+
+        logging.info("Processing %d URL pairs at once", len(all_parallel_urls))
+
+        train_max_idx = int(train_perc * len(all_parallel_urls))
+        dev_max_idx = train_max_idx + int(dev_perc * len(all_parallel_urls))
+        test_max_idx = len(all_parallel_urls)
+
+        store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
+        store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
+        store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
+    else:
+        store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
+        store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
+        store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
+
+def initialization():
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                     description="Create URLs dataset from parallel samples")
+
+    parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt'), help="Input TSV file with parallel URLs")
+    parser.add_argument('output_files_prefix', help="Output files prefix")
+
+    parser.add_argument('--negative-samples-generator', choices=["none", "random", "bow-overlapping-metric"], default="random" help="Strategy to create negative samples from positive samples")
+    parser.add_argument('--max-negative-samples-alignments', type=int, default=10, help="Max. number of alignments of negative samples per positive samples")
+    parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples")
+    parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")
+
+    parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (fully guaranteed if you also set PYTHONHASHSEED envvar). Set a negative number in order to disable this feature")
+    parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
+
+    args = parser.parse_args()
+
+    return args
+
+if __name__ == "__main__":
+    args = initialization()
+
+    utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)
+
+    logging.debug("Arguments processed: {}".format(str(args)))
+
+    main(args)
