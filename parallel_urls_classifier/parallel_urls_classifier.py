@@ -17,10 +17,11 @@ from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomS
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW, get_linear_schedule_with_warmup
 import matplotlib.pyplot as plt
 
+# Disable (less verbose) 3rd party logging
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
 logging.getLogger("PIL.PngImagePlugin").setLevel(logging.WARNING)
 
-# LOG_DIRECTORY should be defined once main() has been executed
+# Logging
 logger = logging
 logger_verbose = {"tokens": logging}
 
@@ -132,8 +133,16 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
 
         # Inference
         outputs = model(urls, attention_mask).logits
-        outputs = F.softmax(outputs, dim=1)
-        outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
+        regression = outputs.cpu().detach().numpy().shape[1] == 1
+
+        if regression:
+            # Regression
+            outputs = torch.sigmoid(outputs)
+            outputs_argmax = torch.round(outputs.cpu()).squeeze().numpy().astype(np.int64)
+        else:
+            # Binary classification
+            outputs = F.softmax(outputs, dim=1)
+            outputs_argmax = torch.argmax(outputs.cpu(), dim=1).numpy()
 
         # Results
         loss = criterion(outputs, labels).cpu().detach().numpy()
@@ -275,15 +284,23 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             logger_verbose["tokens"].debug("%s\t%s\t%s\t%d\t%s\t%s", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
         outputs = model(urls, attention_mask).logits
-        outputs = F.softmax(outputs, dim=1).cpu().detach()
-        outputs_argmax = torch.argmax(outputs, dim=1).numpy()
+        regression = outputs.cpu().detach().numpy().shape[1] == 1
+
+        if regression:
+            # Regression
+            outputs = torch.sigmoid(outputs).cpu().detach()
+            outputs_argmax = torch.round(outputs).squeeze().numpy().astype(np.int64)
+        else:
+            # Binary classification
+            outputs = F.softmax(outputs, dim=1).cpu().detach()
+            outputs_argmax = torch.argmax(outputs, dim=1).numpy()
 
         assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {initial_src_urls})"
         assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {initial_trg_urls})"
 
         if parallel_likelihood:
             for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
-                likelihood = data[1] # parallel
+                likelihood = data[0] if regression else data[1] # parallel
 
                 if likelihood >= threshold:
                     print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
@@ -325,16 +342,21 @@ def main(args):
     plot = args.plot
     plot_path = utils.resolve_path(args.plot_path)
     inference_from_stdin = args.inference_from_stdin
-    waiting_time = 20
     parallel_likelihood = args.parallel_likelihood
     threshold = args.threshold
-    classes = 2 # False / True
     imbalanced_strategy = args.imbalanced_strategy
     patience = args.patience
     do_not_load_best_model = args.do_not_load_best_model
     remove_authority = args.remove_authority
     add_symmetric_samples = args.add_symmetric_samples
     log_directory = args.log_directory
+    regression = args.regression
+
+    waiting_time = 20
+    classes = 1 if regression else 2
+
+    # Disable parallelism since throws warnings
+    os.environ["TOKENIZERS_PARALLELISM"] = "False"
 
     if not utils.exists(log_directory, f=os.path.isdir):
         raise Exception(f"Provided log directory does not exist: '{log_directory}'")
@@ -346,12 +368,11 @@ def main(args):
 
             time.sleep(waiting_time)
 
-    if "LOG_DIRECTORY" not in globals():
-        # Add LOG_DIRECTORY to global scope
-        globals()["LOG_DIRECTORY"] = log_directory
-
     # Loggers
-    logger_verbose["tokens"] = utils.set_up_logging(logging.getLogger("parallel_urls_classifier.tokens"), level=logging.DEBUG if args.verbose else logging.INFO, filename=f"{LOG_DIRECTORY}/tokens")
+    logger_verbose["tokens"] = logging.getLogger("parallel_urls_classifier.tokens")
+    logger_verbose["tokens"].propagate = False # We don't want to see the messages multiple times
+    logger_verbose["tokens"] = utils.set_up_logging_logger(logger_verbose["tokens"], level=logging.DEBUG if args.verbose else logging.INFO,
+                                                           filename=f"{log_directory}/tokens", format="%(asctime)s\t%(levelname)s\t%(message)s")
 
     if apply_inference and not model_input:
         logger.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
@@ -391,7 +412,7 @@ def main(args):
         logger.warning("Deterministic values disable (you set a negative seed)")
 
     if max_length_tokens > 512:
-        logger.warning("BERT can handle a max. of 512 tokens at once and you set %d: changing value to 512")
+        logger.warning("HuggingFace models can handle a max. of 512 tokens at once and you set %d: changing value to 512")
 
         max_length_tokens = 512
 
@@ -429,7 +450,7 @@ def main(args):
     for param in model.classifier.parameters():
         param.requires_grad = True
 
-    bert_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
+    last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
 
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
@@ -564,10 +585,18 @@ def main(args):
 
             # Inference
             outputs = model(urls, attention_mask).logits
-            outputs = F.softmax(outputs, dim=1)
-            outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
+
+            if regression:
+                # Regression
+                outputs = torch.sigmoid(outputs)
+                outputs_argmax = torch.round(outputs.cpu()).squeeze().type(torch.int64)
+            else:
+                # Binary classification
+                outputs = F.softmax(outputs, dim=1)
+                outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
 
             # Results
+            # TODO fix loss since it fails when --regression is set
             loss = criterion(outputs, labels)
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
@@ -614,7 +643,7 @@ def main(args):
             scheduler.step()
 
         current_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
-        layer_updated = (current_last_layer_output != bert_last_layer_output).any().cpu().detach().numpy()
+        layer_updated = (current_last_layer_output != last_layer_output).any().cpu().detach().numpy()
 
         logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
 
@@ -822,6 +851,7 @@ def initialization():
     parser.add_argument('--add-symmetric-samples', action="store_true", help="Add symmetric samples for training (if (src, trg) URL pair is provided, (trg, src) URL pair will be provided as well)")
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
     parser.add_argument('--log-directory', required=True, help="Directory where different log files will be stored")
+    parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
@@ -836,7 +866,7 @@ def initialization():
 if __name__ == "__main__":
     args = initialization()
 
-    logger = utils.set_up_logging(logging.getLogger("parallel_urls_classifier"), level=logging.DEBUG if args.verbose else logging.INFO)
+    logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=logging.DEBUG if args.verbose else logging.INFO)
 
     logger.debug("Arguments processed: {}".format(str(args)))
 
