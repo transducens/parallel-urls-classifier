@@ -3,6 +3,7 @@ import os
 import sys
 import random
 import logging
+import argparse
 
 import negative_samples_generator as nsg
 
@@ -190,7 +191,7 @@ def initialization():
     parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt'), help="Input TSV file with parallel URLs")
     parser.add_argument('output_files_prefix', help="Output files prefix")
 
-    parser.add_argument('--negative-samples-generator', choices=["none", "random", "bow-overlapping-metric"], default="random" help="Strategy to create negative samples from positive samples")
+    parser.add_argument('--negative-samples-generator', choices=["none", "random", "bow-overlapping-metric"], default="random", help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=10, help="Max. number of alignments of negative samples per positive samples")
     parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples")
     parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")
