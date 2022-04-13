@@ -26,7 +26,7 @@ logger = logging
 logger_verbose = {"tokens": logging}
 
 class URLsDataset(Dataset):
-    def __init__(self, parallel_urls, non_parallel_urls):
+    def __init__(self, parallel_urls, non_parallel_urls, regression=False):
         #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # TODO problem here when creating a new tmp array -> big arrays will lead to run out of memory...
         self.data = non_parallel_urls + parallel_urls
         self.labels = np.zeros(len(self.data))
@@ -36,7 +36,8 @@ class URLsDataset(Dataset):
         # Set to 1 the parallel URLs
         self.labels[len(non_parallel_urls):] = 1
 
-        self.labels = torch.from_numpy(self.labels).type(torch.LongTensor)
+        self.labels = torch.from_numpy(self.labels)
+        self.labels = self.labels.type(torch.FloatTensor) if regression else self.labels.type(torch.LongTensor)
 
     def __len__(self):
         return len(self.data)
@@ -137,7 +138,7 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
 
         if regression:
             # Regression
-            outputs = torch.sigmoid(outputs)
+            outputs = torch.sigmoid(outputs).squeeze()
             outputs_argmax = torch.round(outputs.cpu()).squeeze().numpy().astype(np.int64)
         else:
             # Binary classification
@@ -147,6 +148,9 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
         # Results
         loss = criterion(outputs, labels).cpu().detach().numpy()
         labels = labels.cpu()
+
+        if regression:
+            labels = torch.round(labels).type(torch.LongTensor)
 
         total_loss += loss
 
@@ -353,7 +357,8 @@ def main(args):
     regression = args.regression
 
     waiting_time = 20
-    classes = 1 if regression else 2
+    num_labels = 1 if regression else 2
+    classes = 2
 
     # Disable parallelism since throws warnings
     os.environ["TOKENIZERS_PARALLELISM"] = "False"
@@ -430,7 +435,7 @@ def main(args):
 
         model = model.from_pretrained(model_input).to(device)
     else:
-        model = model.from_pretrained(pretrained_model, num_labels=classes).to(device)
+        model = model.from_pretrained(pretrained_model, num_labels=num_labels).to(device)
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
     fine_tuning = args.fine_tuning
@@ -441,6 +446,10 @@ def main(args):
 
         # Stop execution
         return
+
+    if regression:
+        if imbalanced_strategy == "weighted-loss":
+            logging.warning("Incompatible weight strategy ('%s'): it will not be applied", imbalanced_strategy)
 
     # Freeze layers, if needed
     for param in model.parameters():
@@ -488,13 +497,18 @@ def main(args):
     classes_weights = torch.tensor(classes_weights, dtype=torch.float)
 
     no_workers = args.dataset_workers
-    dataset_train = URLsDataset(parallel_urls_train, non_parallel_urls_train)
+    dataset_train = URLsDataset(parallel_urls_train, non_parallel_urls_train, regression=regression)
 
     if imbalanced_strategy == "over-sampling":
         target_list = []
 
         for t in dataset_train:
-            target_list.append(t["label"])
+            l = t["label"]
+
+            if regression:
+                l = torch.round(l).type(torch.LongTensor)
+
+            target_list.append(l)
 
         target_list = torch.tensor(target_list)
         classes_weights_all = classes_weights[target_list]
@@ -509,9 +523,9 @@ def main(args):
         train_sampler = RandomSampler(dataset_train)
 
     dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler, num_workers=no_workers)
-    dataset_dev = URLsDataset(parallel_urls_dev, non_parallel_urls_dev)
+    dataset_dev = URLsDataset(parallel_urls_dev, non_parallel_urls_dev, regression=regression)
     dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev), num_workers=no_workers)
-    dataset_test = URLsDataset(parallel_urls_test, non_parallel_urls_test)
+    dataset_test = URLsDataset(parallel_urls_test, non_parallel_urls_test, regression=regression)
     dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test), num_workers=no_workers)
 
     #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
@@ -519,7 +533,15 @@ def main(args):
     #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
-    criterion = nn.CrossEntropyLoss(weight=loss_weight).to(device)
+
+    if regression:
+        # Regression
+        criterion = nn.MSELoss()
+    else:
+        # Binary classification
+        criterion = nn.CrossEntropyLoss(weight=loss_weight)
+
+    criterion = criterion.to(device)
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
                                  lr=2e-5, eps=1e-8)
     #optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
@@ -588,7 +610,7 @@ def main(args):
 
             if regression:
                 # Regression
-                outputs = torch.sigmoid(outputs)
+                outputs = torch.sigmoid(outputs).squeeze()
                 outputs_argmax = torch.round(outputs.cpu()).squeeze().type(torch.int64)
             else:
                 # Binary classification
@@ -596,10 +618,12 @@ def main(args):
                 outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
 
             # Results
-            # TODO fix loss since it fails when --regression is set
             loss = criterion(outputs, labels)
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
+
+            if regression:
+                labels = torch.round(labels).type(torch.LongTensor)
 
             all_outputs.extend(outputs_argmax.tolist())
             all_labels.extend(labels.tolist())
