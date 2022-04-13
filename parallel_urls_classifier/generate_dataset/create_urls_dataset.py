@@ -5,7 +5,14 @@ import random
 import logging
 import argparse
 
+cdir = os.path.dirname(os.path.realpath(__file__))
+
+sys.path.insert(0, f"{cdir}/..")
+
 import negative_samples_generator as nsg
+import utils.utils as utils
+
+import numpy as np
 
 def store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=10,
                            logging_cte=2, negative_samples_generator=nsg.get_negative_samples_random):
@@ -35,7 +42,7 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
 
     return no_non_parallel_urls, no_non_parallel_domains
 
-def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2, generate_negative_samples=True,
+def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2,
                   negative_samples_generator="random", max_negative_samples_alignments=10):
     no_parallel_urls = 0
     no_parallel_domains = len(target_domains)
@@ -81,12 +88,16 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
 def main(args):
     input_file_parallel_urls = args.input_file_parallel_urls
-    output_file_urls_prefix = args.outputs_files_prefix
+    output_file_urls_prefix = args.output_files_prefix
     negative_samples_generator = args.negative_samples_generator
     generate_negative_samples = not args.do_not_generate_negative_samples
     seed = args.seed
     max_negative_samples_alignments = args.max_negative_samples_alignments
     same_authority = args.same_authority
+    train_perc, dev_perc, test_perc = args.sets_percentage
+
+    if not np.isclose(sum(args.sets_percentage), 1.0):
+        raise Exception("The provided sets percentages do not sum up to 1.0")
 
     if "PYTHONHASHSEED" not in os.environ:
         logging.warning("You did not provide PYTHONHASHSEED: the results will not be deterministic")
@@ -94,14 +105,12 @@ def main(args):
     if seed >= 0:
         random.seed(seed)
 
-    train_perc = 0.8
-    dev_perc = 0.1
-    test_perc = 0.1
+    if not generate_negative_samples:
+        negative_samples_generator = "none" # Force "none" generator in order to do not create negative samples
+
     parallel_urls = {}
-    non_parallel_urls = {}
     skipped_urls = 0
     no_parallel_urls = 0
-    no_non_parallel_urls = 0
 
     for idx, url_pair in enumerate(input_file_parallel_urls):
         url_pair = url_pair.strip().split('\t')
@@ -159,6 +168,9 @@ def main(args):
 
     assert len(train_domains) + len(dev_domains) + len(test_domains) == len(parallel_urls.keys()), "Not all the domains have been set to a set"
 
+    common_kwargs = {"negative_samples_generator": negative_samples_generator,
+                     "max_negative_samples_alignments": max_negative_samples_alignments}
+
     if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
         logging.warning("Some set has been detected to contain 0 domains (train, dev, test: %d, %d, %d): merging all the domains")
 
@@ -176,13 +188,13 @@ def main(args):
         dev_max_idx = train_max_idx + int(dev_perc * len(all_parallel_urls))
         test_max_idx = len(all_parallel_urls)
 
-        store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
-        store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
-        store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
+        store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50, **common_kwargs)
+        store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100, **common_kwargs)
+        store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100, **common_kwargs)
     else:
-        store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
-        store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
-        store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100, generate_negative_samples=generate_negative_samples, max_negative_samples_alignments=max_negative_samples_alignments)
+        store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50, **common_kwargs)
+        store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100, **common_kwargs)
+        store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100, **common_kwargs)
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -195,6 +207,7 @@ def initialization():
     parser.add_argument('--max-negative-samples-alignments', type=int, default=10, help="Max. number of alignments of negative samples per positive samples")
     parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples")
     parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")
+    parser.add_argument('--sets-percentage', type=float, nargs=3, default=[0.8, 0.1, 0.1], help="Train, dev and test percentages")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (fully guaranteed if you also set PYTHONHASHSEED envvar). Set a negative number in order to disable this feature")
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
