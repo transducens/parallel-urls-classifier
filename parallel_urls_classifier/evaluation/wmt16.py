@@ -1,6 +1,7 @@
 
 import os
 import sys
+import time
 import base64
 import logging
 import argparse
@@ -19,8 +20,9 @@ import numpy as np
 def process_pairs(pairs, command, results_are_fp=False):
     results = []
 
-    sp_result = subprocess.Popen(f"{command} | cut -f1", shell=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    aux_result, _ = sp_result.communicate('\n'.join(pairs).encode(errors="ignore"))
+    sp_result = subprocess.Popen(f"{command} | cut -f1", shell=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    aux_result, aux_err = sp_result.communicate('\n'.join(pairs).encode(errors="ignore"))
+    error = False
 
     for idx, v in enumerate(aux_result.decode("utf-8", errors="ignore").strip().split('\n')):
         if results_are_fp:
@@ -30,6 +32,8 @@ def process_pairs(pairs, command, results_are_fp=False):
                 logging.error("%s: returning scores of 0.0 (idx %d)", str(e), idx)
 
                 results.append(0.0)
+
+                error = True
         else:
             if v not in ("non-parallel", "parallel"):
                 logging.error("Unexpected value from URL classifier: returning URL pair as non-parallel (idx %d): %s", idx, str(v))
@@ -38,9 +42,15 @@ def process_pairs(pairs, command, results_are_fp=False):
             else:
                 results.append(v == "parallel")
 
+    if error:
+        logging.warning("There were errors, so classifier output is going to be displayed")
+
+        for idx, e in enumerate(aux_err.decode("utf-8", errors="ignore").strip().split('\n')):
+            logging.warning("Classifier stderr line %d: %s", idx, e)
+
     return results
 
-def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, trg_urls, src_docs, trg_docs, rule_1_1=True):
+def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, trg_urls, src_docs, trg_docs, rule_1_1=True, disable_near_matchs=False):
     tp, fp = 0, 0
     seen_src_pairs, seen_trg_pairs = set(), set()
     gs_pairs = set(f"{src_gs_pair}\t{trg_gs_pair}" for src_gs_pair, trg_gs_pair in zip(src_gs_pairs, trg_gs_pairs))
@@ -58,8 +68,11 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
             else:
                 tp += 1
                 pair_hit = True
-        else:
-            if src_pair in src_gs_pairs and trg_pair in src_gs_pairs:
+        elif not disable_near_matchs:
+            # "Soft" recall
+
+            if src_pair in src_gs_pairs and trg_pair in trg_gs_pairs:
+                # The strict pair is not in the GS, but each URL is in there, so we got a FP
                 pass
             else:
                 # Near-matches
@@ -71,27 +84,34 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                     near_match_trg = near_match_trg and trg_pair not in seen_trg_pairs and src_pair not in seen_src_pairs
 
                 if near_match_src and near_match_trg:
-                    pass
-                elif rule_1_1 and (near_match_src or near_match_trg):
+                    logging.error("This should never happen")
+                elif near_match_src or near_match_trg:
                     if near_match_src:
-                        doc_1_idx = trg_urls.index(trg_pair)
-                        doc_2_idx = trg_urls.index(trg_gs_pairs[src_gs_pairs.index(src_pair)])
-                        doc_1 = trg_docs[doc_1_idx]
-                        doc_2 = trg_docs[doc_2_idx]
                         url_1 = trg_pair
                         url_2 = trg_gs_pairs[src_gs_pairs.index(src_pair)]
+                        doc_1_idx = trg_urls.index(url_1)
+                        doc_2_idx = trg_urls.index(url_2)
+                        doc_1 = trg_docs[doc_1_idx]
+                        doc_2 = trg_docs[doc_2_idx]
+                        src_gs_pair = src_pair
+                        trg_gs_pair = url_2
                     else:
-                        doc_1_idx = src_urls.index(src_pair)
-                        doc_2_idx = src_urls.index(src_gs_pairs[trg_gs_pairs.index(trg_pair)])
-                        doc_1 = src_docs[doc_1_idx]
-                        doc_2 = src_docs[doc_2_idx]
                         url_1 = src_pair
                         url_2 = src_gs_pairs[trg_gs_pairs.index(trg_pair)]
+                        doc_1_idx = src_urls.index(url_1)
+                        doc_2_idx = src_urls.index(url_2)
+                        doc_1 = src_docs[doc_1_idx]
+                        doc_2 = src_docs[doc_2_idx]
+                        src_gs_pair = url_2
+                        trg_gs_pair = trg_pair
+
+                    logging.debug("Near-match?\t%s\t%s", url_1, url_2)
+                    logging.debug("(GS, Not GS) pair:\t%s\t%s\t%s\t%s", src_gs_pair, trg_gs_pair, src_pair, trg_pair)
 
                     early_stopping = abs(doc_1.count('\n') - doc_2.count('\n')) * 75.0 if max(doc_1.count('\n'), doc_2.count('\n')) > 10 else np.inf
                     similarity = levenshtein.levenshtein_opt_space_and_band(doc_1, doc_2, nfactor=max(len(doc_1), len(doc_2)), percentage=0.06, early_stopping=early_stopping)["similarity"]
 
-                    logging.debug("Near-match similarity (url_1, url_2, similarity_score): ('%s', '%s', %f)", url_1, url_2, similarity)
+                    logging.debug("Near-match similarity (url_1, url_2, similarity_score):\t%s\t%s\t%f", url_1, url_2, similarity)
 
                     if similarity >= 0.95:
                         logging.debug("Near-match found")
@@ -125,6 +145,7 @@ def main(args):
     results_are_fp = args.results_are_fp
     parallel_threshold = args.parallel_threshold
     rule_1_1 = not args.disable_rule_1_1
+    disable_near_matchs = args.disable_near_matchs
 
     src_urls, trg_urls = [], []
     src_docs, trg_docs = [], []
@@ -187,11 +208,14 @@ def main(args):
             pairs.append((src_url ,trg_url))
 
     if len(pairs) != 0:
+        time.sleep(10) # Sleep in order to try to avoid CUDA error out of memory
+
         parallel = process_pairs(list(map(lambda p: '\t'.join(p), pairs)), classifier_command, results_are_fp=results_are_fp)
 
     expected_values = len(src_gs) * len(trg_urls) + len(trg_gs) * len(src_urls) - len(src_gs) * len(trg_gs)
 
     assert expected_values == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
+    assert len(pairs) == len(parallel), f"Unexpected parallel length: {len(pairs)} vs {len(parallel)}"
 
     if results_are_fp:
         parallel_values = sum(i >= parallel_threshold for i in parallel)
@@ -209,9 +233,13 @@ def main(args):
 
         logging.debug(f"{v}\t{src_url}\t{trg_url}")
 
+    src_pairs, trg_pairs = [], []
+
     if results_are_fp:
-        src_pairs = [(p, url[0]) for p, url in zip(parallel, pairs) if p >= parallel_threshold]
-        trg_pairs = [(p, url[1]) for p, url in zip(parallel, pairs) if p >= parallel_threshold]
+        for p, (src_url, trg_url) in zip(parallel, pairs):
+            if p >= parallel_threshold:
+                src_pairs.append((p, src_url))
+                trg_pairs.append((p, trg_url))
 
         logging.debug("Sorting by score")
 
@@ -219,8 +247,10 @@ def main(args):
         src_pairs = list(map(lambda t: t[1], sorted(src_pairs, key=lambda v: v[0], reverse=True)))
         trg_pairs = list(map(lambda t: t[1], sorted(trg_pairs, key=lambda v: v[0], reverse=True)))
     else:
-        src_pairs = [url[0] for p, url in zip(parallel, pairs) if p]
-        trg_pairs = [url[1] for p, url in zip(parallel, pairs) if p]
+        for p, (src_url, trg_url) in zip(parallel, pairs):
+            if p:
+                src_pairs.append(src_url)
+                trg_pairs.append(trg_url)
 
     logging.debug("Pairs:")
 
@@ -230,7 +260,7 @@ def main(args):
     assert len(src_pairs) == len(trg_pairs), f"Different src and trg parallel URLs: {len(src_pairs)} vs {len(trg_pairs)}"
     assert len(src_pairs) == parallel_values, f"Unexpected quantity of parallel values: {len(src_pairs)} vs {parallel_values}"
 
-    evaluate_recall(src_pairs, trg_pairs, src_gs, trg_gs, src_urls, trg_urls, src_docs, trg_docs, rule_1_1=rule_1_1)
+    evaluate_recall(src_pairs, trg_pairs, src_gs, trg_gs, src_urls, trg_urls, src_docs, trg_docs, rule_1_1=rule_1_1, disable_near_matchs=disable_near_matchs)
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -243,6 +273,8 @@ def initialization():
     parser.add_argument('--results-are-fp', action='store_true', help="Classification results are FP values intead of 'parallel'/'non-parallel'")
     parser.add_argument('--parallel-threshold', type=float, default=0.5, help="Take URLs as parallel when the score is greater than the provided (only applied when flag --results-are-fp is set)")
     parser.add_argument('--disable-rule-1-1', action='store_true', help="Disable WMT16 rule 1-1")
+    parser.add_argument('--disable-near-matchs', action='store_true', help="Disable near-matchs (edition distance)")
+
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
 
     args = parser.parse_args()
