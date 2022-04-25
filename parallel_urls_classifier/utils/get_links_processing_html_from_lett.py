@@ -5,31 +5,40 @@ import logging
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+from tldextract import extract
 
 def is_url_absolute(url):
     return bool(urlparse(url).netloc)
 
 def main():
-    print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original") # Header
+    print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original\tauthority_info") # Header
 
     for idx, lett_data in enumerate(sys.stdin):
-        lett_data = lett_data.strip().split('\t')
-        urls = []
-        langs = []
+        lett_data = lett_data.split('\t')
+        lett_data[-1] = lett_data[-1].rstrip('\n')
 
         if len(lett_data) != 6:
-            raise Exception(f"Unexpected length: {len(lett_data)} vs 6")
+            logging.error("Line %d: unexpected length: %d vs 6", idx + 1, len(lett_data))
+
+            continue
 
         lang, mime, encoding, url, html_b64, text_b64 = lett_data
+        url = url.replace('\t', ' ')
 
         html = base64.b64decode(html_b64).decode("utf-8", errors="ignore")
 
         if not html:
-            logging.warning("Line %d: could not get HTML", idx + 1)
+            logging.error("Line %d: could not get HTML", idx + 1)
 
             continue
 
-        parsed_html = BeautifulSoup(html, features="html.parser")
+        try:
+            parsed_html = BeautifulSoup(html, features="html.parser")
+        except Exception as e:
+            logging.error("Line %d: %s", idx + 1, str(e))
+
+            continue
+
         lang_doc = None
 
         try:
@@ -49,6 +58,7 @@ def main():
             for tag in tags:
                 try:
                     tag_url = tag["href"]
+                    tag_url = tag_url.replace('\t', ' ')
                 except KeyError:
                     continue
 
@@ -59,11 +69,24 @@ def main():
 
                 tag_original_url = tag_url
 
-                if not is_url_absolute(tag_url):
-                    # Resolve relative URL
-                    tag_url = urljoin(url, tag_url)
+                try:
+                    if not is_url_absolute(tag_url):
+                        # Resolve relative URL
+                        tag_url = urljoin(url, tag_url)
+                except ValueError:
+                    pass
 
-                print(f"{lang}\t{tag_lang}\t{url}\t{tag_url}\t{tag_name}\t{tag_original_url}")
+                authority_info = "unk"
+
+                try:
+                    tsd, td, tsu = extract(url)
+                    tag_tsd, tag_td, tag_tsu = extract(tag_url)
+
+                    authority_info = f"{'equal' if tsd + '.' + td + '.' + tsu == tag_tsd + '.' + tag_td + '.' + tag_tsu else 'domain and TLD' if td + '.' + tsu == tag_td + '.' + tag_tsu else 'TLD' if tsu == tag_tsu else 'different'}"
+                except Exception as e:
+                    logging.warning("%s", str(e))
+
+                print(f"{lang}\t{tag_lang}\t{url}\t{tag_url}\t{tag_name}\t{tag_original_url}\t{authority_info}")
 
 if __name__ == "__main__":
     main()
