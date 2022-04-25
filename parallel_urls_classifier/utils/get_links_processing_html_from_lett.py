@@ -57,11 +57,16 @@ def main():
         a_tags = parsed_html.find_all("a")
 
         for tags, tag_name in ((link_tags, "link"), (a_tags, "a")):
-            for tag in tags:
+            for idx_tag, tag in enumerate(tags):
                 try:
                     tag_url = tag["href"]
-                    tag_url = tag_url.replace('\t', ' ')
+                    tag_url = tag_url.replace('\t', ' ').rstrip('\n')
                 except KeyError:
+                    continue
+
+                if tag_url.count('\n') != 0:
+                    logging.error("Line %d, URL %d: URL contains > 0 \\n: %d", idx + 1, idx_tag + 1, tag_url.count('\n'))
+
                     continue
 
                 try:
