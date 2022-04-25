@@ -2,3 +2,5 @@ numpy
 torch
 transformers
 matplotlib
+html5lib
+beautifulsoup4

@@ -6,6 +6,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from tldextract import extract
+import html5lib # We won't use it, but we want an exception if can't import
 
 def is_url_absolute(url):
     return bool(urlparse(url).netloc)
@@ -33,7 +34,8 @@ def main():
             continue
 
         try:
-            parsed_html = BeautifulSoup(html, features="html.parser")
+            #parsed_html = BeautifulSoup(html, features="html.parser")
+            parsed_html = BeautifulSoup(html, features="html5lib")
         except Exception as e:
             logging.error("Line %d: %s", idx + 1, str(e))
 
