@@ -188,7 +188,7 @@ def replace_multiple(s, replace_list, replace_char=' '):
         s = s.replace(original_char, replace_char)
     return s
 
-def stringify_url(url):
+def stringify_url(url, separator=' ', lower=False):
     if url[:8] == "https://":
         url = url[8:]
     elif url[:7] == "http://":
@@ -197,10 +197,14 @@ def stringify_url(url):
     replace_chars = ['.', '-', '_', '=', '?', '\n', '\r', '\t']
 
     url = url.rstrip('/')
+
+    if lower:
+        url = url.lower()
+
     url = url.split('/')
     url = list(map(lambda u: replace_multiple(u, replace_chars).strip(), url))
     url = [' '.join([s for s in u.split(' ') if s != '']) for u in url] # Remove multiple ' '
-    url = ' '.join(url)
+    url = separator.join(url)
 
     return url
 
@@ -228,7 +232,7 @@ def update_defined_variables_from_dict(d, provided_locals, smash=False):
 
     provided_locals.update(d)
 
-def preprocess_url(url, remove_protocol_and_authority=False):
+def preprocess_url(url, remove_protocol_and_authority=False, separator=' '):
     urls = []
 
     if isinstance(url, str):
@@ -241,7 +245,7 @@ def preprocess_url(url, remove_protocol_and_authority=False):
             if ur[0] in ("http:", "https:") and ur[1] == '':
                 u = '/'.join(ur[3:])
 
-        preprocessed_url = stringify_url(urllib.parse.unquote(u)).lower()
+        preprocessed_url = stringify_url(urllib.parse.unquote(u), separator=separator, lower=True)
 
         urls.append(preprocessed_url)
 

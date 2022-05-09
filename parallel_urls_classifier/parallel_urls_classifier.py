@@ -240,7 +240,8 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
             plt.pause(time_wait)
 
 @torch.no_grad()
-def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=False, remove_authority=False, parallel_likelihood=False, threshold=-np.inf):
+def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=False, remove_authority=False,
+                          parallel_likelihood=False, threshold=-np.inf, url_separator=' '):
     logger.info("Inference mode enabled: insert 2 blank lines in order to end")
     logger_verbose["tokens"].debug("model_input\ttokens\ttokens2str\tunk_chars\tinitial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
 
@@ -249,7 +250,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     while True:
         if inference_from_stdin:
             try:
-                target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority), return_urls=True))
+                target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, separator=url_separator), return_urls=True))
             except StopIteration:
                 break
 
@@ -264,7 +265,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             src_url = initial_src_urls[0]
             trg_url = initial_trg_urls[0]
-            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority)))
+            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, separator=url_separator)))
 
         # Tokens
         tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
@@ -281,9 +282,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             str_from_tokens = ' '.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a space between tokens
             ## Unk
             unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
-            sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(' '))} vs {len(str_from_tokens.split(' '))}"
-            sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(' ')))} vs " \
-                                       f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(' ')))}"
+            sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(url_separator))} vs {len(str_from_tokens.split(url_separator))}"
+            sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(url_separator)))} vs " \
+                                       f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(url_separator)))}"
 
             logger_verbose["tokens"].debug("%s\t%s\t%s\t%d\t%s\t%s", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
@@ -298,6 +299,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             # Binary classification
             outputs = F.softmax(outputs, dim=1).cpu().detach()
             outputs_argmax = torch.argmax(outputs, dim=1).numpy()
+
+        if len(outputs_argmax.shape) == 0:
+            outputs_argmax = np.array([outputs_argmax])
 
         assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {initial_src_urls})"
         assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {initial_trg_urls})"
@@ -355,6 +359,8 @@ def main(args):
     add_symmetric_samples = args.add_symmetric_samples
     log_directory = args.log_directory
     regression = args.regression
+    url_separator = args.url_separator
+    url_separator_new_token = args.url_separator_new_token
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -400,7 +406,7 @@ def main(args):
             else:
                 raise Exception(f"Provided output model does exist: '{model_output}'")
 
-    if do_not_load_best_model or not model_output:
+    if (do_not_load_best_model or not model_output) and not apply_inference:
         logger.warning("Final dev and test evaluation will not be carried out with the best model")
 
     if plot_path and not plot:
@@ -439,17 +445,37 @@ def main(args):
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
     fine_tuning = args.fine_tuning
+    model_embeddings_size = model.base_model.embeddings.word_embeddings.weight.shape[0]
+
+    if url_separator_new_token:
+        # Add new special token (URL separator)
+        num_added_toks = tokenizer.add_tokens([url_separator], special_tokens=True)
+
+        logger.debug("New tokens added to tokenizer: %d", num_added_toks)
+
+        if not model_input:
+            model.resize_token_embeddings(len(tokenizer))
+        elif model_embeddings_size + 1 == len(tokenizer):
+            logger.warning("You've loaded a model which does not have the new token, so the results might be unexpected")
+
+            model.resize_token_embeddings(len(tokenizer))
+
+    model_embeddings_size = model.base_model.embeddings.word_embeddings.weight.shape[0]
+
+    if model_embeddings_size != len(tokenizer):
+        logger.error("Embedding layer size does not match with the tokenizer size: %d vs %d", model_embeddings_size, len(tokenizer))
 
     if apply_inference:
         interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=inference_from_stdin,
-                              remove_authority=remove_authority, parallel_likelihood=parallel_likelihood, threshold=threshold)
+                              remove_authority=remove_authority, parallel_likelihood=parallel_likelihood, threshold=threshold,
+                              url_separator=url_separator)
 
         # Stop execution
         return
 
     if regression:
         if imbalanced_strategy == "weighted-loss":
-            logging.warning("Incompatible weight strategy ('%s'): it will not be applied", imbalanced_strategy)
+            logger.warning("Incompatible weight strategy ('%s'): it will not be applied", imbalanced_strategy)
 
     # Freeze layers, if needed
     for param in model.parameters():
@@ -464,12 +490,12 @@ def main(args):
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
     for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority), add_symmetric_samples=add_symmetric_samples)):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, separator=url_separator), add_symmetric_samples=add_symmetric_samples)):
             l.extend(batch_urls)
 
     for fd, l in ((file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
                   (file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority))):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, separator=url_separator))):
             l.extend(batch_urls)
 
     logger.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
@@ -876,6 +902,8 @@ def initialization():
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
     parser.add_argument('--log-directory', required=True, help="Directory where different log files will be stored")
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
+    parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
+    parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
