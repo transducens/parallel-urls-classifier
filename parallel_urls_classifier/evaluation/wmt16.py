@@ -17,27 +17,24 @@ import utils.utils as utils
 
 import numpy as np
 
-def process_pairs(pairs, command=None, results_fd=None, results_are_fp=False):
+def process_pairs(pairs, command, results_fd=None, results_are_fp=False):
     def log_classifier_stderr(msg):
-        logging.warning("There were errors, so classifier output is going to be displayed")
+        logging.warning("There were errors, so FD/classifier output is going to be displayed")
 
         for idx, e in enumerate(msg):
-            logging.warning("Classifier stderr line %d: %s", idx, e)
+            logging.warning("Stderr line %d: %s", idx, e)
 
     results = []
     error = False
-
-    if not command and not results_fd:
-        raise Exception("Neither command or results_fd were provided")
+    list_results = []
+    classifier_output = []
+    obtained_pairs = []
 
     if results_fd:
-        list_results = []
-        classifier_output = []
-
         for idx, l in enumerate(results_fd):
             l = l.strip()
 
-            classifier_output.append(l)
+            classifier_output.append(f"from FD: {l}")
 
             l = l.split('\t')
 
@@ -45,26 +42,38 @@ def process_pairs(pairs, command=None, results_fd=None, results_are_fp=False):
                 raise Exception(f"Line {idx + 1} doesn't have the expected format: {len(l)} columns vs 3 columns")
 
             v, src_pair, trg_pair = l
+            pair = f"{src_pair}\t{trg_pair}"
 
             # Append only the provided pairs which are inside the pairs that we want to classify
-            if f"{src_pair}\t{trg_pair}" in pairs:
+            if pair in pairs:
                 list_results.append((v, src_pair, trg_pair))
+                obtained_pairs.append(pair)
             else:
                 # It has failed, but we still might have the pair and have skipped it due to encoding
 
                 src_pair = src_pair.encode(errors="ignore").decode("unicode_escape", errors="ignore")
                 trg_pair = trg_pair.encode(errors="ignore").decode("unicode_escape", errors="ignore")
+                pair = f"{src_pair}\t{trg_pair}"
 
-                if f"{src_pair}\t{trg_pair}" in pairs:
+                if pair in pairs:
                     list_results.append((v, src_pair, trg_pair))
+                    obtained_pairs.append(pair)
                 else:
                     logging.error("Missing pair:\t%s\t%s", src_pair, trg_pair)
 
-    else:
+    if not results_fd or len(obtained_pairs) < len(pairs):
+        classifier_list_results = pairs
+
+        if results_fd and len(obtained_pairs) != 0:
+            classifier_list_results = [a for a in pairs if a not in obtained_pairs]
+
+            logging.warning("Not all results were provided: %d elements will be calculated with the classifier: evaluation might change", len(classifier_list_results))
+
         sp_result = subprocess.Popen(f"{command}", shell=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        aux_result, aux_err = sp_result.communicate('\n'.join(pairs).encode(errors="ignore"))
-        list_results = list(map(lambda v: v.split('\t'), aux_result.decode("utf-8", errors="ignore").strip().split('\n')))
-        classifier_output = aux_err.decode("utf-8", errors="ignore").strip().split('\n')
+        aux_result, aux_err = sp_result.communicate('\n'.join(classifier_list_results).encode(errors="ignore"))
+
+        list_results.extend(list(map(lambda v: v.split('\t'), aux_result.decode("utf-8", errors="ignore").strip().split('\n'))))
+        classifier_output.extend(list(map(lambda e: f"from classifier command (subprocess): {e}", aux_err.decode("utf-8", errors="ignore").strip().split('\n'))))
 
     if len(list_results) != len(pairs):
         log_classifier_stderr(classifier_output)
@@ -268,11 +277,11 @@ def main(args):
             # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
             pairs.append((src_url ,trg_url))
 
-    if len(pairs) != 0:
-        time.sleep(10) # Sleep in order to try to avoid CUDA error out of memory
+    time.sleep(10) # Sleep in order to try to avoid CUDA error out of memory
 
+    if len(pairs) != 0:
         # We need to provide a list as first argument since rule 1-1 might produce different results every execution if we use a set
-        parallel = process_pairs(list(map(lambda p: '\t'.join(p), pairs)), command=classifier_command, results_fd=classifier_results, results_are_fp=results_are_fp)
+        parallel = process_pairs(list(map(lambda p: '\t'.join(p), pairs)), classifier_command, results_fd=classifier_results, results_are_fp=results_are_fp)
 
     expected_values = len(src_gs) * len(trg_urls) + len(trg_gs) * len(src_urls) - len(src_gs) * len(trg_gs)
 
@@ -346,8 +355,8 @@ def initialization():
     parser.add_argument('input_file', type=argparse.FileType('rt'), help="Input file with the following format: lang<tab>URL<tab>base64-doc")
     parser.add_argument('gold_standard_file', type=argparse.FileType('rt'), help="Gold standard file")
 
-    parser.add_argument('--classifier-command', help="Classifier command whose expected output format is: class<tab>src_url<tab>trg_url (class is expected to be 'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)")
-    parser.add_argument('--classifier-results', type=argparse.FileType('rt'), help="Classifier results whose expected format is: class<tab>src_url<tab>trg_url (class is expected to be 'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)")
+    parser.add_argument('--classifier-command', required=True, help="Classifier command whose expected output format is: class<tab>src_url<tab>trg_url (class is expected to be 'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)")
+    parser.add_argument('--classifier-results', type=argparse.FileType('rt'), help="Classifier results (if not all the results were provided, the ones that are missing will be obtained with the classifier) whose expected format is: class<tab>src_url<tab>trg_url (class is expected to be 'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)")
     parser.add_argument('--results-are-fp', action='store_true', help="Classification results are FP values intead of 'parallel'/'non-parallel'")
     parser.add_argument('--parallel-threshold', type=float, default=0.5, help="Take URLs as parallel when the score is greater than the provided (only applied when flag --results-are-fp is set)")
     parser.add_argument('--disable-rule-1-1', action='store_true', help="Disable WMT16 rule 1-1")
