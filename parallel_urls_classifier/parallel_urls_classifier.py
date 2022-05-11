@@ -359,8 +359,11 @@ def main(args):
     add_symmetric_samples = args.add_symmetric_samples
     log_directory = args.log_directory
     regression = args.regression
+    train_until_patience = args.train_until_patience
     url_separator = args.url_separator
     url_separator_new_token = args.url_separator_new_token
+    warmup_steps = args.warmup_steps
+    learning_rate = args.learning_rate
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -384,6 +387,9 @@ def main(args):
     logger_verbose["tokens"].propagate = False # We don't want to see the messages multiple times
     logger_verbose["tokens"] = utils.set_up_logging_logger(logger_verbose["tokens"], level=logging.DEBUG if args.verbose else logging.INFO,
                                                            filename=f"{log_directory}/tokens", format="%(asctime)s\t%(levelname)s\t%(message)s")
+
+    if not apply_inference and train_until_patience:
+        logger.warning("Be aware that even training until patience is reached and not a fixed number of epochs, the selected number of epochs is relevant since it is a parameter which is used by the LR scheduler")
 
     if apply_inference and not model_input:
         logger.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
@@ -569,13 +575,21 @@ def main(args):
 
     criterion = criterion.to(device)
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
-                                 lr=2e-5, eps=1e-8)
+                                 lr=learning_rate, eps=1e-8)
     #optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
     #                  lr=2e-5,
     #                  eps=1e-8)
+
+    if not warmup_steps:
+        logger.warning("Warm-up steps set to %d since no value was set (set to 0 if that's the behaviour you were expecting)", len(dataloader_train))
+
+        warmup_steps = len(dataloader_train)
+
+    training_steps = len(dataloader_train) * epochs
+    trainint_steps_freeze_lr = (warmup_steps + training_steps) // 2 # lr_scheduler_rate ~= 0.5 
     scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                num_warmup_steps=0,
-                                                num_training_steps=len(dataloader_train) * epochs)
+                                                num_warmup_steps=warmup_steps,
+                                                num_training_steps=training_steps)
 
     best_values_minimize = False
     best_values_maximize = True
@@ -596,6 +610,7 @@ def main(args):
     stop_training = False
     epoch = 0
     current_patience = 0
+    current_training_step = 0
 
     # Statistics
     batch_loss = []
@@ -666,8 +681,9 @@ def main(args):
             epoch_acc_per_class += metrics["acc_per_class"]
             epoch_acc_per_class_abs += metrics["f1"]
             epoch_macro_f1 += metrics["macro_f1"]
+            show_statistics = (epoch == 0 and idx == 0) or (idx + 1) % show_statistics_every_batches == 0
 
-            if plot and ((epoch == 0 and idx == 0) or (idx + 1) % show_statistics_every_batches == 0):
+            if plot and show_statistics:
                 utils.append_from_tuple((batch_loss, epoch_loss / (idx + 1)),
                                         (batch_acc, epoch_acc * 100.0 / (idx + 1)),
                                         (batch_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0 / (idx + 1)),
@@ -689,8 +705,28 @@ def main(args):
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-            optimizer.step()
-            scheduler.step()
+            if show_statistics:
+                # LRs statistics
+                all_lrs = scheduler.get_last_lr()
+                current_lr = all_lrs[0]
+                len_lrs = len(all_lrs)
+
+                if len_lrs != 1:
+                    logger.debug("[batch#%d] First and last LRs: %s", idx + 1, f"{str(all_lrs[0:10])[:-1]} ... {str(all_lrs[10:])[1:]}")
+                else:
+                    logger.debug("[batch#%d] Current LR: %.8f", idx + 1, current_lr)
+
+            if train_until_patience and current_training_step > trainint_steps_freeze_lr:
+                # Do not update scheduler because we will reach lr = 0
+                optimizer.step()
+
+                if show_statistics:
+                    logger.debug("[batch#%d] LR scheduler is not being updated", idx + 1)
+            else:
+                optimizer.step()
+                scheduler.step()
+
+            current_training_step += 1
 
         current_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
         layer_updated = (current_last_layer_output != last_layer_output).any().cpu().detach().numpy()
@@ -792,7 +828,7 @@ def main(args):
             # End of patience
 
             stop_training = True
-        elif not args.train_until_patience:
+        elif not train_until_patience:
             stop_training = epoch >= epochs
 
     final_loss /= epochs
@@ -904,6 +940,8 @@ def initialization():
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
     parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
+    parser.add_argument('--warmup-steps', type=int, help="Warm-up steps")
+    parser.add_argument('--learning-rate', type=float, default=2e-5, help="Warm-up steps")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
