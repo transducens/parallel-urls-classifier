@@ -1,7 +1,6 @@
 
 import os
 import sys
-import time
 import base64
 import logging
 import argparse
@@ -31,6 +30,9 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False):
     obtained_pairs = []
 
     if results_fd:
+        clean_pairs = set(map(lambda p: p.encode("utf-8", errors="ignore").decode(), pairs))
+        set_pairs = set(pairs)
+
         for idx, l in enumerate(results_fd):
             l = l.strip()
 
@@ -45,21 +47,22 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False):
             pair = f"{src_pair}\t{trg_pair}"
 
             # Append only the provided pairs which are inside the pairs that we want to classify
-            if pair in pairs:
+            if pair in set_pairs or pair in clean_pairs:
                 list_results.append((v, src_pair, trg_pair))
                 obtained_pairs.append(pair)
             else:
                 # It has failed, but we still might have the pair and have skipped it due to encoding
 
-                src_pair = src_pair.encode(errors="ignore").decode("unicode_escape", errors="ignore")
-                trg_pair = trg_pair.encode(errors="ignore").decode("unicode_escape", errors="ignore")
-                pair = f"{src_pair}\t{trg_pair}"
+                src_pair_2 = src_pair.encode(errors="ignore").decode("unicode_escape", errors="ignore")
+                trg_pair_2 = trg_pair.encode(errors="ignore").decode("unicode_escape", errors="ignore")
+                pair_2 = f"{src_pair_2}\t{trg_pair_2}"
 
-                if pair in pairs:
-                    list_results.append((v, src_pair, trg_pair))
-                    obtained_pairs.append(pair)
+                if pair_2 in set_pairs or pair_2 in clean_pairs:
+                    list_results.append((v, src_pair_2, trg_pair_2))
+                    obtained_pairs.append(pair_2)
                 else:
-                    logging.error("Missing pair:\t%s\t%s", src_pair, trg_pair)
+                    logging.error("Missing pair (1): %s", pair)
+                    logging.error("Missing pair (2): %s", pair_2)
 
     if not results_fd or len(obtained_pairs) < len(pairs):
         classifier_list_results = pairs
@@ -263,7 +266,6 @@ def main(args):
 
         gs_entries += 1
 
-
     logging.info("Provided entries (src, trg): (%d, %d)", len(src_urls), len(trg_urls))
     logging.info("GS entries: %d from %d", len(src_gs), gs_entries)
 
@@ -277,11 +279,12 @@ def main(args):
             # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
             pairs.append((src_url ,trg_url))
 
-    time.sleep(10) # Sleep in order to try to avoid CUDA error out of memory
+    #time.sleep(10) # Sleep in order to try to avoid CUDA error out of memory
 
     if len(pairs) != 0:
         # We need to provide a list as first argument since rule 1-1 might produce different results every execution if we use a set
-        parallel = process_pairs(list(map(lambda p: '\t'.join(p), pairs)), classifier_command, results_fd=classifier_results, results_are_fp=results_are_fp)
+        formatted_pairs = list(map(lambda p: '\t'.join(p), pairs))
+        parallel = process_pairs(formatted_pairs, classifier_command, results_fd=classifier_results, results_are_fp=results_are_fp)
 
     expected_values = len(src_gs) * len(trg_urls) + len(trg_gs) * len(src_urls) - len(src_gs) * len(trg_gs)
 
@@ -377,8 +380,6 @@ if __name__ == "__main__":
 
     if not args.classifier_command and not args.classifier_results:
         raise Exception("You need to provide either --classifier-command or classifier-results")
-    if args.classifier_command and args.classifier_results:
-        logging.warning("Provided classifier results will be used instead of run the classifier (both --classifier-command and classifier-results were provided)")
 
     main(args)
 
