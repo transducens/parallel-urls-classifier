@@ -16,7 +16,7 @@ import utils.utils as utils
 
 import numpy as np
 
-def process_pairs(pairs, command, results_fd=None, results_are_fp=False):
+def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_classify_missing_pairs=True):
     def log_classifier_stderr(msg):
         logging.warning("There were errors, so FD/classifier output is going to be displayed")
 
@@ -68,7 +68,7 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False):
 
         logging.debug("Missing pairs: %d", missing_pairs)
 
-    if not results_fd or len(obtained_pairs) < len(pairs):
+    if not results_fd or (not do_not_classify_missing_pairs and len(obtained_pairs) < len(pairs)):
         classifier_list_results = pairs
 
         if results_fd and len(obtained_pairs) != 0:
@@ -82,10 +82,16 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False):
         list_results.extend(list(map(lambda v: v.split('\t'), aux_result.decode("utf-8", errors="ignore").strip().split('\n'))))
         classifier_output.extend(list(map(lambda e: f"from classifier command (subprocess): {e}", aux_err.decode("utf-8", errors="ignore").strip().split('\n'))))
 
-    if len(list_results) != len(pairs):
+    if not do_not_classify_missing_pairs and len(list_results) != len(pairs):
         log_classifier_stderr(classifier_output)
 
         raise Exception(f"Pairs length != classifier results length: {len(pairs)} vs {len(list_results)}")
+
+    if do_not_classify_missing_pairs:
+        if results_fd and len(obtained_pairs) != 0:
+            missing_pairs_classification_len = len([a for a in pairs if a not in obtained_pairs])
+
+            logging.warning("Not all results were provided: %d elements: missing elements will NOT be calculated", missing_pairs_classification_len)
 
     for idx, (v, src_pair, trg_pair) in enumerate(list_results):
         if results_are_fp:
@@ -223,6 +229,7 @@ def main(args):
     parallel_threshold = args.parallel_threshold
     rule_1_1 = not args.disable_rule_1_1
     disable_near_matchs = args.disable_near_matchs
+    do_not_classify_missing_pairs = args.do_not_classify_missing_pairs
 
     src_urls, trg_urls = [], []
     src_docs, trg_docs = [], []
@@ -291,7 +298,8 @@ def main(args):
     if len(pairs) != 0:
         # We need to provide a list as first argument since rule 1-1 might produce different results every execution if we use a set
         formatted_pairs = list(map(lambda p: '\t'.join(p), pairs))
-        parallel = process_pairs(formatted_pairs, classifier_command, results_fd=classifier_results, results_are_fp=results_are_fp)
+        parallel = process_pairs(formatted_pairs, classifier_command, results_fd=classifier_results, results_are_fp=results_are_fp,
+                                 do_not_classify_missing_pairs=do_not_classify_missing_pairs)
 
     expected_values = len(src_gs) * len(trg_urls) + len(trg_gs) * len(src_urls) - len(src_gs) * len(trg_gs)
 
@@ -375,6 +383,7 @@ def initialization():
     parser.add_argument('--parallel-threshold', type=float, default=0.5, help="Take URLs as parallel when the score is greater than the provided (only applied when flag --results-are-fp is set)")
     parser.add_argument('--disable-rule-1-1', action='store_true', help="Disable WMT16 rule 1-1")
     parser.add_argument('--disable-near-matchs', action='store_true', help="Disable near-matchs (edition distance)")
+    parser.add_argument('--do-not-classify-missing-pairs', action='store_true', help="Missing classified pairs will not be generated")
 
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
 

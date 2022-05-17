@@ -242,7 +242,11 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
 @torch.no_grad()
 def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=False, remove_authority=False,
                           parallel_likelihood=False, threshold=-np.inf, url_separator=' '):
-    logger.info("Inference mode enabled: insert 2 blank lines in order to end")
+    logger.info("Inference mode enabled")
+
+    if not inference_from_stdin:
+        logging.info("Insert 2 blank lines in order to end")
+
     logger_verbose["tokens"].debug("model_input\ttokens\ttokens2str\tunk_chars\tinitial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
 
     model.eval()
