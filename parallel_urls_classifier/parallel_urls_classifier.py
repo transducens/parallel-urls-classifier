@@ -364,6 +364,7 @@ def main(args):
     url_separator_new_token = args.url_separator_new_token
     warmup_steps = args.warmup_steps
     learning_rate = args.learning_rate
+    stop_updating_lr_scheduler_proportion = args.stop_updating_lr_scheduler_proportion
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -586,7 +587,7 @@ def main(args):
         warmup_steps = len(dataloader_train)
 
     training_steps = len(dataloader_train) * epochs
-    trainint_steps_freeze_lr = (warmup_steps + training_steps) // 2 # lr_scheduler_rate ~= 0.5 
+    trainint_steps_freeze_lr = int((warmup_steps + training_steps) * stop_updating_lr_scheduler_proportion)
     scheduler = get_linear_schedule_with_warmup(optimizer,
                                                 num_warmup_steps=warmup_steps,
                                                 num_training_steps=training_steps)
@@ -942,6 +943,7 @@ def initialization():
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
     parser.add_argument('--warmup-steps', type=int, help="Warm-up steps")
     parser.add_argument('--learning-rate', type=float, default=2e-5, help="Warm-up steps")
+    parser.add_argument('--stop-updating-lr-scheduler-proportion', type=float, default=1.0, help="Proportion that the LR scheduler will stop being updated, taking into account warming-up and training steps (e.g. if 0.5, the LR scheduler will stop being updated after half of training, related to epochs and batches, has been reached). If value >= 1.0, the LR will not stop being updated")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")

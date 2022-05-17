@@ -32,6 +32,7 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False):
     if results_fd:
         clean_pairs = set(map(lambda p: p.encode("utf-8", errors="ignore").decode(), pairs))
         set_pairs = set(pairs)
+        missing_pairs = 0
 
         for idx, l in enumerate(results_fd):
             l = l.strip()
@@ -53,16 +54,19 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False):
             else:
                 # It has failed, but we still might have the pair and have skipped it due to encoding
 
-                src_pair_2 = src_pair.encode(errors="ignore").decode("unicode_escape", errors="ignore")
-                trg_pair_2 = trg_pair.encode(errors="ignore").decode("unicode_escape", errors="ignore")
+                src_pair_2 = src_pair.encode(errors="ignore").decode("utf-8", errors="ignore")
+                trg_pair_2 = trg_pair.encode(errors="ignore").decode("utf-8", errors="ignore")
                 pair_2 = f"{src_pair_2}\t{trg_pair_2}"
 
                 if pair_2 in set_pairs or pair_2 in clean_pairs:
                     list_results.append((v, src_pair_2, trg_pair_2))
                     obtained_pairs.append(pair_2)
                 else:
-                    logging.error("Missing pair (1): %s", pair)
-                    logging.error("Missing pair (2): %s", pair_2)
+                    missing_pairs += 1
+                #    logging.error("Missing pair (1): %s", pair)
+                #    logging.error("Missing pair (2): %s", pair_2)
+
+        logging.debug("Missing pairs: %d", missing_pairs)
 
     if not results_fd or len(obtained_pairs) < len(pairs):
         classifier_list_results = pairs
@@ -277,7 +281,10 @@ def main(args):
     for src_url, trg_url in itertools.product(src_urls, trg_urls):
         if src_url in src_gs or trg_url in trg_gs:
             # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
-            pairs.append((src_url ,trg_url))
+            pairs.append((src_url, trg_url))
+        elif trg_url in src_gs or src_url in trg_gs:
+            # Fix direction
+            pairs.append((trg_url, src_url))
 
     #time.sleep(10) # Sleep in order to try to avoid CUDA error out of memory
 
@@ -292,7 +299,11 @@ def main(args):
     assert len(pairs) == len(parallel), f"Unexpected parallel length: {len(pairs)} vs {len(parallel)}"
 
     # Update pairs in case that the order changed
-    parallel_classification, aux_src_pairs, aux_trg_pairs = zip(*parallel)
+    if len(parallel) == 0:
+        parallel_classification, aux_src_pairs, aux_trg_pairs = (), (), ()
+    else:
+        parallel_classification, aux_src_pairs, aux_trg_pairs = zip(*parallel)
+
     pairs = list(zip(aux_src_pairs, aux_trg_pairs))
 
     if results_are_fp:
