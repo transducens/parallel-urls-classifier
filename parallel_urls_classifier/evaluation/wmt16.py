@@ -140,7 +140,7 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
     tp, fp = 0, 0
     seen_src_pairs, seen_trg_pairs = set(), set()
     gs_pairs = set(f"{src_gs_pair}\t{trg_gs_pair}" for src_gs_pair, trg_gs_pair in zip(src_gs_pairs, trg_gs_pairs))
-    positive_near_matches, negative_near_matches = 0
+    positive_near_matches, negative_near_matches = 0, 0
 
     for src_pair, trg_pair in zip(src_pairs, trg_pairs):
         pair = f"{src_pair}\t{trg_pair}"
