@@ -33,6 +33,7 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
         clean_pairs = set(map(lambda p: p.encode("utf-8", errors="ignore").decode(), pairs))
         set_pairs = set(pairs)
         missing_pairs = 0
+        seen_pairs = set()
 
         for idx, l in enumerate(results_fd):
             l = l.strip()
@@ -46,21 +47,39 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
 
             v, src_pair, trg_pair = l
             pair = f"{src_pair}\t{trg_pair}"
+            pair_reversed = f"{trg_pair}\t{src_pair}"
 
             # Append only the provided pairs which are inside the pairs that we want to classify
             if pair in set_pairs or pair in clean_pairs:
-                list_results.append((v, src_pair, trg_pair))
-                obtained_pairs.append(pair)
+                if pair not in seen_pairs:
+                    list_results.append((v, src_pair, trg_pair))
+                    obtained_pairs.append(pair)
+                    seen_pairs.add(pair)
+            elif pair_reversed in set_pairs or pair_reversed in clean_pairs:
+                # Fix direction
+                if pair_reversed not in seen_pairs:
+                    list_results.append((v, trg_pair, src_pair))
+                    obtained_pairs.append(pair_reversed)
+                    seen_pairs.add(pair_reversed)
             else:
                 # It has failed, but we still might have the pair and have skipped it due to encoding
 
                 src_pair_2 = src_pair.encode(errors="ignore").decode("utf-8", errors="ignore")
                 trg_pair_2 = trg_pair.encode(errors="ignore").decode("utf-8", errors="ignore")
                 pair_2 = f"{src_pair_2}\t{trg_pair_2}"
+                pair_reversed_2 = f"{trg_pair_2}\t{src_pair_2}"
 
                 if pair_2 in set_pairs or pair_2 in clean_pairs:
-                    list_results.append((v, src_pair_2, trg_pair_2))
-                    obtained_pairs.append(pair_2)
+                    if pair_2 not in seen_pairs:
+                        list_results.append((v, src_pair_2, trg_pair_2))
+                        obtained_pairs.append(pair_2)
+                        seen_pairs.add(pair_2)
+                elif pair_reversed_2 in set_pairs or pair_reversed_2 in clean_pairs:
+                    # Fix direction
+                    if pair_reversed_2 not in seen_pairs:
+                        list_results.append((v, trg_pair_2, src_pair_2))
+                        obtained_pairs.append(pair_reversed_2)
+                        seen_pairs.add(pair_reversed_2)
                 else:
                     missing_pairs += 1
                 #    logging.error("Missing pair (1): %s", pair)
@@ -121,6 +140,7 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
     tp, fp = 0, 0
     seen_src_pairs, seen_trg_pairs = set(), set()
     gs_pairs = set(f"{src_gs_pair}\t{trg_gs_pair}" for src_gs_pair, trg_gs_pair in zip(src_gs_pairs, trg_gs_pairs))
+    positive_near_matches, negative_near_matches = 0
 
     for src_pair, trg_pair in zip(src_pairs, trg_pairs):
         pair = f"{src_pair}\t{trg_pair}"
@@ -184,7 +204,10 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                         logging.debug("Near-match found")
 
                         tp += 1
+                        positive_near_matches += 1
                         pair_hit = True
+                    else:
+                        negative_near_matches += 1
 
         if not pair_hit:
             fp += 1
@@ -192,11 +215,15 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
         seen_src_pairs.add(src_pair)
         seen_trg_pairs.add(trg_pair)
 
+    if not disable_near_matchs:
+        logging.debug("(Positive, Negative) near-matches found: (%d, %d)", positive_near_matches, negative_near_matches)
+
     logging.info("(True, False) positives: (%d, %d)", tp, fp)
+
+    tn, fn = 0, 0
 
     if non_src_pairs and non_trg_pairs:
         # Calculate TN and FN
-        tn, fn = 0, 0
 
         for non_src_pair, non_trg_pair in zip(non_src_pairs, non_trg_pairs):
             pair = f"{non_src_pair}\t{non_trg_pair}"
@@ -205,14 +232,26 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                 fn += 1
             else:
                 tn += 1
+    else:
+        logging.debug("TN and FN could not be calculated")
 
-        logging.info("(True, False) negatives: (%d, %d)", tn, fn)
-
+    logging.info("(True, False) negatives: (%d, %d)", tn, fn)
     logging.info("GS pairs: %d", len(gs_pairs))
     logging.debug("GS is not exhaustive, so we cannot trust false positives, so we cannot trust precision")
 
     if len(gs_pairs) == 0:
         logging.warning("GS does not contain values")
+
+    parallel_pairs_found = tp + fn
+    expected_pairs_found = len(gs_pairs)
+
+    if rule_1_1:
+        # We need to add NNM and subtract PNM because NM will be classified as TP or FP, and the real GS pair (it should be
+        #  among the pairs) will be classified as FP if rule 1-1 is enabled
+        expected_pairs_found += negative_near_matches - positive_near_matches
+
+    if parallel_pairs_found != expected_pairs_found:
+        logging.error("Unexpected GS pairs found: %d were expected, %d were found", expected_pairs_found, parallel_pairs_found)
 
     recall = tp / len(gs_pairs) if len(gs_pairs) != 0 else 1.0
     precision = tp / (tp + fp) if (tp + fp) != 0 else 1.0
@@ -289,9 +328,8 @@ def main(args):
         if src_url in src_gs or trg_url in trg_gs:
             # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
             pairs.append((src_url, trg_url))
-        elif trg_url in src_gs or src_url in trg_gs:
-            # Fix direction
-            pairs.append((trg_url, src_url))
+
+    logging.info("Pairs to be classified: %d", len(pairs))
 
     #time.sleep(10) # Sleep in order to try to avoid CUDA error out of memory
 
@@ -303,8 +341,14 @@ def main(args):
 
     expected_values = len(src_gs) * len(trg_urls) + len(trg_gs) * len(src_urls) - len(src_gs) * len(trg_gs)
 
-    assert expected_values == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
-    assert len(pairs) == len(parallel), f"Unexpected parallel length: {len(pairs)} vs {len(parallel)}"
+    if do_not_classify_missing_pairs:
+        if expected_values != len(parallel):
+            logging.warning("Unexpected parallel length: %d vs %d", expected_values, len(parallel))
+        if len(pairs) != len(parallel):
+            logging.warning("Unexpected parallel length: %d vs %d", len(pairs), len(parallel))
+    else:
+        assert expected_values == len(parallel), f"Unexpected parallel length: {expected_values} vs {len(parallel)}"
+        assert len(pairs) == len(parallel), f"Unexpected parallel length: {len(pairs)} vs {len(parallel)}"
 
     # Update pairs in case that the order changed
     if len(parallel) == 0:
@@ -333,37 +377,28 @@ def main(args):
     src_pairs, trg_pairs = [], []
     non_src_pairs, non_trg_pairs = [], []
 
-    if results_are_fp:
-        for p, (src_url, trg_url) in zip(parallel_classification, pairs):
-            if p >= parallel_threshold:
-                src_pairs.append((p, src_url))
-                trg_pairs.append((p, trg_url))
-            else:
-                non_src_pairs.append(src_url)
-                non_trg_pairs.append(trg_url)
+    for p, (src_url, trg_url) in zip(parallel_classification, pairs):
+        if results_are_fp and p >= parallel_threshold:
+            src_pairs.append((p, src_url))
+            trg_pairs.append((p, trg_url))
+        elif not results_are_fp and p:
+            src_pairs.append(src_url)
+            trg_pairs.append(trg_url)
+        else:
+            non_src_pairs.append(src_url)
+            non_trg_pairs.append(trg_url)
 
+    if results_are_fp:
         logging.debug("Sorting by score")
 
         # Sort by score
         src_pairs = list(map(lambda t: t[1], sorted(src_pairs, key=lambda v: v[0], reverse=True)))
         trg_pairs = list(map(lambda t: t[1], sorted(trg_pairs, key=lambda v: v[0], reverse=True)))
-    else:
-        for p, (src_url, trg_url) in zip(parallel_classification, pairs):
-            if p:
-                src_pairs.append(src_url)
-                trg_pairs.append(trg_url)
-            else:
-                non_src_pairs.append(src_url)
-                non_trg_pairs.append(trg_url)
 
-    logging.debug("Pairs:")
+    logging.info("Parallel pairs: %d", len(src_pairs))
 
-    for src_pair, trg_pair in zip(src_pairs, trg_pairs):
-        logging.debug(" - %s\t%s", src_pair, trg_pair)
-
-    assert len(src_pairs) == len(trg_pairs), f"Different src and trg parallel URLs: {len(src_pairs)} vs {len(trg_pairs)}"
+    assert len(src_pairs) + len(non_src_pairs) == len(pairs), f"Unexpected parallel and non-parallel length compared to pairs: {len(src_pairs)} + {len(non_src_pairs)} vs {len(pairs)}"
     assert len(src_pairs) == parallel_values, f"Unexpected quantity of parallel values: {len(src_pairs)} vs {parallel_values}"
-    assert len(non_src_pairs) == len(non_trg_pairs), f"Different src and trg non-parallel URLs: {len(non_src_pairs)} vs {len(non_trg_pairs)}"
     assert len(non_src_pairs) == non_parallel_values, f"Unexpected quantity of non-parallel values: {len(non_src_pairs)} vs {non_parallel_values}"
 
     evaluate_recall(src_pairs, trg_pairs, src_gs, trg_gs, src_urls, trg_urls, src_docs, trg_docs,
