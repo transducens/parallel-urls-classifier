@@ -246,9 +246,9 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
     expected_pairs_found = len(gs_pairs)
 
     if rule_1_1:
-        # We need to add NNM and subtract PNM because NM will be classified as TP or FP, and the real GS pair (it should be
+        # We need to add PNM and subtract NNM because NM will be classified as TP or FP, and the real GS pair (it should be
         #  among the pairs) will be classified as FP if rule 1-1 is enabled
-        expected_pairs_found += negative_near_matches - positive_near_matches
+        expected_pairs_found += 2 * positive_near_matches - negative_near_matches
 
     if parallel_pairs_found != expected_pairs_found:
         logging.error("Unexpected GS pairs found: %d were expected, %d were found", expected_pairs_found, parallel_pairs_found)
