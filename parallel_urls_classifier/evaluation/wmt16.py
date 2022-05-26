@@ -136,15 +136,17 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
     return results
 
 def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, trg_urls, src_docs, trg_docs,
-                    rule_1_1=True, disable_near_matchs=False, non_src_pairs=None, non_trg_pairs=None):
+                    rule_1_1=True, disable_near_matchs=False, non_src_pairs=None, non_trg_pairs=None,
+                    src_pairs_scores=None, trg_pairs_scores=None):
     tp, fp = 0, 0
     seen_src_pairs, seen_trg_pairs = set(), set()
     gs_pairs = set(f"{src_gs_pair}\t{trg_gs_pair}" for src_gs_pair, trg_gs_pair in zip(src_gs_pairs, trg_gs_pairs))
     positive_near_matches, negative_near_matches = 0, 0
 
-    for src_pair, trg_pair in zip(src_pairs, trg_pairs):
+    for idx, (src_pair, trg_pair) in enumerate(zip(src_pairs, trg_pairs)):
         pair = f"{src_pair}\t{trg_pair}"
         pair_hit = False
+        near_match = False
 
         #if pair in gs_pairs and src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs:
         if pair in gs_pairs:
@@ -206,8 +208,20 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                         tp += 1
                         positive_near_matches += 1
                         pair_hit = True
+                        near_match = True
                     else:
                         negative_near_matches += 1
+
+        nm_mark = "[NM]" if near_match else ''
+        tp_mark = "[TP]" if pair_hit else "[FP]"
+
+        if src_pairs_scores and trg_pairs_scores:
+            src_pairs_score = src_pairs_scores[idx]
+            trg_pairs_score = trg_pairs_scores[idx]
+
+            logging.debug("Pair (%s%s): %s\t%s\t%s\t%s", nm_mark, tp_mark, src_pair, trg_pair, src_pairs_score, trg_pairs_score)
+        else:
+            logging.debug("Pair (%s%s): %s\t%s", nm_mark, tp_mark, src_pair, trg_pair)
 
         if not pair_hit:
             fp += 1
@@ -375,6 +389,7 @@ def main(args):
         logging.debug(f"{v}\t{src_url}\t{trg_url}")
 
     src_pairs, trg_pairs = [], []
+    src_pairs_scores, trg_pairs_scores = [], []
     non_src_pairs, non_trg_pairs = [], []
 
     for p, (src_url, trg_url) in zip(parallel_classification, pairs):
@@ -391,9 +406,13 @@ def main(args):
     if results_are_fp:
         logging.debug("Sorting by score")
 
-        # Sort by score
-        src_pairs = list(map(lambda t: t[1], sorted(src_pairs, key=lambda v: v[0], reverse=True)))
-        trg_pairs = list(map(lambda t: t[1], sorted(trg_pairs, key=lambda v: v[0], reverse=True)))
+        if len(src_pairs) != 0 and len(trg_pairs) != 0:
+            # Sort by score
+            src_pairs, src_pairs_scores = zip(*list(map(lambda t: (t[1], t[0]), sorted(src_pairs, key=lambda v: v[0], reverse=True))))
+            trg_pairs, trg_pairs_scores = zip(*list(map(lambda t: (t[1], t[0]), sorted(trg_pairs, key=lambda v: v[0], reverse=True))))
+    else:
+        src_pairs_scores = ["parallel"] * len(src_pairs)
+        trg_pairs_scores = ["parallel"] * len(trg_pairs)
 
     logging.info("Parallel pairs: %d", len(src_pairs))
 
@@ -403,7 +422,8 @@ def main(args):
 
     evaluate_recall(src_pairs, trg_pairs, src_gs, trg_gs, src_urls, trg_urls, src_docs, trg_docs,
                     rule_1_1=rule_1_1, disable_near_matchs=disable_near_matchs,
-                    non_src_pairs=non_src_pairs, non_trg_pairs=non_trg_pairs)
+                    non_src_pairs=non_src_pairs, non_trg_pairs=non_trg_pairs,
+                    src_pairs_scores=src_pairs_scores, trg_pairs_scores=trg_pairs_scores)
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
