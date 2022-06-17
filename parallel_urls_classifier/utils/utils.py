@@ -25,7 +25,7 @@ def wc_l(fd, do_not_count_empty=True):
 
     return no_lines
 
-def get_layer_from_model(layer, name=None):
+def get_layer_from_model(layer, name=None, deepcopy=True):
     could_get_layer = False
 
     # Get layer from model (we need to do it with a for loop since it is a generator which cannot be accessed with idx)
@@ -38,8 +38,12 @@ def get_layer_from_model(layer, name=None):
     if name is not None:
         assert could_get_layer, f"Could not get the layer '{name}'"
 
-    # Return a deepcopy instead of the value itself to avoid affect the model if modified
-    last_layer_param_data = copy.deepcopy(last_layer_param.data)
+    last_layer_param_data = last_layer_param.data
+
+    if deepcopy:
+        # Return a deepcopy instead of the value itself to avoid affect the model if modified
+
+        return copy.deepcopy(last_layer_param_data)
 
     return last_layer_param_data
 
@@ -265,7 +269,7 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
         if remove_positional_data:
             # e.g. https://www.example.com/resource#position -> https://www.example.com/resource
 
-            ur = u.spit('/')
+            ur = u.split('/')
             h = ur[-1].find('#')
 
             if h != -1:
@@ -278,3 +282,31 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
         urls.append(preprocessed_url)
 
     return urls
+
+def init_weight_and_bias(model, module):
+    import torch.nn as nn
+
+    if isinstance(module, nn.Linear):
+        module.weight.data.normal_(mean=0.0, std=model.config.initializer_range)
+
+        if module.bias is not None:
+            module.bias.data.zero_()
+
+    elif isinstance(module, nn.LayerNorm):
+        module.bias.data.zero_()
+        module.weight.data.fill_(1.0)
+
+def do_reinit(model, reinit_n_layers):
+    try:
+        # Re-init pooler.
+        model.pooler.dense.weight.data.normal_(mean=0.0, std=model.config.initializer_range)
+        model.pooler.dense.bias.data.zero_()
+
+        for param in model.pooler.parameters():
+            param.requires_grad = True
+    except AttributeError:
+        pass
+
+    # Re-init last n layers.
+    for n in range(reinit_n_layers):
+        model.encoder.layer[-(n+1)].apply(lambda module: init_weight_and_bias(model, module))

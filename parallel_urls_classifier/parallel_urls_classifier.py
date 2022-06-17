@@ -370,6 +370,7 @@ def main(args):
     warmup_steps = args.warmup_steps
     learning_rate = args.learning_rate
     stop_updating_lr_scheduler_proportion = args.stop_updating_lr_scheduler_proportion
+    re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -456,7 +457,7 @@ def main(args):
         model = model.from_pretrained(pretrained_model, num_labels=num_labels).to(device)
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
-    fine_tuning = args.fine_tuning
+    fine_tuning = not args.do_not_fine_tune
     model_embeddings_size = model.base_model.embeddings.word_embeddings.weight.shape[0]
 
     if url_separator_new_token:
@@ -498,6 +499,10 @@ def main(args):
         param.requires_grad = True
 
     last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
+
+    # Re-initilize last N layers from the pre-trained model
+    if fine_tuning and re_initialize_last_n_layers > 0:
+        utils.do_reinit(model.base_model, re_initialize_last_n_layers)
 
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
@@ -586,10 +591,10 @@ def main(args):
     #                  lr=2e-5,
     #                  eps=1e-8)
 
-    if not warmup_steps:
-        logger.warning("Warm-up steps set to %d since no value was set (set to 0 if that's the behaviour you were expecting)", len(dataloader_train))
-
+    if warmup_steps < 0:
         warmup_steps = len(dataloader_train)
+
+        logger.warning("Warm-up steps set to %d since no value was set (set to 0 if that's the behaviour you were expecting)", warmup_steps)
 
     training_steps = len(dataloader_train) * epochs
     trainint_steps_freeze_lr = int((warmup_steps + training_steps) * stop_updating_lr_scheduler_proportion)
@@ -924,7 +929,7 @@ def initialization():
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
-    parser.add_argument('--fine-tuning', action="store_true", help="Apply fine-tuning")
+    parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
     parser.add_argument('--dataset-workers', type=int, default=8, help="No. workers when loading the data in the dataset")
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")
     parser.add_argument('--max-length-tokens', type=int, default=256, help="Max. length for the generated tokens")
@@ -936,7 +941,7 @@ def initialization():
     parser.add_argument('--threshold', type=float, default=-np.inf, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
     parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="")
     parser.add_argument('--patience', type=int, default=0, help="Patience before stopping the training")
-    parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored)")
+    parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored in order to stop, but will still be used for other actions like LR scheduler)")
     parser.add_argument('--do-not-load-best-model', action="store_true", help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
     parser.add_argument('--overwrite-output-model', action="store_true", help="Overwrite output model if it exists (initial loading)")
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
@@ -947,9 +952,10 @@ def initialization():
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
     parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
-    parser.add_argument('--warmup-steps', type=int, help="Warm-up steps")
+    parser.add_argument('--warmup-steps', type=int, default=-1, help="Warm-up steps")
     parser.add_argument('--learning-rate', type=float, default=2e-5, help="Warm-up steps")
     parser.add_argument('--stop-updating-lr-scheduler-proportion', type=float, default=1.0, help="Proportion that the LR scheduler will stop being updated, taking into account warming-up and training steps (e.g. if 0.5, the LR scheduler will stop being updated after half of training, related to epochs and batches, has been reached). If value >= 1.0, the LR will not stop being updated")
+    parser.add_argument('--re-initialize-last-n-layers', type=int, default=0, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
