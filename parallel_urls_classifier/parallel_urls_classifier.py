@@ -241,7 +241,7 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
 
 @torch.no_grad()
 def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=False, remove_authority=False,
-                          parallel_likelihood=False, threshold=-np.inf, url_separator=' '):
+                          remove_positional_data_from_resource=False, parallel_likelihood=False, threshold=-np.inf, url_separator=' '):
     logger.info("Inference mode enabled")
 
     if not inference_from_stdin:
@@ -254,7 +254,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     while True:
         if inference_from_stdin:
             try:
-                target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, separator=url_separator), return_urls=True))
+                target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator), return_urls=True))
             except StopIteration:
                 break
 
@@ -269,7 +269,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             src_url = initial_src_urls[0]
             trg_url = initial_trg_urls[0]
-            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, separator=url_separator)))
+            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator)))
 
         # Tokens
         tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
@@ -360,6 +360,7 @@ def main(args):
     patience = args.patience
     do_not_load_best_model = args.do_not_load_best_model
     remove_authority = args.remove_authority
+    remove_positional_data_from_resource = not args.do_not_remove_positional_data_from_resource
     add_symmetric_samples = args.add_symmetric_samples
     log_directory = args.log_directory
     regression = args.regression
@@ -479,7 +480,7 @@ def main(args):
     if apply_inference:
         interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=inference_from_stdin,
                               remove_authority=remove_authority, parallel_likelihood=parallel_likelihood, threshold=threshold,
-                              url_separator=url_separator)
+                              url_separator=url_separator, remove_positional_data_from_resource=remove_positional_data_from_resource)
 
         # Stop execution
         return
@@ -501,12 +502,12 @@ def main(args):
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
     for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, separator=url_separator), add_symmetric_samples=add_symmetric_samples)):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator), add_symmetric_samples=add_symmetric_samples)):
             l.extend(batch_urls)
 
     for fd, l in ((file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
                   (file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, separator=url_separator))):
+        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator))):
             l.extend(batch_urls)
 
     logger.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
@@ -939,6 +940,7 @@ def initialization():
     parser.add_argument('--do-not-load-best-model', action="store_true", help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
     parser.add_argument('--overwrite-output-model', action="store_true", help="Overwrite output model if it exists (initial loading)")
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
+    parser.add_argument('--do-not-remove-positional-data-from-resource', action="store_true", help="Remove content after '#' in the resorce (e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
     parser.add_argument('--add-symmetric-samples', action="store_true", help="Add symmetric samples for training (if (src, trg) URL pair is provided, (trg, src) URL pair will be provided as well)")
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
     parser.add_argument('--log-directory', required=True, help="Directory where different log files will be stored")

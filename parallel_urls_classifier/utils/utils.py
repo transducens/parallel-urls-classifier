@@ -232,7 +232,7 @@ def update_defined_variables_from_dict(d, provided_locals, smash=False):
 
     provided_locals.update(d)
 
-def preprocess_url(url, remove_protocol_and_authority=False, separator=' '):
+def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_data=False, separator=' '):
     urls = []
 
     if isinstance(url, str):
@@ -240,10 +240,38 @@ def preprocess_url(url, remove_protocol_and_authority=False, separator=' '):
 
     for u in url:
         if remove_protocol_and_authority:
-            ur = u.split('/')
+            # Remove protocol
+            if u.startswith("https://"):
+                u = u[8:]
+            elif u.startswith("http://"):
+                u = u[7:]
+            else:
+                d = u.find(':')
+                s = u.find('/')
 
-            if ur[0] in ("http:", "https:") and ur[1] == '':
-                u = '/'.join(ur[3:])
+                if d != -1 and s != -1 and s - d == 1 and u[d:s + 2] == "://":
+                    if len(u) > s + 2:
+                        if u[s + 2] != '/':
+                            u = u[s + 2:]
+                    else:
+                        u = u[s + 2:]
+
+            # Remove authority
+            s = u.find('/')
+
+            if s != -1:
+                u = u[s + 1:]
+
+        if remove_positional_data:
+            # e.g. https://www.example.com/resource#position -> https://www.example.com/resource
+
+            ur = u.spit('/')
+            h = ur[-1].find('#')
+
+            if h != -1:
+                ur[-1] = ur[-1][:h]
+
+            u = '/'.join(ur)
 
         preprocessed_url = stringify_url(urllib.parse.unquote(u), separator=separator, lower=True)
 
