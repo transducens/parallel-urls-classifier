@@ -392,9 +392,9 @@ def main(args):
     url_separator_new_token = args.url_separator_new_token
     warmup_steps = args.warmup_steps
     learning_rate = args.learning_rate
-    stop_updating_lr_scheduler_proportion = args.stop_updating_lr_scheduler_proportion
     re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
     lr_scheduler = args.lr_scheduler
+    run_lr_scheduler_per_epoch = args.run_lr_scheduler_per_epoch
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -621,11 +621,17 @@ def main(args):
     #                  eps=1e-8)
 
     if warmup_steps < 0:
-        warmup_steps = len(dataloader_train)
+        warmup_steps = 0 if run_lr_scheduler_per_epoch else len(dataloader_train)
 
-        logger.warning("Warm-up steps set to %d since no value was set (set to 0 if that's the behaviour you were expecting)", warmup_steps)
+        logger.warning("Warm-up steps set to %d since no value was set", warmup_steps)
 
-    training_steps = len(dataloader_train) * epochs
+    training_steps = epochs if run_lr_scheduler_per_epoch else len(dataloader_train) * epochs
+
+    if warmup_steps > training_steps:
+        warmup_steps = training_steps
+
+        logger.warning("Warm-up steps set to max possible value (i.e. there will be only warm-up and LR scheduler will not be applied): %d", warmup_steps)
+
     scheduler = get_lr_schedule_with_warmup(optimizer,
                                             num_warmup_steps=warmup_steps,
                                             num_training_steps=training_steps,
@@ -744,6 +750,7 @@ def main(args):
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
+            # TODO TBD move condition closer to scheduler.step() when run_lr_scheduler_per_epoch is True
             if show_statistics:
                 # LRs statistics
                 all_lrs = scheduler.get_last_lr()
@@ -751,11 +758,16 @@ def main(args):
                 len_lrs = len(all_lrs)
 
                 if len_lrs != 1:
-                    logger.debug("[batch#%d] First and last LRs: %s", idx + 1, f"{str(all_lrs[0:10])[:-1]} ... {str(all_lrs[10:])[1:]}")
+                    logger.debug("[batch#%d] LR scheduler: First and last LRs: %s", idx + 1, f"{str(all_lrs[0:10])[:-1]} ... {str(all_lrs[10:])[1:]}")
                 else:
-                    logger.debug("[batch#%d] Current LR: %.8f", idx + 1, current_lr)
+                    logger.debug("[batch#%d] LR scheduler: Current LR: %.8f", idx + 1, current_lr)
 
             optimizer.step()
+
+            if not run_lr_scheduler_per_epoch:
+                scheduler.step()
+
+        if run_lr_scheduler_per_epoch:
             scheduler.step()
 
         current_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
@@ -973,9 +985,9 @@ def initialization():
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
     parser.add_argument('--warmup-steps', type=int, default=-1, help="Warm-up steps")
     parser.add_argument('--learning-rate', type=float, default=2e-5, help="Warm-up steps")
-    parser.add_argument('--stop-updating-lr-scheduler-proportion', type=float, default=1.0, help="Proportion that the LR scheduler will stop being updated, taking into account warming-up and training steps (e.g. if 0.5, the LR scheduler will stop being updated after half of training, related to epochs and batches, has been reached). If value >= 1.0, the LR will not stop being updated")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--lr-scheduler', default="inverse_sqrt", choices=["linear", "inverse_sqrt"], help="LR scheduler")
+    parser.add_argument('--run-lr-scheduler-per-epoch', action="store_true", help="Apply the LR scheduler per epoch instead of per batch")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
