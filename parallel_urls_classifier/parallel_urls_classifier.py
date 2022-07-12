@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomSampler, SequentialSampler
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW, get_linear_schedule_with_warmup
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW
 import matplotlib.pyplot as plt
 
 # Disable (less verbose) 3rd party logging
@@ -320,6 +320,29 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
                 print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
 
+def get_lr_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, last_epoch=-1, method="linear"):
+    def lr_lambda(current_step: int):
+        # Warm-up
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+
+        # After warm-up
+        if method == "linear":
+            return max(
+                0.0, float(num_training_steps - current_step) / float(max(1, num_training_steps - num_warmup_steps))
+            )
+        elif method == "inverse_sqrt":
+            # From https://fairseq.readthedocs.io/en/latest/_modules/fairseq/optim/lr_scheduler/inverse_square_root_schedule.html
+            initial_lr = optimizer.defaults["lr"]
+            decay_factor = initial_lr * num_warmup_steps**0.5
+            lr = decay_factor * current_step**-0.5
+
+            return lr / initial_lr
+        else:
+            raise Exception(f"Unknown LR scheduler: {method}")
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
@@ -371,6 +394,7 @@ def main(args):
     learning_rate = args.learning_rate
     stop_updating_lr_scheduler_proportion = args.stop_updating_lr_scheduler_proportion
     re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
+    lr_scheduler = args.lr_scheduler
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -400,6 +424,11 @@ def main(args):
 
     if apply_inference and not model_input:
         logger.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
+
+        time.sleep(waiting_time)
+
+    if train_until_patience and lr_scheduler not in ("inverse_sqrt"):
+        logger.warning("Flag --train-until-patience has been set with some LR scheduler which may cause inestability. It is highly recommended to continue until you know what you are doing: waiting %d seconds before proceed", waiting_time)
 
         time.sleep(waiting_time)
 
@@ -597,10 +626,10 @@ def main(args):
         logger.warning("Warm-up steps set to %d since no value was set (set to 0 if that's the behaviour you were expecting)", warmup_steps)
 
     training_steps = len(dataloader_train) * epochs
-    trainint_steps_freeze_lr = int((warmup_steps + training_steps) * stop_updating_lr_scheduler_proportion)
-    scheduler = get_linear_schedule_with_warmup(optimizer,
-                                                num_warmup_steps=warmup_steps,
-                                                num_training_steps=training_steps)
+    scheduler = get_lr_schedule_with_warmup(optimizer,
+                                            num_warmup_steps=warmup_steps,
+                                            num_training_steps=training_steps,
+                                            method=lr_scheduler)
 
     best_values_minimize = False
     best_values_maximize = True
@@ -621,7 +650,6 @@ def main(args):
     stop_training = False
     epoch = 0
     current_patience = 0
-    current_training_step = 0
 
     # Statistics
     batch_loss = []
@@ -727,17 +755,8 @@ def main(args):
                 else:
                     logger.debug("[batch#%d] Current LR: %.8f", idx + 1, current_lr)
 
-            if train_until_patience and current_training_step > trainint_steps_freeze_lr:
-                # Do not update scheduler because we will reach lr = 0
-                optimizer.step()
-
-                if show_statistics:
-                    logger.debug("[batch#%d] LR scheduler is not being updated", idx + 1)
-            else:
-                optimizer.step()
-                scheduler.step()
-
-            current_training_step += 1
+            optimizer.step()
+            scheduler.step()
 
         current_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
         layer_updated = (current_last_layer_output != last_layer_output).any().cpu().detach().numpy()
@@ -955,7 +974,8 @@ def initialization():
     parser.add_argument('--warmup-steps', type=int, default=-1, help="Warm-up steps")
     parser.add_argument('--learning-rate', type=float, default=2e-5, help="Warm-up steps")
     parser.add_argument('--stop-updating-lr-scheduler-proportion', type=float, default=1.0, help="Proportion that the LR scheduler will stop being updated, taking into account warming-up and training steps (e.g. if 0.5, the LR scheduler will stop being updated after half of training, related to epochs and batches, has been reached). If value >= 1.0, the LR will not stop being updated")
-    parser.add_argument('--re-initialize-last-n-layers', type=int, default=0, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
+    parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
+    parser.add_argument('--lr-scheduler', default="inverse_sqrt", choices=["linear", "inverse_sqrt"], help="LR scheduler")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
