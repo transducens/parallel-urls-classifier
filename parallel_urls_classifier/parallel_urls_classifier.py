@@ -6,6 +6,7 @@ import time
 import random
 import logging
 import argparse
+import tempfile
 
 import utils.utils as utils
 
@@ -14,6 +15,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomSampler, SequentialSampler
+from torch.optim.lr_scheduler import CyclicLR
+from torch.optim import Adam, AdamW
+
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW
 import matplotlib.pyplot as plt
 
@@ -320,29 +324,6 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
                 print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
 
-def get_lr_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, last_epoch=-1, method="linear"):
-    def lr_lambda(current_step: int):
-        # Warm-up
-        if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
-
-        # After warm-up
-        if method == "linear":
-            return max(
-                0.0, float(num_training_steps - current_step) / float(max(1, num_training_steps - num_warmup_steps))
-            )
-        elif method == "inverse_sqrt":
-            # From https://fairseq.readthedocs.io/en/latest/_modules/fairseq/optim/lr_scheduler/inverse_square_root_schedule.html
-            initial_lr = optimizer.defaults["lr"]
-            decay_factor = initial_lr * num_warmup_steps**0.5
-            lr = decay_factor * current_step**-0.5
-
-            return lr / initial_lr
-        else:
-            raise Exception(f"Unknown LR scheduler: {method}")
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
-
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
@@ -390,11 +371,9 @@ def main(args):
     train_until_patience = args.train_until_patience
     url_separator = args.url_separator
     url_separator_new_token = args.url_separator_new_token
-    warmup_steps = args.warmup_steps
     learning_rate = args.learning_rate
     re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
-    lr_scheduler = args.lr_scheduler
-    run_lr_scheduler_per_epoch = args.run_lr_scheduler_per_epoch
+    lr_scheduler_args = args.lr_scheduler_args
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -403,9 +382,14 @@ def main(args):
     # Disable parallelism since throws warnings
     os.environ["TOKENIZERS_PARALLELISM"] = "False"
 
+    if not log_directory:
+        log_directory = tempfile.mkdtemp()
+
     if not utils.exists(log_directory, f=os.path.isdir):
         raise Exception(f"Provided log directory does not exist: '{log_directory}'")
     else:
+        logger.info("Log directory: %s", log_directory)
+
         log_directory_files = os.listdir(utils.resolve_path(log_directory))
 
         if len(log_directory_files) != 0:
@@ -424,11 +408,6 @@ def main(args):
 
     if apply_inference and not model_input:
         logger.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
-
-        time.sleep(waiting_time)
-
-    if train_until_patience and lr_scheduler not in ("inverse_sqrt"):
-        logger.warning("Flag --train-until-patience has been set with some LR scheduler which may cause inestability. It is highly recommended to continue until you know what you are doing: waiting %d seconds before proceed", waiting_time)
 
         time.sleep(waiting_time)
 
@@ -614,28 +593,13 @@ def main(args):
         criterion = nn.CrossEntropyLoss(weight=loss_weight)
 
     criterion = criterion.to(device)
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
-                                 lr=learning_rate, eps=1e-8)
-    #optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
-    #                  lr=2e-5,
-    #                  eps=1e-8)
-
-    if warmup_steps < 0:
-        warmup_steps = 0 if run_lr_scheduler_per_epoch else len(dataloader_train)
-
-        logger.warning("Warm-up steps set to %d since no value was set", warmup_steps)
-
-    training_steps = epochs if run_lr_scheduler_per_epoch else len(dataloader_train) * epochs
-
-    if warmup_steps > training_steps:
-        warmup_steps = training_steps
-
-        logger.warning("Warm-up steps set to max possible value (i.e. there will be only warm-up and LR scheduler will not be applied): %d", warmup_steps)
-
-    scheduler = get_lr_schedule_with_warmup(optimizer,
-                                            num_warmup_steps=warmup_steps,
-                                            num_training_steps=training_steps,
-                                            method=lr_scheduler)
+    #optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()),
+    #                 lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+    optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
+                      lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
+    scheduler_max_lr, scheduler_step_size_up, scheduler_step_size_down, scheduler_mode, scheduler_gamma = lr_scheduler_args
+    scheduler = CyclicLR(optimizer, learning_rate, scheduler_max_lr,
+                         step_size_up=scheduler_step_size_up, step_size_down=scheduler_step_size_down, mode=scheduler_mode, gamma=scheduler_gamma)
 
     best_values_minimize = False
     best_values_maximize = True
@@ -750,7 +714,6 @@ def main(args):
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-            # TODO TBD move condition closer to scheduler.step() when run_lr_scheduler_per_epoch is True
             if show_statistics:
                 # LRs statistics
                 all_lrs = scheduler.get_last_lr()
@@ -763,11 +726,6 @@ def main(args):
                     logger.debug("[batch#%d] LR scheduler: Current LR: %.8f", idx + 1, current_lr)
 
             optimizer.step()
-
-            if not run_lr_scheduler_per_epoch:
-                scheduler.step()
-
-        if run_lr_scheduler_per_epoch:
             scheduler.step()
 
         current_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
@@ -979,15 +937,13 @@ def initialization():
     parser.add_argument('--do-not-remove-positional-data-from-resource', action="store_true", help="Remove content after '#' in the resorce (e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
     parser.add_argument('--add-symmetric-samples', action="store_true", help="Add symmetric samples for training (if (src, trg) URL pair is provided, (trg, src) URL pair will be provided as well)")
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
-    parser.add_argument('--log-directory', required=True, help="Directory where different log files will be stored")
+    parser.add_argument('--log-directory', help="Directory where different log files will be stored")
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
     parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
-    parser.add_argument('--warmup-steps', type=int, default=-1, help="Warm-up steps")
-    parser.add_argument('--learning-rate', type=float, default=2e-5, help="Warm-up steps")
+    parser.add_argument('--learning-rate', type=float, default=2e-5, help="Learning rate")
+    parser.add_argument('--lr-scheduler-args', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"), default=(4e-5, 2000, 2000, "exp_range", 1.0), help="Args. for CLR scheduler")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
-    parser.add_argument('--lr-scheduler', default="inverse_sqrt", choices=["linear", "inverse_sqrt"], help="LR scheduler")
-    parser.add_argument('--run-lr-scheduler-per-epoch', action="store_true", help="Apply the LR scheduler per epoch instead of per batch")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
