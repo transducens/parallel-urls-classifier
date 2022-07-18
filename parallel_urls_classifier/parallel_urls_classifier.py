@@ -599,7 +599,10 @@ def main(args):
                       lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
     scheduler_max_lr, scheduler_step_size_up, scheduler_step_size_down, scheduler_mode, scheduler_gamma = lr_scheduler_args
     scheduler = CyclicLR(optimizer, learning_rate, scheduler_max_lr,
-                         step_size_up=scheduler_step_size_up, step_size_down=scheduler_step_size_down, mode=scheduler_mode, gamma=scheduler_gamma)
+                         step_size_up=scheduler_step_size_up, step_size_down=scheduler_step_size_down, mode=scheduler_mode, gamma=scheduler_gamma,
+                         # https://github.com/pytorch/pytorch/issues/73910
+                         cycle_momentum=False,
+                         )
 
     best_values_minimize = False
     best_values_maximize = True
@@ -941,8 +944,8 @@ def initialization():
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
     parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
-    parser.add_argument('--learning-rate', type=float, default=2e-5, help="Learning rate")
-    parser.add_argument('--lr-scheduler-args', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"), default=(4e-5, 2000, 2000, "exp_range", 1.0), help="Args. for CLR scheduler")
+    parser.add_argument('--learning-rate', type=float, default=5e-6, help="Learning rate")
+    parser.add_argument('--lr-scheduler-args', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"), default=(5e-5, 2000, 2000, "exp_range", 1.0), help="Args. for CLR scheduler")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
