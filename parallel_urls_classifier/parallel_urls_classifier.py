@@ -7,6 +7,7 @@ import random
 import logging
 import argparse
 import tempfile
+import contextlib
 
 import utils.utils as utils
 
@@ -116,7 +117,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
             "macro_f1": macro_f1,}
 
 @torch.no_grad()
-def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, classes=2):
+def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, cuda_amp_context_manager, classes=2):
     model.eval()
 
     total_loss = 0.0
@@ -137,7 +138,9 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
         labels = batch["label"].to(device)
 
         # Inference
-        outputs = model(urls, attention_mask).logits
+        with cuda_amp_context_manager:
+            outputs = model(urls, attention_mask).logits
+
         regression = outputs.cpu().detach().numpy().shape[1] == 1
 
         if regression:
@@ -244,8 +247,9 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
             plt.pause(time_wait)
 
 @torch.no_grad()
-def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=False, remove_authority=False,
-                          remove_positional_data_from_resource=False, parallel_likelihood=False, threshold=-np.inf, url_separator=' '):
+def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, cuda_amp_context_manager, inference_from_stdin=False,
+                          remove_authority=False, remove_positional_data_from_resource=False, parallel_likelihood=False, threshold=-np.inf,
+                          url_separator=' '):
     logger.info("Inference mode enabled")
 
     if not inference_from_stdin:
@@ -296,7 +300,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             logger_verbose["tokens"].debug("%s\t%s\t%s\t%d\t%s\t%s", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
-        outputs = model(urls, attention_mask).logits
+        with cuda_amp_context_manager:
+            outputs = model(urls, attention_mask).logits
+
         regression = outputs.cpu().detach().numpy().shape[1] == 1
 
         if regression:
@@ -374,10 +380,16 @@ def main(args):
     learning_rate = args.learning_rate
     re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
     lr_scheduler_args = args.lr_scheduler_args
+    cuda_amp = args.cuda_amp
 
     waiting_time = 20
     num_labels = 1 if regression else 2
     classes = 2
+    cuda_amp_context_manager = torch.cuda.amp.autocast() if cuda_amp else contextlib.nullcontext()
+
+    # Enable cuDNN benchmark
+    if "cuda" in device and not force_cpu:
+        torch.backends.cudnn.benchmark = True
 
     # Disable parallelism since throws warnings
     os.environ["TOKENIZERS_PARALLELISM"] = "False"
@@ -487,9 +499,10 @@ def main(args):
         logger.error("Embedding layer size does not match with the tokenizer size: %d vs %d", model_embeddings_size, len(tokenizer))
 
     if apply_inference:
-        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, inference_from_stdin=inference_from_stdin,
-                              remove_authority=remove_authority, parallel_likelihood=parallel_likelihood, threshold=threshold,
-                              url_separator=url_separator, remove_positional_data_from_resource=remove_positional_data_from_resource)
+        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, cuda_amp_context_manager,
+                              inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
+                              parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
+                              remove_positional_data_from_resource=remove_positional_data_from_resource)
 
         # Stop execution
         return
@@ -573,11 +586,11 @@ def main(args):
     else:
         train_sampler = RandomSampler(dataset_train)
 
-    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler, num_workers=no_workers)
+    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler, num_workers=no_workers, pin_memory=True)
     dataset_dev = URLsDataset(parallel_urls_dev, non_parallel_urls_dev, regression=regression)
-    dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev), num_workers=no_workers)
+    dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev), num_workers=no_workers, pin_memory=True)
     dataset_test = URLsDataset(parallel_urls_test, non_parallel_urls_test, regression=regression)
-    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test), num_workers=no_workers)
+    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test), num_workers=no_workers, pin_memory=True)
 
     #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
@@ -659,7 +672,8 @@ def main(args):
             model.zero_grad()
 
             # Inference
-            outputs = model(urls, attention_mask).logits
+            with cuda_amp_context_manager:
+                outputs = model(urls, attention_mask).logits
 
             if regression:
                 # Regression
@@ -758,7 +772,8 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
+        dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, cuda_amp_context_manager,
+                                          classes=classes)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -856,7 +871,8 @@ def main(args):
 
         model = model.from_pretrained(model_output).to(device)
 
-    dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, classes=classes)
+    dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, cuda_amp_context_manager,
+                                      classes=classes)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -875,7 +891,8 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, classes=classes)
+    test_inference_metrics = inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, cuda_amp_context_manager,
+                                       classes=classes)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
@@ -947,6 +964,7 @@ def initialization():
     parser.add_argument('--learning-rate', type=float, default=5e-6, help="Learning rate")
     parser.add_argument('--lr-scheduler-args', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"), default=(5e-5, 2000, 2000, "exp_range", 1.0), help="Args. for CLR scheduler")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
+    parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
