@@ -117,7 +117,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
             "macro_f1": macro_f1,}
 
 @torch.no_grad()
-def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, cuda_amp_context_manager, classes=2):
+def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, amp_context_manager, classes=2):
     model.eval()
 
     total_loss = 0.0
@@ -138,22 +138,22 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
         labels = batch["label"].to(device)
 
         # Inference
-        with cuda_amp_context_manager:
+        with amp_context_manager:
             outputs = model(urls, attention_mask).logits
 
-        regression = outputs.cpu().detach().numpy().shape[1] == 1
+            regression = outputs.cpu().detach().numpy().shape[1] == 1
 
-        if regression:
-            # Regression
-            outputs = torch.sigmoid(outputs).squeeze()
-            outputs_argmax = torch.round(outputs.cpu()).squeeze().numpy().astype(np.int64)
-        else:
-            # Binary classification
-            outputs = F.softmax(outputs, dim=1)
-            outputs_argmax = torch.argmax(outputs.cpu(), dim=1).numpy()
+            if regression:
+                # Regression
+                outputs = torch.sigmoid(outputs).squeeze()
+                outputs_argmax = torch.round(outputs).squeeze().cpu().numpy().astype(np.int64) # Workaround for https://github.com/pytorch/pytorch/issues/54774
+            else:
+                # Binary classification
+                outputs = F.softmax(outputs, dim=1)
+                outputs_argmax = torch.argmax(outputs.cpu(), dim=1).numpy()
 
-        # Results
-        loss = criterion(outputs, labels).cpu().detach().numpy()
+            loss = criterion(outputs, labels).cpu().detach().numpy()
+
         labels = labels.cpu()
 
         if regression:
@@ -247,7 +247,7 @@ def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
             plt.pause(time_wait)
 
 @torch.no_grad()
-def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, cuda_amp_context_manager, inference_from_stdin=False,
+def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, inference_from_stdin=False,
                           remove_authority=False, remove_positional_data_from_resource=False, parallel_likelihood=False, threshold=-np.inf,
                           url_separator=' '):
     logger.info("Inference mode enabled")
@@ -300,19 +300,21 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             logger_verbose["tokens"].debug("%s\t%s\t%s\t%d\t%s\t%s", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
-        with cuda_amp_context_manager:
+        with amp_context_manager:
             outputs = model(urls, attention_mask).logits
 
         regression = outputs.cpu().detach().numpy().shape[1] == 1
 
         if regression:
             # Regression
-            outputs = torch.sigmoid(outputs).cpu().detach()
-            outputs_argmax = torch.round(outputs).squeeze().numpy().astype(np.int64)
+            outputs = torch.sigmoid(outputs).detach()
+            outputs_argmax = torch.round(outputs).squeeze().cpu().numpy().astype(np.int64)
         else:
             # Binary classification
-            outputs = F.softmax(outputs, dim=1).cpu().detach()
-            outputs_argmax = torch.argmax(outputs, dim=1).numpy()
+            outputs = F.softmax(outputs, dim=1).detach()
+            outputs_argmax = torch.argmax(outputs, dim=1).cpu().numpy()
+
+        outputs = outputs.cpu()
 
         if len(outputs_argmax.shape) == 0:
             outputs_argmax = np.array([outputs_argmax])
@@ -385,10 +387,18 @@ def main(args):
     waiting_time = 20
     num_labels = 1 if regression else 2
     classes = 2
-    cuda_amp_context_manager = torch.cuda.amp.autocast() if cuda_amp else contextlib.nullcontext()
+    amp_context_manager = contextlib.nullcontext()
+
+    # Configure AMP context manager
+    if cuda_amp and not force_cpu and use_cuda:
+        amp_context_manager = torch.cuda.amp.autocast()
+
+        logger.debug("AMP enabled for CUDA")
+    elif cuda_amp:
+        logger.warning("AMP could not been enabled")
 
     # Enable cuDNN benchmark
-    if "cuda" in device and not force_cpu:
+    if use_cuda and not force_cpu:
         torch.backends.cudnn.benchmark = True
 
     # Disable parallelism since throws warnings
@@ -499,7 +509,7 @@ def main(args):
         logger.error("Embedding layer size does not match with the tokenizer size: %d vs %d", model_embeddings_size, len(tokenizer))
 
     if apply_inference:
-        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, cuda_amp_context_manager,
+        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
                               parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
                               remove_positional_data_from_resource=remove_positional_data_from_resource)
@@ -672,20 +682,21 @@ def main(args):
             model.zero_grad()
 
             # Inference
-            with cuda_amp_context_manager:
+            with amp_context_manager:
                 outputs = model(urls, attention_mask).logits
 
-            if regression:
-                # Regression
-                outputs = torch.sigmoid(outputs).squeeze()
-                outputs_argmax = torch.round(outputs.cpu()).squeeze().type(torch.int64)
-            else:
-                # Binary classification
-                outputs = F.softmax(outputs, dim=1)
-                outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
+                if regression:
+                    # Regression
+                    outputs = torch.sigmoid(outputs).squeeze()
+                    outputs_argmax = torch.round(outputs).squeeze().type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+                else:
+                    # Binary classification
+                    outputs = F.softmax(outputs, dim=1)
+                    outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
+
+                loss = criterion(outputs, labels)
 
             # Results
-            loss = criterion(outputs, labels)
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
 
@@ -772,7 +783,7 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, cuda_amp_context_manager,
+        dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, amp_context_manager,
                                           classes=classes)
 
         # Dev metrics
@@ -871,7 +882,7 @@ def main(args):
 
         model = model.from_pretrained(model_output).to(device)
 
-    dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, cuda_amp_context_manager,
+    dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, amp_context_manager,
                                       classes=classes)
 
     # Dev metrics
@@ -891,7 +902,7 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, cuda_amp_context_manager,
+    test_inference_metrics = inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, amp_context_manager,
                                        classes=classes)
 
     # Test metrics
@@ -964,7 +975,7 @@ def initialization():
     parser.add_argument('--learning-rate', type=float, default=5e-6, help="Learning rate")
     parser.add_argument('--lr-scheduler-args', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"), default=(5e-5, 2000, 2000, "exp_range", 1.0), help="Args. for CLR scheduler")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
-    parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP")
+    parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
