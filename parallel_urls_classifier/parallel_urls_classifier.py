@@ -388,6 +388,10 @@ def main(args):
     num_labels = 1 if regression else 2
     classes = 2
     amp_context_manager = contextlib.nullcontext()
+    scheduler_max_lr, scheduler_step_size_up, scheduler_step_size_down, scheduler_mode, scheduler_gamma = lr_scheduler_args
+
+    if learning_rate > scheduler_max_lr:
+        raise Exception("Provided LR is greater than max. LR of the scheduler")
 
     # Configure AMP context manager
     if cuda_amp and not force_cpu and use_cuda:
@@ -620,7 +624,6 @@ def main(args):
     #                 lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
     optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
                       lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
-    scheduler_max_lr, scheduler_step_size_up, scheduler_step_size_down, scheduler_mode, scheduler_gamma = lr_scheduler_args
     scheduler = CyclicLR(optimizer, learning_rate, scheduler_max_lr,
                          step_size_up=scheduler_step_size_up, step_size_down=scheduler_step_size_down, mode=scheduler_mode, gamma=scheduler_gamma,
                          # https://github.com/pytorch/pytorch/issues/73910
@@ -973,7 +976,9 @@ def initialization():
     parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
     parser.add_argument('--learning-rate', type=float, default=5e-6, help="Learning rate")
-    parser.add_argument('--lr-scheduler-args', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"), default=(5e-5, 2000, 2000, "exp_range", 1.0), help="Args. for CLR scheduler")
+    parser.add_argument('--lr-scheduler-args', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"),\
+                        default=(5e-5, 2000, 2000, "triangular2", 1.0), type=utils.argparse_nargs_type(float, int, int, str, float), \
+                        help="Args. for CLR scheduler")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
 

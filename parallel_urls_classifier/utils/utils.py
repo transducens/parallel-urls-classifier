@@ -7,6 +7,7 @@ import gzip
 import lzma
 from contextlib import contextmanager
 import urllib.parse
+import argparse
 
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
@@ -310,3 +311,22 @@ def do_reinit(model, reinit_n_layers):
     # Re-init last n layers.
     for n in range(reinit_n_layers):
         model.encoder.layer[-(n+1)].apply(lambda module: init_weight_and_bias(model, module))
+
+def argparse_nargs_type(*types):
+    def f(arg):
+        t = types[f._invoked]
+
+        if not isinstance(arg, t):
+            type_arg = type(arg)
+
+            try:
+                arg = t(arg)
+            except:
+                raise argparse.ArgumentTypeError(f"Arg. #{f._invoked + 1} is not instance of {str(t)}, but {str(type_arg)}")
+
+        f._invoked += 1
+        return arg
+
+    f._invoked = 0
+
+    return f
