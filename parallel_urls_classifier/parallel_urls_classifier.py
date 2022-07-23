@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomSampler, SequentialSampler
-from torch.optim.lr_scheduler import CyclicLR
+from torch.optim.lr_scheduler import CyclicLR, LambdaLR
 from torch.optim import Adam, AdamW
 
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW
@@ -332,6 +332,52 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
                 print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
 
+def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
+    scheduler_instance = None
+    mandatory_args = ""
+
+    def check_args(num_args, str_args):
+        if len(args) != num_args:
+            raise Exception(f"LR scheduler: '{scheduler}' mandatory args: {str_args}")
+
+    if scheduler == "linear":
+        mandatory_args = "num_warmup_steps, num_training_steps"
+
+        import transformers.get_linear_schedule_with_warmup
+
+        check_args(2, mandatory_args)
+
+        scheduler_instance = transformers.get_linear_schedule_with_warmup(optimizer, *args, **kwargs)
+    elif scheduler == "CLR": # CyclicLR
+        mandatory_args = "base_lr, max_lr"
+
+        check_args(2, mandatory_args)
+
+        scheduler_instance = CyclicLR(optimizer, *args, **kwargs)
+    elif scheduler == "inverse_sqrt":
+        mandatory_args = "num_warmup_steps"
+
+        check_args(1, mandatory_args)
+
+        def inverse_sqrt(current_step):
+            num_warmup_steps = args[0]
+
+            # From https://fairseq.readthedocs.io/en/latest/_modules/fairseq/optim/lr_scheduler/inverse_square_root_schedule.html
+            initial_lr = optimizer.defaults["lr"]
+            decay_factor = initial_lr * num_warmup_steps**0.5
+            lr = decay_factor * current_step**-0.5
+
+            return lr / initial_lr
+
+        scheduler_instance = LambdaLR(optimizer, inverse_sqrt, **kwargs)
+    else:
+        raise Exception(f"Unknown LR scheduler: {scheduler}")
+
+    logger.debug("LR scheduler: '%s' mandatory args: %s: %s", scheduler, mandatory_args, str(args))
+    logger.debug("LR scheduler: '%s' optional args: %s", scheduler, str(kwargs))
+
+    return scheduler_instance
+
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
@@ -381,17 +427,20 @@ def main(args):
     url_separator_new_token = args.url_separator_new_token
     learning_rate = args.learning_rate
     re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
-    lr_scheduler_args = args.lr_scheduler_args
+    lr_scheduler_args_linear = args.lr_scheduler_args_linear
+    lr_scheduler_args_clr = args.lr_scheduler_args_clr
+    lr_scheduler_args_inverse_sqrt = args.lr_scheduler_args_inverse_sqrt
     cuda_amp = args.cuda_amp
+    scheduler_str = args.lr_scheduler
 
     waiting_time = 20
     num_labels = 1 if regression else 2
     classes = 2
     amp_context_manager = contextlib.nullcontext()
-    scheduler_max_lr, scheduler_step_size_up, scheduler_step_size_down, scheduler_mode, scheduler_gamma = lr_scheduler_args
 
-    if learning_rate > scheduler_max_lr:
-        raise Exception("Provided LR is greater than max. LR of the scheduler")
+    if scheduler_str in ("linear",) and train_until_patience:
+        # Depending on the LR scheduler, the training might even stop at some point (e.g. linear LR scheduler will set the LR=0 if the run epochs is greater than the provided epochs)
+        logger.warning("You set a LR scheduler ('%s' scheduler) which conflicts with --train-until-patince: you might want to check this out and change the configuration", scheduler_str)
 
     # Configure AMP context manager
     if cuda_amp and not force_cpu and use_cuda:
@@ -611,6 +660,7 @@ def main(args):
     #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
+    training_steps = len(dataloader_train) * epochs
 
     if regression:
         # Regression
@@ -624,11 +674,29 @@ def main(args):
     #                 lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
     optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
                       lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
-    scheduler = CyclicLR(optimizer, learning_rate, scheduler_max_lr,
-                         step_size_up=scheduler_step_size_up, step_size_down=scheduler_step_size_down, mode=scheduler_mode, gamma=scheduler_gamma,
-                         # https://github.com/pytorch/pytorch/issues/73910
-                         cycle_momentum=False,
-                         )
+
+    # Get LR scheduler args
+    if scheduler_str == "linear":
+        scheduler_args = [int(lr_scheduler_args_linear[0] * training_steps), training_steps]
+        scheduler_kwargs = {}
+    elif scheduler_str == "CLR":
+        scheduler_max_lr, scheduler_step_size_up, scheduler_step_size_down, scheduler_mode, scheduler_gamma = lr_scheduler_args_clr
+
+        if learning_rate > scheduler_max_lr:
+            raise Exception("Provided LR is greater than max. LR of the scheduler")
+
+        scheduler_args = [learning_rate, scheduler_max_lr]
+        scheduler_kwargs = {"step_size_up": scheduler_step_size_up, "step_size_down": scheduler_step_size_down,
+                            "mode": scheduler_mode, "gamma": scheduler_gamma,
+                            "cycle_momentum": False, # https://github.com/pytorch/pytorch/issues/73910
+                            }
+    elif scheduler_str == "inverse_sqrt":
+        scheduler_args = [int(lr_scheduler_args_inverse_sqrt[0] * training_steps)]
+        scheduler_kwargs = {}
+    else:
+        raise Exception(f"Unknown LR scheduler: {scheduler}")
+
+    scheduler = get_lr_scheduler(scheduler_str, optimizer, *scheduler_args, **scheduler_kwargs)
 
     best_values_minimize = False
     best_values_maximize = True
@@ -975,10 +1043,15 @@ def initialization():
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
     parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
-    parser.add_argument('--learning-rate', type=float, default=5e-6, help="Learning rate")
-    parser.add_argument('--lr-scheduler-args', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"),\
-                        default=(5e-5, 2000, 2000, "triangular2", 1.0), type=utils.argparse_nargs_type(float, int, int, str, float), \
+    parser.add_argument('--learning-rate', type=float, default=2e-5, help="Learning rate")
+    parser.add_argument('--lr-scheduler', choices=["linear", "CLR", "inverse_sqrt"], default="CLR", help="LR scheduler")
+    parser.add_argument('--lr-scheduler-args-linear', nargs=1, metavar=("warmup_steps_percentage"), default=(0.1), \
+                        type=utils.argparse_nargs_type(float), help="Args. for linear scheduler")
+    parser.add_argument('--lr-scheduler-args-clr', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"), \
+                        default=(2e-4, 2000, 2000, "triangular2", 1.0), type=utils.argparse_nargs_type(float, int, int, str, float), \
                         help="Args. for CLR scheduler")
+    parser.add_argument('--lr-scheduler-args-inverse-sqrt', nargs=1, metavar=("warmup_steps_percentage"), default=(0.1), \
+                        type=utils.argparse_nargs_type(float), help="Args. for inverse sqrt")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
 
