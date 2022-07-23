@@ -660,7 +660,8 @@ def main(args):
     #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
-    training_steps = len(dataloader_train) * epochs
+    training_steps_per_epoch = len(dataloader_train)
+    training_steps = training_steps_per_epoch * epochs
 
     if regression:
         # Regression
@@ -680,13 +681,22 @@ def main(args):
         scheduler_args = [int(lr_scheduler_args_linear[0] * training_steps), training_steps]
         scheduler_kwargs = {}
     elif scheduler_str == "CLR":
-        scheduler_max_lr, scheduler_step_size_up, scheduler_step_size_down, scheduler_mode, scheduler_gamma = lr_scheduler_args_clr
+        scheduler_max_lr, scheduler_step_size, scheduler_mode, scheduler_gamma = lr_scheduler_args_clr
 
         if learning_rate > scheduler_max_lr:
-            raise Exception("Provided LR is greater than max. LR of the scheduler")
+            new_scheduler_max_lr = scheduler_max_lr * 4.0 # Based on the CLR paper (possible values are [2.0, 3.0])
+
+            logger.warning("LR scheduler: '%s': provided LR (%f) is greater than provided max. LR (%f): setting max. LR to %f",
+                           scheduler_str, learning_rate, scheduler_max_lr, new_scheduler_max_lr)
+
+            scheduler_max_lr = new_scheduler_max_lr
+        if scheduler_step_size <= 0:
+            scheduler_step_size = 2 * training_steps_per_epoch # Based on the CLR paper (possible values are [2, ..., 8])
+
+            logger.warning("LR scheduler: '%s': provided step size is 0 or negative: setting value to %d", scheduler_str, scheduler_step_size)
 
         scheduler_args = [learning_rate, scheduler_max_lr]
-        scheduler_kwargs = {"step_size_up": scheduler_step_size_up, "step_size_down": scheduler_step_size_down,
+        scheduler_kwargs = {"step_size_up": scheduler_step_size, "step_size_down": scheduler_step_size,
                             "mode": scheduler_mode, "gamma": scheduler_gamma,
                             "cycle_momentum": False, # https://github.com/pytorch/pytorch/issues/73910
                             }
@@ -1047,8 +1057,8 @@ def initialization():
     parser.add_argument('--lr-scheduler', choices=["linear", "CLR", "inverse_sqrt"], default="CLR", help="LR scheduler")
     parser.add_argument('--lr-scheduler-args-linear', nargs=1, metavar=("warmup_steps_percentage"), default=(0.1), \
                         type=utils.argparse_nargs_type(float), help="Args. for linear scheduler")
-    parser.add_argument('--lr-scheduler-args-clr', nargs=5, metavar=("max_lr", "step_size_up", "step_size_down", "mode", "gamma"), \
-                        default=(2e-4, 2000, 2000, "triangular2", 1.0), type=utils.argparse_nargs_type(float, int, int, str, float), \
+    parser.add_argument('--lr-scheduler-args-clr', nargs=4, metavar=("max_lr", "step_size", "mode", "gamma"), \
+                        default=(8e-5, 2000, "triangular2", 1.0), type=utils.argparse_nargs_type(float, int, str, float), \
                         help="Args. for CLR scheduler")
     parser.add_argument('--lr-scheduler-args-inverse-sqrt', nargs=1, metavar=("warmup_steps_percentage"), default=(0.1), \
                         type=utils.argparse_nargs_type(float), help="Args. for inverse sqrt")
