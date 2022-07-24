@@ -19,7 +19,7 @@ from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomS
 from torch.optim.lr_scheduler import CyclicLR, LambdaLR
 from torch.optim import Adam, AdamW
 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AdamW
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import matplotlib.pyplot as plt
 
 # Disable (less verbose) 3rd party logging
@@ -427,11 +427,12 @@ def main(args):
     url_separator_new_token = args.url_separator_new_token
     learning_rate = args.learning_rate
     re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
+    scheduler_str = args.lr_scheduler
     lr_scheduler_args_linear = args.lr_scheduler_args_linear
     lr_scheduler_args_clr = args.lr_scheduler_args_clr
     lr_scheduler_args_inverse_sqrt = args.lr_scheduler_args_inverse_sqrt
     cuda_amp = args.cuda_amp
-    scheduler_str = args.lr_scheduler
+    llrd = args.llrd
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -671,9 +672,16 @@ def main(args):
         criterion = nn.CrossEntropyLoss(weight=loss_weight)
 
     criterion = criterion.to(device)
-    #optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()),
+
+    if llrd:
+        #model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.0) # Adam
+        model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01) # AdamW
+    else:
+        model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+
+    #optimizer = Adam(model_parameters,
     #                 lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
-    optimizer = AdamW(filter(lambda p: p.requires_grad, model.parameters()),
+    optimizer = AdamW(model_parameters,
                       lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
 
     # Get LR scheduler args
@@ -1064,6 +1072,7 @@ def initialization():
                         type=utils.argparse_nargs_type(float), help="Args. for inverse sqrt")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
+    parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
