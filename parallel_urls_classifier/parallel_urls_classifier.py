@@ -19,7 +19,7 @@ from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomS
 from torch.optim.lr_scheduler import CyclicLR, LambdaLR
 from torch.optim import Adam, AdamW
 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, get_linear_schedule_with_warmup
 import matplotlib.pyplot as plt
 
 # Disable (less verbose) 3rd party logging
@@ -343,11 +343,9 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
     if scheduler == "linear":
         mandatory_args = "num_warmup_steps, num_training_steps"
 
-        import transformers.get_linear_schedule_with_warmup
-
         check_args(2, mandatory_args)
 
-        scheduler_instance = transformers.get_linear_schedule_with_warmup(optimizer, *args, **kwargs)
+        scheduler_instance = get_linear_schedule_with_warmup(optimizer, *args, **kwargs)
     elif scheduler == "CLR": # CyclicLR
         mandatory_args = "base_lr, max_lr"
 
@@ -361,6 +359,9 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
 
         def inverse_sqrt(current_step):
             num_warmup_steps = args[0]
+
+            if current_step < num_warmup_steps:
+                return float(current_step) / float(max(1, num_warmup_steps))
 
             # From https://fairseq.readthedocs.io/en/latest/_modules/fairseq/optim/lr_scheduler/inverse_square_root_schedule.html
             initial_lr = optimizer.defaults["lr"]
@@ -428,9 +429,9 @@ def main(args):
     learning_rate = args.learning_rate
     re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
     scheduler_str = args.lr_scheduler
-    lr_scheduler_args_linear = args.lr_scheduler_args_linear
+    lr_scheduler_args_linear = utils.get_tuple_if_is_not_tuple(args.lr_scheduler_args_linear)
     lr_scheduler_args_clr = args.lr_scheduler_args_clr
-    lr_scheduler_args_inverse_sqrt = args.lr_scheduler_args_inverse_sqrt
+    lr_scheduler_args_inverse_sqrt = utils.get_tuple_if_is_not_tuple(args.lr_scheduler_args_inverse_sqrt)
     cuda_amp = args.cuda_amp
     llrd = args.llrd
 
@@ -692,7 +693,7 @@ def main(args):
         scheduler_max_lr, scheduler_step_size, scheduler_mode, scheduler_gamma = lr_scheduler_args_clr
 
         if learning_rate > scheduler_max_lr:
-            new_scheduler_max_lr = scheduler_max_lr * 4.0 # Based on the CLR paper (possible values are [2.0, 3.0])
+            new_scheduler_max_lr = learning_rate * 4.0 # Based on the CLR paper (possible values are [2.0, 3.0])
 
             logger.warning("LR scheduler: '%s': provided LR (%f) is greater than provided max. LR (%f): setting max. LR to %f",
                            scheduler_str, learning_rate, scheduler_max_lr, new_scheduler_max_lr)
@@ -1063,12 +1064,12 @@ def initialization():
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
     parser.add_argument('--learning-rate', type=float, default=2e-5, help="Learning rate")
     parser.add_argument('--lr-scheduler', choices=["linear", "CLR", "inverse_sqrt"], default="CLR", help="LR scheduler")
-    parser.add_argument('--lr-scheduler-args-linear', nargs=1, metavar=("warmup_steps_percentage"), default=(0.1), \
+    parser.add_argument('--lr-scheduler-args-linear', nargs=1, metavar=("warmup_steps_percentage",), default=(0.1), \
                         type=utils.argparse_nargs_type(float), help="Args. for linear scheduler")
     parser.add_argument('--lr-scheduler-args-clr', nargs=4, metavar=("max_lr", "step_size", "mode", "gamma"), \
                         default=(8e-5, 2000, "triangular2", 1.0), type=utils.argparse_nargs_type(float, int, str, float), \
                         help="Args. for CLR scheduler")
-    parser.add_argument('--lr-scheduler-args-inverse-sqrt', nargs=1, metavar=("warmup_steps_percentage"), default=(0.1), \
+    parser.add_argument('--lr-scheduler-args-inverse-sqrt', nargs=1, metavar=("warmup_steps_percentage",), default=(0.1), \
                         type=utils.argparse_nargs_type(float), help="Args. for inverse sqrt")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")

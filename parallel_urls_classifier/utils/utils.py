@@ -388,3 +388,9 @@ def get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01):
     opt_parameters.append(embed_params)
 
     return opt_parameters
+
+def get_tuple_if_is_not_tuple(obj):
+    if not isinstance(obj, tuple):
+        return (obj,)
+
+    return obj
