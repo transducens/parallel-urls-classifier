@@ -315,6 +315,11 @@ def do_reinit(model, reinit_n_layers):
 def argparse_nargs_type(*types):
     def f(arg):
         t = types[f._invoked]
+        choices = None
+
+        if isinstance(t, dict):
+            choices = t["choices"]
+            t = t["type"]
 
         if not isinstance(arg, t):
             type_arg = type(arg)
@@ -323,6 +328,9 @@ def argparse_nargs_type(*types):
                 arg = t(arg)
             except:
                 raise argparse.ArgumentTypeError(f"Arg. #{f._invoked + 1} is not instance of {str(t)}, but {str(type_arg)}")
+        elif choices is not None:
+            if arg not in choices:
+                raise argparse.ArgumentTypeError(f"Arg. #{f._invoked + 1} invalid value: value not in {str(choices)}")
 
         f._invoked += 1
         return arg

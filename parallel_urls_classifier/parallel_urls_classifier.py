@@ -253,7 +253,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     logger.info("Inference mode enabled")
 
     if not inference_from_stdin:
-        logging.info("Insert 2 blank lines in order to end")
+        logger.info("Insert 2 blank lines in order to end")
 
     logger_verbose["tokens"].debug("model_input\ttokens\ttokens2str\tunk_chars\tinitial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
 
@@ -434,6 +434,14 @@ def main(args):
     lr_scheduler_args_inverse_sqrt = utils.get_tuple_if_is_not_tuple(args.lr_scheduler_args_inverse_sqrt)
     cuda_amp = args.cuda_amp
     llrd = args.llrd
+    lock_file = args.lock_file
+
+    if lock_file and utils.exists(lock_file):
+        logger.warning("Lock file ('%s') exists: finishing training", lock_file)
+
+        sys.exit(0)
+    if lock_file:
+        logger.debug("Lock file will be created if the training finishes: %s", lock_file)
 
     waiting_time = 20
     num_labels = 1 if regression else 2
@@ -690,17 +698,18 @@ def main(args):
         scheduler_args = [int(lr_scheduler_args_linear[0] * training_steps), training_steps]
         scheduler_kwargs = {}
     elif scheduler_str == "CLR":
-        scheduler_max_lr, scheduler_step_size, scheduler_mode, scheduler_gamma = lr_scheduler_args_clr
+        scheduler_max_lr, scheduler_step_size, scheduler_mode, scheduler_gamma, scheduler_max_lr_factor, scheduler_step_size_factor \
+            = lr_scheduler_args_clr
 
         if learning_rate > scheduler_max_lr:
-            new_scheduler_max_lr = learning_rate * 4.0 # Based on the CLR paper (possible values are [2.0, 3.0])
+            new_scheduler_max_lr = learning_rate * scheduler_max_lr_factor # Based on the CLR paper (possible values are [3.0, 4.0])
 
             logger.warning("LR scheduler: '%s': provided LR (%f) is greater than provided max. LR (%f): setting max. LR to %f",
                            scheduler_str, learning_rate, scheduler_max_lr, new_scheduler_max_lr)
 
             scheduler_max_lr = new_scheduler_max_lr
         if scheduler_step_size <= 0:
-            scheduler_step_size = 2 * training_steps_per_epoch # Based on the CLR paper (possible values are [2, ..., 8])
+            scheduler_step_size = scheduler_step_size_factor * training_steps_per_epoch # Based on the CLR paper (possible values are [2, ..., 8])
 
             logger.warning("LR scheduler: '%s': provided step size is 0 or negative: setting value to %d", scheduler_str, scheduler_step_size)
 
@@ -1024,6 +1033,14 @@ def main(args):
 
         plot_statistics(plot_args, path=args.plot_path, freeze=True) # Let the user finish the execution if necessary
 
+    if lock_file:
+        # Create lock file since the training finished
+        from pathlib import Path
+
+        Path(lock_file).touch()
+
+        logger.debug("Lock file created: %s", lock_file)
+
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Parallel URLs classifier")
@@ -1066,8 +1083,9 @@ def initialization():
     parser.add_argument('--lr-scheduler', choices=["linear", "CLR", "inverse_sqrt"], default="CLR", help="LR scheduler")
     parser.add_argument('--lr-scheduler-args-linear', nargs=1, metavar=("warmup_steps_percentage",), default=(0.1), \
                         type=utils.argparse_nargs_type(float), help="Args. for linear scheduler")
-    parser.add_argument('--lr-scheduler-args-clr', nargs=4, metavar=("max_lr", "step_size", "mode", "gamma"), \
-                        default=(8e-5, 2000, "triangular2", 1.0), type=utils.argparse_nargs_type(float, int, str, float), \
+    parser.add_argument('--lr-scheduler-args-clr', nargs=6, metavar=("max_lr", "step_size", "mode", "gamma", "max_lr_factor", "step_size_factor"), \
+                        default=(8e-5, 2000, "triangular2", 1.0, 4, 2),
+                        type=utils.argparse_nargs_type(float, int, str, float, {"type": int, "choices": (3, 4)}, {"type": int, "choices": tuple(range(2,8+1))}), \
                         help="Args. for CLR scheduler")
     parser.add_argument('--lr-scheduler-args-inverse-sqrt', nargs=1, metavar=("warmup_steps_percentage",), default=(0.1), \
                         type=utils.argparse_nargs_type(float), help="Args. for inverse sqrt")
@@ -1078,10 +1096,13 @@ def initialization():
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
     parser.add_argument('--plot-path', help="If set, the plot will be stored instead of displayed")
+    parser.add_argument('--lock-file', help="If set, and the file does not exist, it will be created once the training finishes. If does exist, the training will not be executed")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 
     args = parser.parse_args()
+
+    print(args)
 
     return args
 
