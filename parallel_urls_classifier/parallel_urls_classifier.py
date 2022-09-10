@@ -1,5 +1,4 @@
 
-import gc
 import os
 import sys
 import time
@@ -10,6 +9,14 @@ import tempfile
 import contextlib
 
 import utils.utils as utils
+from inference import (
+    inference,
+    interactive_inference,
+)
+from metrics import (
+    get_metrics,
+    plot_statistics,
+)
 
 import numpy as np
 import torch
@@ -20,7 +27,6 @@ from torch.optim.lr_scheduler import CyclicLR, LambdaLR
 from torch.optim import Adam, AdamW
 
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, get_linear_schedule_with_warmup
-import matplotlib.pyplot as plt
 
 # Disable (less verbose) 3rd party logging
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
@@ -52,285 +58,6 @@ class URLsDataset(Dataset):
             idx = idx.tolist()
 
         return {"url_str": self.data[idx], "label": self.labels[idx]}
-
-def get_confusion_matrix(outputs_argmax, labels, classes=2):
-    tp, fp, fn, tn = np.zeros(classes), np.zeros(classes), np.zeros(classes), np.zeros(classes)
-
-    for c in range(classes):
-        # Multiclass confusion matrix
-        # https://www.analyticsvidhya.com/blog/2021/06/confusion-matrix-for-multi-class-classification/
-        tp[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c))
-        fp[c] = torch.sum(torch.logical_and(labels != c, outputs_argmax == c))
-        fn[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax != c))
-        tn[c] = torch.sum(torch.logical_and(labels != c, outputs_argmax != c))
-
-    return {"tp": tp,
-            "fp": fp,
-            "fn": fn,
-            "tn": tn,}
-
-def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, log=False):
-    acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
-
-    no_values_per_class = np.zeros(classes)
-    acc_per_class = np.zeros(classes)
-    precision, recall, f1 = np.zeros(classes), np.zeros(classes), np.zeros(classes)
-    macro_f1 = 0.0
-
-    conf_mat = get_confusion_matrix(outputs_argmax, labels, classes=classes)
-    tp, fp, fn, tn = conf_mat["tp"], conf_mat["fp"], conf_mat["fn"], conf_mat["tn"]
-
-    for c in range(classes):
-        no_values_per_class[c] = torch.sum(labels == c)
-
-        # How many times have we classify correctly the target class taking into account all the data? -> we get how many percentage is from each class
-        acc_per_class[c] = torch.sum(torch.logical_and(labels == c, outputs_argmax == c)) / current_batch_size
-
-        # Metrics
-        # http://rali.iro.umontreal.ca/rali/sites/default/files/publis/SokolovaLapalme-JIPM09.pdf
-        # https://developers.google.com/machine-learning/crash-course/classification/precision-and-recall
-        precision[c] = tp[c] / (tp[c] + fp[c]) if (tp[c] + fp[c]) != 0 else 1.0
-        recall[c] = tp[c] / (tp[c] + fn[c]) if (tp[c] + fn[c]) != 0 else 1.0
-        f1[c] = 2 * ((precision[c] * recall[c]) / (precision[c] + recall[c])) if not np.isclose(precision[c] + recall[c], 0.0) else 0.0
-
-    #assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
-    assert np.isclose(np.sum(acc_per_class), acc), f"Acc and the sum of acc per classes should match ({acc} vs {np.sum(acc_per_class)})"
-
-    macro_f1 = np.sum(f1) / f1.shape[0]
-
-    if log:
-        logger.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
-        logger.debug("[train:batch#%d] Acc per class (non-parallel->precision|recall|f1, parallel->precision|recall|f1): (%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)",
-                     idx + 1, no_values_per_class[0], precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, no_values_per_class[1], precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
-        logger.debug("[train:batch#%d] Macro F1: %.2f %%", idx + 1, macro_f1 * 100.0)
-
-    return {"acc": acc,
-            "acc_per_class": acc_per_class,
-            "no_values_per_class": no_values_per_class,
-            "tp": tp,
-            "fp": fp,
-            "fn": fn,
-            "tn": tn,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "macro_f1": macro_f1,}
-
-@torch.no_grad()
-def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, amp_context_manager, classes=2):
-    model.eval()
-
-    total_loss = 0.0
-    total_acc = 0.0
-    total_acc_per_class = np.zeros(2)
-    total_acc_per_class_abs_precision = np.zeros(2)
-    total_acc_per_class_abs_recall = np.zeros(2)
-    total_acc_per_class_abs_f1 = np.zeros(2)
-    total_macro_f1 = 0.0
-    all_outputs = []
-    all_labels = []
-
-    for idx, batch in enumerate(dataloader):
-        batch_urls_str = batch["url_str"]
-        tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
-        urls = tokens["input_ids"].to(device)
-        attention_mask = tokens["attention_mask"].to(device)
-        labels = batch["label"].to(device)
-
-        # Inference
-        with amp_context_manager:
-            outputs = model(urls, attention_mask).logits
-
-            regression = outputs.cpu().detach().numpy().shape[1] == 1
-
-            if regression:
-                # Regression
-                outputs = torch.sigmoid(outputs).squeeze()
-                outputs_argmax = torch.round(outputs).squeeze().cpu().numpy().astype(np.int64) # Workaround for https://github.com/pytorch/pytorch/issues/54774
-            else:
-                # Binary classification
-                outputs = F.softmax(outputs, dim=1)
-                outputs_argmax = torch.argmax(outputs.cpu(), dim=1).numpy()
-
-            loss = criterion(outputs, labels).cpu().detach().numpy()
-
-        labels = labels.cpu()
-
-        if regression:
-            labels = torch.round(labels).type(torch.LongTensor)
-
-        total_loss += loss
-
-        all_outputs.extend(outputs_argmax.tolist())
-        all_labels.extend(labels.tolist())
-
-    all_outputs = torch.tensor(all_outputs)
-    all_labels = torch.tensor(all_labels)
-    metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
-
-    total_loss /= idx + 1
-    total_acc += metrics["acc"]
-    total_acc_per_class += metrics["acc_per_class"]
-    total_acc_per_class_abs_precision += metrics["precision"]
-    total_acc_per_class_abs_recall += metrics["recall"]
-    total_acc_per_class_abs_f1 += metrics["f1"]
-    total_macro_f1 += metrics["macro_f1"]
-
-    return {"loss": total_loss,
-            "acc": total_acc,
-            "acc_per_class": total_acc_per_class,
-            "precision": total_acc_per_class_abs_precision,
-            "recall": total_acc_per_class_abs_recall,
-            "f1": total_acc_per_class_abs_f1,
-            "macro_f1": total_macro_f1,}
-
-def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
-    plt_plot_common_params = {"marker": 'o', "markersize": 2,}
-    plt_scatter_common_params = {"marker": 'o', "s": 2,}
-    plt_legend_common_params = {"loc": "center left", "bbox_to_anchor": (1, 0.5), "fontsize": "x-small",}
-
-    plt.clf()
-
-    plt.subplot(3, 2, 1)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_loss"]))))), args["batch_loss"], label="Train loss", **plt_plot_common_params)
-    plt.legend(**plt_legend_common_params)
-
-    plt.subplot(3, 2, 5)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc"]))))), args["batch_acc"], label="Train acc", **plt_plot_common_params)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][0]))))), args["batch_acc_classes"][0], label="Train F1: no p.", **plt_plot_common_params)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_acc_classes"][1]))))), args["batch_acc_classes"][1], label="Train F1: para.", **plt_plot_common_params)
-    plt.plot(list(map(lambda x: x * args["show_statistics_every_batches"], list(range(len(args["batch_macro_f1"]))))), args["batch_macro_f1"], label="Train macro F1", **plt_plot_common_params)
-    plt.legend(**plt_legend_common_params)
-
-    plt.subplot(3, 2, 2)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_loss"], label="Train loss", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_loss"], label="Dev loss", **plt_plot_common_params)
-    plt.legend(**plt_legend_common_params)
-
-    plt.subplot(3, 2, 3)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc"], label="Train acc", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc_classes"][0], label="Train F1: no p.", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_acc_classes"][1], label="Train F1: para.", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_train_macro_f1"], label="Train macro F1", **plt_plot_common_params)
-    plt.legend(**plt_legend_common_params)
-
-    plt.subplot(3, 2, 4)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc"], label="Dev acc", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc_classes"][0], label="Dev F1: no p.", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_acc_classes"][1], label="Dev F1: para.", **plt_plot_common_params)
-    plt.plot(list(range(1, args["epoch"] + 1)), args["epoch_dev_macro_f1"], label="Dev macro F1", **plt_plot_common_params)
-    plt.legend(**plt_legend_common_params)
-
-    plot_final = True if args["final_dev_acc"] else False
-
-    plt.subplot(3, 2, 6)
-    plt.scatter(0 if plot_final else None, args["final_dev_acc"] if plot_final else None, label="Dev acc", **plt_scatter_common_params)
-    plt.scatter(0 if plot_final else None, args["final_test_acc"] if plot_final else None, label="Test acc", **plt_scatter_common_params)
-    plt.scatter(1 if plot_final else None, args["final_dev_macro_f1"] if plot_final else None, label="Dev macro F1", **plt_scatter_common_params)
-    plt.scatter(1 if plot_final else None, args["final_test_macro_f1"] if plot_final else None, label="Test macro F1", **plt_scatter_common_params)
-    plt.legend(**plt_legend_common_params)
-
-    #plt.tight_layout()
-    plt.subplots_adjust(left=0.08,
-                        bottom=0.07,
-                        right=0.8,
-                        top=0.95,
-                        wspace=1.0,
-                        hspace=0.4)
-
-    if path:
-        plt.savefig(path, dpi=1200)
-    else:
-        if freeze:
-            plt.show()
-        else:
-            plt.pause(time_wait)
-
-@torch.no_grad()
-def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, inference_from_stdin=False,
-                          remove_authority=False, remove_positional_data_from_resource=False, parallel_likelihood=False, threshold=-np.inf,
-                          url_separator=' '):
-    logger.info("Inference mode enabled")
-
-    if not inference_from_stdin:
-        logger.info("Insert 2 blank lines in order to end")
-
-    logger_verbose["tokens"].debug("model_input\ttokens\ttokens2str\tunk_chars\tinitial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
-
-    model.eval()
-
-    while True:
-        if inference_from_stdin:
-            try:
-                target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator), return_urls=True))
-            except StopIteration:
-                break
-
-            initial_src_urls = [u[0] for u in initial_urls]
-            initial_trg_urls = [u[1] for u in initial_urls]
-        else:
-            initial_src_urls = [input("src url: ").strip()]
-            initial_trg_urls = [input("trg url: ").strip()]
-
-            if not initial_src_urls[0] and not initial_trg_urls[0]:
-                break
-
-            src_url = initial_src_urls[0]
-            trg_url = initial_trg_urls[0]
-            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator)))
-
-        # Tokens
-        tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
-        urls = tokens["input_ids"].to(device)
-        attention_mask = tokens["attention_mask"].to(device)
-
-        # Debug info
-        ## Tokens
-        urls_tokens = urls.cpu() * attention_mask.cpu()
-
-        for ut in urls_tokens:
-            url_tokens = ut[ut.nonzero()][:,0]
-            original_str_from_tokens = tokenizer.decode(url_tokens) # Detokenize
-            str_from_tokens = ' '.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a space between tokens
-            ## Unk
-            unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
-            sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(url_separator))} vs {len(str_from_tokens.split(url_separator))}"
-            sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(url_separator)))} vs " \
-                                       f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(url_separator)))}"
-
-            logger_verbose["tokens"].debug("%s\t%s\t%s\t%d\t%s\t%s", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
-
-        with amp_context_manager:
-            outputs = model(urls, attention_mask).logits
-
-        regression = outputs.cpu().detach().numpy().shape[1] == 1
-
-        if regression:
-            # Regression
-            outputs = torch.sigmoid(outputs).detach()
-            outputs_argmax = torch.round(outputs).squeeze().cpu().numpy().astype(np.int64)
-        else:
-            # Binary classification
-            outputs = F.softmax(outputs, dim=1).detach()
-            outputs_argmax = torch.argmax(outputs, dim=1).cpu().numpy()
-
-        outputs = outputs.cpu()
-
-        if len(outputs_argmax.shape) == 0:
-            outputs_argmax = np.array([outputs_argmax])
-
-        assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {initial_src_urls})"
-        assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {initial_trg_urls})"
-
-        if parallel_likelihood:
-            for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
-                likelihood = data[0] if regression else data[1] # parallel
-
-                if likelihood >= threshold:
-                    print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
-        else:
-            for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
-                print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
 
 def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
     scheduler_instance = None
@@ -572,8 +299,8 @@ def main(args):
         logger.error("Embedding layer size does not match with the tokenizer size: %d vs %d", model_embeddings_size, len(tokenizer))
 
     if apply_inference:
-        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
-                              inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
+        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, logger,
+                              logger_verbose, inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
                               parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
                               remove_positional_data_from_resource=remove_positional_data_from_resource)
 
@@ -807,7 +534,7 @@ def main(args):
 
             # Get metrics
             log = (idx + 1) % show_statistics_every_batches == 0
-            metrics = get_metrics(outputs_argmax, labels, current_batch_size, classes=classes, idx=idx, log=log)
+            metrics = get_metrics(outputs_argmax, labels, current_batch_size, logger, classes=classes, idx=idx, log=log)
 
             if log:
                 logger.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
@@ -862,7 +589,7 @@ def main(args):
 
         all_outputs = torch.tensor(all_outputs)
         all_labels = torch.tensor(all_labels)
-        metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
+        metrics = get_metrics(all_outputs, all_labels, len(all_labels), logger, classes=classes)
 
         epoch_loss /= idx + 1
         epoch_acc = metrics["acc"]
@@ -883,7 +610,7 @@ def main(args):
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
         dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, amp_context_manager,
-                                          classes=classes)
+                                          logger, classes=classes)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -982,7 +709,7 @@ def main(args):
         model = model.from_pretrained(model_output).to(device)
 
     dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, amp_context_manager,
-                                      classes=classes)
+                                      logger, classes=classes)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -1002,7 +729,7 @@ def main(args):
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
     test_inference_metrics = inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, amp_context_manager,
-                                       classes=classes)
+                                       logger, classes=classes)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
