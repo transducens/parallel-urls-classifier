@@ -1,8 +1,8 @@
 
 import sys
 
-import utils.utils as utils
-from metrics import (
+import parallel_urls_classifier.utils.utils as utils
+from parallel_urls_classifier.metrics import (
     get_metrics,
 )
 

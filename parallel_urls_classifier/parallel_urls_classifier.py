@@ -8,12 +8,12 @@ import argparse
 import tempfile
 import contextlib
 
-import utils.utils as utils
-from inference import (
+import parallel_urls_classifier.utils.utils as utils
+from parallel_urls_classifier.inference import (
     inference,
     interactive_inference,
 )
-from metrics import (
+from parallel_urls_classifier.metrics import (
     get_metrics,
     plot_statistics,
 )
@@ -833,11 +833,15 @@ def initialization():
 
     return args
 
-if __name__ == "__main__":
-    args = initialization()
+def cli():
+    global logger
 
+    args = initialization()
     logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=logging.DEBUG if args.verbose else logging.INFO)
 
     logger.debug("Arguments processed: {}".format(str(args)))
 
     main(args)
+
+if __name__ == "__main__":
+    cli()

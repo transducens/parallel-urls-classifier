@@ -4,3 +4,5 @@ transformers
 matplotlib
 html5lib
 beautifulsoup4
+Flask
+psutil
