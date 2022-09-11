@@ -1,9 +1,10 @@
 
 import logging
 import argparse
+import json
 
 import parallel_urls_classifier.utils.utils as utils
-import parallel_urls_classifier as puc
+import parallel_urls_classifier.parallel_urls_classifier as puc
 import parallel_urls_classifier.inference as puc_inference
 
 import torch
@@ -30,18 +31,41 @@ global_conf = {
 }
 logger = logging
 
-@app.route('/hello-world', methods=['GET'])
+@app.route('/', methods=['GET'])
+def info():
+    available_routes = json.dumps(
+        {
+            "/hello-world": ["GET"],
+            "/inference": ["GET", "POST"],
+        },
+        indent=4).replace('\n', '<br/>').replace(' ', '&nbsp;')
+
+    return f"Available routes:<br/>{available_routes}"
+
+@app.route('/hello-world', methods=["GET"])
 def hello_world():
     return jsonify({"ok": "hello world! server is working!", "err": "null"})
 
-@app.route('/inference', methods=['POST'])
+@app.route('/inference', methods=["GET", "POST"])
 def inference():
-    if request.method == 'POST':
-        return jsonify({"ok": "null", "err": "method: POST"})
+    if request.method not in ("GET", "POST"):
+        return jsonify({"ok": "null", "err": "method is not: GET, POST"})
 
     # Get parameters
-    src_urls = request.form["src_urls"]
-    trg_urls = request.form["trg_urls"]
+    try:
+        if request.method == "GET":
+            # GET method should be used only for testing purposes since HTML encoding is not being handled
+            src_urls = request.args["src_urls"]
+            trg_urls = request.args["trg_urls"]
+        elif request.method == "POST":
+            src_urls = request.form["src_urls"]
+            trg_urls = request.form["trg_urls"]
+        else:
+            logger.warning("Unknown method: %s", request.method)
+
+            return jsonify({"ok": "null", "err": f"unknown method: {request.method}"})
+    except KeyError as e:
+        return jsonify({"ok": "null", "err": f"could not get some mandatory field: 'src_urls' and 'trg_urls' are mandatory"})
 
     if not src_urls or not trg_urls:
         return jsonify({"ok": "null", "err": "'src_url' and 'trg_url' are mandatory fields and can't be empty"})
@@ -55,7 +79,15 @@ def inference():
             trg_urls = [trg_urls]
 
         if len(src_urls) != len(trg_urls):
-            raise Exception(f"Different src and trg length: {len(src_urls)} vs {len(trg_urls)}")
+            return jsonify({"ok": "null", "err": f"different src and trg length: {len(src_urls)} vs {len(trg_urls)}"})
+
+    logger.debug("Got (%d, %d) src and trg URLs", len(src_urls), len(trg_urls))
+
+    src_urls = [u.replace('\t', ' ') for u in src_urls]
+    trg_urls = [u.replace('\t', ' ') for u in trg_urls]
+
+    for src_url, trg_url in zip(src_urls, trg_urls):
+        logger.debug("'src<tab>trg' URLs: %s\t%s", src_url, trg_url)
 
     model = global_conf["model"]
     tokenizer = global_conf["tokenizer"]
@@ -79,16 +111,19 @@ def inference():
     if len(results) != len(src_urls):
         return jsonify({"ok": "null", "err": f"results length mismatch with the provided URLs: {len(results)} vs {len(src_urls)}"})
 
+    results = [str(r) for r in results]
+
     return jsonify({"ok": results, "err": "null"})
 
 def main(args):
     model_input = args.model_input
     use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
+    force_cpu = True # TODO remove this line
     device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
     pretrained_model = args.pretrained_model
 
-    global_conf["model"] = puc.load_model(model_input=model_input, device=device)
+    global_conf["model"] = puc.load_model(model_input=model_input, device=device) if not global_conf["model"] else global_conf["model"]
     global_conf["tokenizer"] = puc.load_tokenizer(pretrained_model)
     global_conf["device"] = device
     global_conf["batch_size"] = args.batch_size
@@ -118,6 +153,7 @@ def initialization():
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
+    parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")
 
     args = parser.parse_args()
 
@@ -136,6 +172,11 @@ def cli():
     puc.logger = logger
 
     main(args)
+
+    # Run flask server
+    app.run(debug=args.flask_debug)
+
+    logger.info("Bye!")
 
 if __name__ == "__main__":
     cli()

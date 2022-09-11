@@ -44,6 +44,7 @@ if __name__ == "__main__":
         entry_points={
             "console_scripts": [
                 "parallel-urls-classifier = parallel_urls_classifier.cli:main",
+                "parallel-urls-classifier-server = parallel_urls_classifier.cli:flask_server",
                 #"parallel-urls-classifier-train = parallel_urls_classifier.cli:train",
                 #"parallel-urls-classifier-interactive = parallel_urls_classifier.cli:interactive_inference",
             ]
