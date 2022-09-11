@@ -106,6 +106,45 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
 
     return scheduler_instance
 
+# TODO use load_model in main
+def load_model(base=AutoModelForSequenceClassification, model_input="", pretrained_model="", device="", num_labels=2):
+    model = base
+
+    if model_input:
+        logger.info("Loading model: '%s'", model_input)
+
+        model = model.from_pretrained(model_input)
+    elif pretrained_model:
+        model = model.from_pretrained(pretrained_model, num_labels=num_labels)
+    else:
+        raise Exception("You need to provide either 'model_input' or 'pretrained_model'")
+
+    if device:
+        model = model.to(device)
+
+    return model
+
+# TODO use load_tokenizer in main
+def load_tokenizer(pretrained_model):
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+
+    return tokenizer
+
+# TODO use get_amp_context_manager in main
+def get_amp_context_manager(cuda_amp, force_cpu):
+    use_cuda = torch.cuda.is_available()
+    amp_context_manager = contextlib.nullcontext()
+
+    # Configure AMP context manager
+    if cuda_amp and not force_cpu and use_cuda:
+        amp_context_manager = torch.cuda.amp.autocast()
+
+        logger.debug("AMP enabled for CUDA")
+    elif cuda_amp:
+        logger.warning("AMP could not been enabled")
+
+    return amp_context_manager
+
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")

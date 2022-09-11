@@ -163,3 +163,54 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         else:
             for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
                 print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
+
+@torch.no_grad()
+def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
+                              src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
+                              parallel_likelihood=False, threshold=-np.inf, url_separator=' '):
+    model.eval()
+    results = []
+
+    # Process URLs
+    src_urls = [src_url.replace('\t', ' ') for src_url in src_urls]
+    trg_urls = [trg_url.replace('\t', ' ') for trg_url in trg_urls]
+    str_urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
+    target_urls = next(utils.tokenize_batch_from_fd(str_urls, tokenizer, batch_size,
+                                                    f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority,
+                                                                                     remove_positional_data=remove_positional_data_from_resource,
+                                                                                     separator=url_separator)))
+
+    # Tokens
+    tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
+    urls = tokens["input_ids"].to(device)
+    attention_mask = tokens["attention_mask"].to(device)
+
+    with amp_context_manager:
+        outputs = model(urls, attention_mask).logits
+
+    regression = outputs.cpu().detach().numpy().shape[1] == 1
+
+    if regression:
+        # Regression
+        outputs = torch.sigmoid(outputs).detach()
+        outputs_argmax = torch.round(outputs).squeeze().cpu().numpy().astype(np.int64)
+    else:
+        # Binary classification
+        outputs = F.softmax(outputs, dim=1).detach()
+        outputs_argmax = torch.argmax(outputs, dim=1).cpu().numpy()
+
+    outputs = outputs.cpu()
+
+    if len(outputs_argmax.shape) == 0:
+        outputs_argmax = np.array([outputs_argmax])
+
+    assert outputs.numpy().shape[0] == len(src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {src_urls})"
+    assert outputs.numpy().shape[0] == len(trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {trg_urls})"
+
+    if parallel_likelihood:
+        results = [data[0] if regression else data[1] for data in outputs.numpy()]
+        results = [likelihood for likelihood in results if likelihood >= threshold]
+    else:
+        results = ['parallel' if argmax == 1 else 'non-parallel' for argmax in outputs_argmax]
+
+    return results
