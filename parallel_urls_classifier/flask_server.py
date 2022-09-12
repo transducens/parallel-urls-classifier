@@ -14,6 +14,7 @@ from flask import (
     request,
     jsonify,
 )
+from service_streamer import ThreadedStreamer
 
 app = Flask("parallel-urls-classifier-flask-server")
 
@@ -28,6 +29,8 @@ global_conf = {
     "remove_positional_data_from_resource": None,
     "parallel_likelihood": None,
     "url_separator": None,
+    "streamer": None,
+    "disable_streamer": None,
 }
 logger = logging
 
@@ -65,9 +68,13 @@ def inference():
 
             return jsonify({"ok": "null", "err": f"unknown method: {request.method}"})
     except KeyError as e:
+        logger.warning("KeyError: %s", e)
+
         return jsonify({"ok": "null", "err": f"could not get some mandatory field: 'src_urls' and 'trg_urls' are mandatory"})
 
     if not src_urls or not trg_urls:
+        logger.warning("Empty src or trg urls")
+
         return jsonify({"ok": "null", "err": "'src_url' and 'trg_url' are mandatory fields and can't be empty"})
 
     if not isinstance(src_urls, list) or not isinstance(trg_urls, list):
@@ -89,6 +96,32 @@ def inference():
     for src_url, trg_url in zip(src_urls, trg_urls):
         logger.debug("'src<tab>trg' URLs: %s\t%s", src_url, trg_url)
 
+    # Inference
+
+    disable_streamer = global_conf["disable_streamer"]
+    get_results = global_conf["streamer"].predict if not disable_streamer else batch_prediction
+    # We need one element per pair in order to do not break the streamer (it doesn't handle right the parallelism if there isn't 1:1 elements)
+    urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
+
+    results = get_results(urls)
+
+    # Return results
+
+    if len(results) != len(src_urls):
+        logger.warning("Results length mismatch with the provided URLs: %d vs %d: %s vs %s", len(results), len(src_urls), results, src_urls)
+
+        return jsonify({"ok": "null", "err": f"results length mismatch with the provided URLs: {len(results)} vs {len(src_urls)}"})
+
+    results = [str(r) for r in results]
+
+    logger.debug("Results: %s", results)
+
+    return jsonify({"ok": results, "err": "null"})
+
+def batch_prediction(urls):
+    logger.debug("URLs batch size: %d", len(urls))
+
+    src_urls, trg_urls = [], []
     model = global_conf["model"]
     tokenizer = global_conf["tokenizer"]
     device = global_conf["device"]
@@ -100,20 +133,19 @@ def inference():
     parallel_likelihood = global_conf["parallel_likelihood"]
     url_separator = global_conf["url_separator"]
 
+    for url in urls:
+        src_url, trg_url = url.split('\t')
+
+        src_urls.append(src_url)
+        trg_urls.append(trg_url)
+
     # Inference
     results = \
     puc_inference.non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, src_urls, trg_urls,
                                             remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
                                             parallel_likelihood=parallel_likelihood, url_separator=url_separator)
 
-    # Return results
-
-    if len(results) != len(src_urls):
-        return jsonify({"ok": "null", "err": f"results length mismatch with the provided URLs: {len(results)} vs {len(src_urls)}"})
-
-    results = [str(r) for r in results]
-
-    return jsonify({"ok": results, "err": "null"})
+    return results
 
 def main(args):
     model_input = args.model_input
@@ -133,6 +165,8 @@ def main(args):
     global_conf["remove_positional_data_from_resource"] = not args.do_not_remove_positional_data_from_resource
     global_conf["parallel_likelihood"] = args.parallel_likelihood
     global_conf["url_separator"] = args.url_separator
+    global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size)
+    global_conf["disable_streamer"] = args.disable_streamer
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -140,7 +174,6 @@ def initialization():
 
     parser.add_argument('model_input', help="Model input path which will be loaded")
 
-    # TODO remove unused args
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")
     parser.add_argument('--max-length-tokens', type=int, default=256, help="Max. length for the generated tokens")
@@ -151,6 +184,7 @@ def initialization():
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
     parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
+    parser.add_argument('--disable-streamer', action="store_true", help="Do not use streamer (it might lead to slower inference and OOM errors)")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")
