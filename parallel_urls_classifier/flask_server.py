@@ -55,11 +55,11 @@ def inference():
     try:
         if request.method == "GET":
             # GET method should be used only for testing purposes since HTML encoding is not being handled
-            src_urls = request.args["src_urls"]
-            trg_urls = request.args["trg_urls"]
+            src_urls = request.args.getlist("src_urls")
+            trg_urls = request.args.getlist("trg_urls")
         elif request.method == "POST":
-            src_urls = request.form["src_urls"]
-            trg_urls = request.form["trg_urls"]
+            src_urls = request.form.getlist("src_urls")
+            trg_urls = request.form.getlist("trg_urls")
         else:
             logger.warning("Unknown method: %s", request.method)
 
@@ -78,8 +78,8 @@ def inference():
         if not isinstance(trg_urls, list):
             trg_urls = [trg_urls]
 
-        if len(src_urls) != len(trg_urls):
-            return jsonify({"ok": "null", "err": f"different src and trg length: {len(src_urls)} vs {len(trg_urls)}"})
+    if len(src_urls) != len(trg_urls):
+        return jsonify({"ok": "null", "err": f"different src and trg length: {len(src_urls)} vs {len(trg_urls)}"})
 
     logger.debug("Got (%d, %d) src and trg URLs", len(src_urls), len(trg_urls))
 
