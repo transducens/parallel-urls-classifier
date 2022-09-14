@@ -2,6 +2,7 @@
 import logging
 import argparse
 import json
+import base64
 
 import parallel_urls_classifier.utils.utils as utils
 import parallel_urls_classifier.parallel_urls_classifier as puc
@@ -31,6 +32,7 @@ global_conf = {
     "url_separator": None,
     "streamer": None,
     "disable_streamer": None,
+    "expect_urls_base64": None,
 }
 logger = logging
 
@@ -89,6 +91,12 @@ def inference():
         return jsonify({"ok": "null", "err": f"different src and trg length: {len(src_urls)} vs {len(trg_urls)}"})
 
     logger.debug("Got (%d, %d) src and trg URLs", len(src_urls), len(trg_urls))
+
+    base64_encoded = global_conf["expect_urls_base64"]
+
+    if base64_encoded:
+        src_urls = [base64.b64decode(u).decode("utf-8", errors="ignore").replace('\n', ' ') for u in src_urls]
+        trg_urls = [base64.b64decode(u).decode("utf-8", errors="ignore").replace('\n', ' ') for u in trg_urls]
 
     src_urls = [u.replace('\t', ' ') for u in src_urls]
     trg_urls = [u.replace('\t', ' ') for u in trg_urls]
@@ -151,9 +159,10 @@ def main(args):
     model_input = args.model_input
     use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
-    force_cpu = True # TODO remove this line
     device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
     pretrained_model = args.pretrained_model
+
+    logger.debug("Device: %s", device)
 
     global_conf["model"] = puc.load_model(model_input=model_input, device=device) if not global_conf["model"] else global_conf["model"]
     global_conf["tokenizer"] = puc.load_tokenizer(pretrained_model)
@@ -167,6 +176,7 @@ def main(args):
     global_conf["url_separator"] = args.url_separator
     global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size)
     global_conf["disable_streamer"] = args.disable_streamer
+    global_conf["expect_urls_base64"] = args.expect_urls_base64
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -185,6 +195,7 @@ def initialization():
     parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--disable-streamer', action="store_true", help="Do not use streamer (it might lead to slower inference and OOM errors)")
+    parser.add_argument('--expect-urls-base64', action="store_true", help="Decode BASE64 URLs")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")
