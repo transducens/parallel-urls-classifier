@@ -161,6 +161,7 @@ def main(args):
     force_cpu = args.force_cpu
     device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
     pretrained_model = args.pretrained_model
+    flask_port = args.flask_port
 
     logger.debug("Device: %s", device)
 
@@ -177,6 +178,9 @@ def main(args):
     global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size)
     global_conf["disable_streamer"] = args.disable_streamer
     global_conf["expect_urls_base64"] = args.expect_urls_base64
+
+    # Run flask server
+    app.run(debug=args.flask_debug, port=flask_port)
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -196,6 +200,7 @@ def initialization():
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--disable-streamer', action="store_true", help="Do not use streamer (it might lead to slower inference and OOM errors)")
     parser.add_argument('--expect-urls-base64', action="store_true", help="Decode BASE64 URLs")
+    parser.add_argument('--flask-port', type=int, default=5000, help="Flask port")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")
@@ -217,9 +222,6 @@ def cli():
     puc.logger = logger
 
     main(args)
-
-    # Run flask server
-    app.run(debug=args.flask_debug)
 
     logger.info("Bye!")
 
