@@ -95,8 +95,13 @@ def inference():
     base64_encoded = global_conf["expect_urls_base64"]
 
     if base64_encoded:
-        src_urls = [base64.b64decode(u).decode("utf-8", errors="ignore").replace('\n', ' ') for u in src_urls]
-        trg_urls = [base64.b64decode(u).decode("utf-8", errors="ignore").replace('\n', ' ') for u in trg_urls]
+        try:
+            src_urls = [base64.b64decode(f"{u}==").decode("utf-8", errors="ignore").replace('\n', ' ') for u in src_urls]
+            trg_urls = [base64.b64decode(f"{u}==").decode("utf-8", errors="ignore").replace('\n', ' ') for u in trg_urls]
+        except Exception as e:
+            logger.error("Exception when decoding BASE64: %s", e)
+
+            return jsonify({"ok": "null", "err": "error decoding BASE64 URLs"})
 
     src_urls = [u.replace('\t', ' ') for u in src_urls]
     trg_urls = [u.replace('\t', ' ') for u in trg_urls]
