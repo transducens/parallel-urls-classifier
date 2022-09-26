@@ -151,8 +151,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         if len(outputs_argmax.shape) == 0:
             outputs_argmax = np.array([outputs_argmax])
 
-        assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {initial_src_urls})"
-        assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {initial_trg_urls})"
+        assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {len(initial_src_urls)})"
+        assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {len(initial_trg_urls)})"
 
         if parallel_likelihood:
             for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
@@ -204,8 +204,8 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     if len(outputs_argmax.shape) == 0:
         outputs_argmax = np.array([outputs_argmax])
 
-    assert outputs.numpy().shape[0] == len(src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {src_urls})"
-    assert outputs.numpy().shape[0] == len(trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {trg_urls})"
+    assert outputs.numpy().shape[0] == len(src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {len(src_urls)})"
+    assert outputs.numpy().shape[0] == len(trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {len(trg_urls)})"
 
     if parallel_likelihood:
         results = [data[0] if regression else data[1] for data in outputs.numpy()]

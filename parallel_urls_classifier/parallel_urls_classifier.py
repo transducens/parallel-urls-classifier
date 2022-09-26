@@ -868,8 +868,6 @@ def initialization():
 
     args = parser.parse_args()
 
-    print(args)
-
     return args
 
 def cli():

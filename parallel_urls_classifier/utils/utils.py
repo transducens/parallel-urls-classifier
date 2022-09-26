@@ -244,6 +244,8 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
         url = [url]
 
     for u in url:
+        u = u.rstrip('/')
+
         if remove_protocol_and_authority:
             # Remove protocol
             if u.startswith("https://"):
@@ -264,7 +266,9 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
             # Remove authority
             s = u.find('/')
 
-            if s != -1:
+            if s == -1:
+                u = "" # No resource
+            else:
                 u = u[s + 1:]
 
         if remove_positional_data:
