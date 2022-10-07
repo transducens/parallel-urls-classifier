@@ -1,4 +1,5 @@
 
+import sys
 import math
 import base64
 import logging
@@ -69,6 +70,27 @@ def get_urls_from_idxs(url_file, idxs):
 
     return urls
 
+def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1):
+    max_doc_nolines = max(src_nolines, trg_nolines)
+    min_doc_nolines = min(src_nolines, trg_nolines)
+    diff = abs(src_nolines - trg_nolines)
+
+    if occurrences >=0 and occurrences > min_doc_nolines:
+        logging.warning("Occurrences > min(src_nolines, trg_nolines): changing occurrences=0")
+
+        occurrences = 0
+
+    def top_margin(x):
+        return math.log2(x) + 1
+
+    m = top_margin(max_doc_nolines)
+
+    # Score: the higher, the better
+    nolines_score = (1.0 - max(diff / m, 1.0)) * 100.0 # Domain: [0, 100]
+    occurrences_score = occurrences / min_doc_nolines * 100.0 if occurrences >= 0 else None # Domain: [0, 100]
+
+    return nolines_score, occurrences_score
+
 def main(args):
     min_occurrences = args.min_occurrences
     sent_file = args.sent_file
@@ -79,7 +101,6 @@ def main(args):
     trg_sentences_files = args.trg_sentences_files
     abs_sub_nolines = args.abs_sub_nolines
     docalign_threshold = args.docalign_threshold
-    print_docalign_score = args.print_docalign_score
 
     if len(src_url_files) != len(src_sentences_files):
         raise Exception("Unexpected different number of source files provided for url.gz and sentences.gz " \
@@ -144,6 +165,21 @@ def main(args):
     docalign_src_urls, docalign_trg_urls = {}, {}
     docalign_url_scores = {}
     total_printed_urls = 0
+    total_possible_printed_urls = 0
+
+    # Get number of lines per document/URL
+    src_urls_nolines = get_nolines_from_url_and_sentences(src_url_files, src_sentences_files)
+    trg_urls_nolines = get_nolines_from_url_and_sentences(trg_url_files, trg_sentences_files)
+
+    logging.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_nolines), len(trg_urls_nolines))
+
+    # Print header
+    sys.stdout.write("src_url\ttrg_url\tdocalign_score\tsrc_doc_nolines\ttrg_doc_nolines\tsrc_and_trg_docs_nolines_score")
+
+    if sent_file:
+        sys.stdout.write("\tsegalign_src_and_trg_nolines\nsegalign_src_and_trg_nolines_score\nsegalign_and_docs_nolines_score_f1")
+
+    sys.stdout.write('\n')
 
     # Get aligned URLs from matches
     for docalign_mt_matches_file, docalign_mt_matches_shard_batch in zip(docalign_mt_matches_files, docalign_mt_matches_shard_batches):
@@ -187,15 +223,16 @@ def main(args):
             except KeyError:
                 docalign_trg_urls[trg_url] = 1
 
-        for score, src_url, trg_url in zip(scores, src_urls, trg_urls):
-            k = hash(f"{src_url}\t{trg_url}")
-            docalign_url_scores[k] = score
+        if not sent_file:
+            for score, src_url, trg_url in zip(scores, src_urls, trg_urls):
+                k = hash(f"{src_url}\t{trg_url}")
+                docalign_url_scores[k] = score
+                src_url_nolines = src_urls_nolines[src_url]
+                trg_url_nolines = trg_urls_nolines[trg_url]
+                nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
 
-            if not sent_file:
-                if print_docalign_score:
-                    print(f"{score}\t{src_url}\t{trg_url}")
-                else:
-                    print(f"{src_url}\t{trg_url}")
+                sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
+                sys.stdout.write('\n')
 
                 total_printed_urls += 1
 
@@ -206,11 +243,6 @@ def main(args):
         aligned_urls = get_urls_from_sent(sent_file, 0, 1)
 
         logging.info("Unique different paired URLs: %d", len(aligned_urls))
-
-        src_urls_nolines = get_nolines_from_url_and_sentences(src_url_files, src_sentences_files)
-        trg_urls_nolines = get_nolines_from_url_and_sentences(trg_url_files, trg_sentences_files)
-
-        logging.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_nolines), len(trg_urls_nolines))
 
         skipped_bc_docalign = 0
         skipped_bc_url_diff = 0
@@ -256,28 +288,30 @@ def main(args):
                 if urls_diff > abs_sub_nolines:
                     skipped_bc_url_diff += 1
                     continue
-            elif max_url_nolines >= 5:
-                actual_urls_diff = math.log2(2 * max_url_nolines - 2 * 8) # The equation is very close to realistic values
-                actual_urls_diff = round(actual_urls_diff)
+            #elif max_url_nolines >= 5:
+            #     # TODO is the following equation broken? 2 * 5 - 2 * 8 < 0 -> not in log domain
+            #    actual_urls_diff = math.log2(2 * max_url_nolines - 2 * 8) # The equation is very close to realistic values
+            #    actual_urls_diff = round(actual_urls_diff)
+            #
+            #    if urls_diff > actual_urls_diff:
+            #        skipped_bc_url_diff += 1
+            #        continue
 
-                if urls_diff > actual_urls_diff:
-                    skipped_bc_url_diff += 1
-                    continue
+            k = hash(f"{src_url}\t{trg_url}")
+            score = 0.0
+            nolines_score, occurrences_score = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
+            nolines_and_occurences_score_f1 = 2 * ((nolines_score * occurrences_score) / (nolines_score + occurrences_score)) if not np.isclose(nolines_score + occurrences_score, 0.0) else 0.0
 
-            if print_docalign_score:
-                k = hash(f"{src_url}\t{trg_url}")
-                score = 0.0
+            try:
+                score = docalign_url_scores[k]
+            except KeyError:
+                score = -1.0
 
-                try:
-                    score = docalign_url_scores[k]
-                except KeyError:
-                    score = -1.0
+                logging.warning("Docalign score not found for URLs: ('%s', '%s')", src_url, trg_url)
 
-                    logging.warning("Score not found for URLs: ('%s', '%s')", src_url, trg_url)
-
-                print(f"{score}\t{src_url}\t{trg_url}")
-            else:
-                print(f"{src_url}\t{trg_url}")
+            sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
+            sys.stdout.write(f"\t{occurrences}\t{occurrences_score}\t{nolines_and_occurences_score_f1}")
+            sys.stdout.write('\n')
 
             total_printed_urls += 1
 
@@ -296,14 +330,13 @@ def initialization():
     parser.add_argument('--trg-sentences-files', nargs='+', required=True, help="Target sentences.gz files from sharding")
     parser.add_argument('--sent-file', help=".sent.gz file. If not provided, only docalign will be taken into account")
 
-    parser.add_argument('--min-occurrences', type=int, default=5, help="Min. occurrences of URLs pairs")
+    parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
     parser.add_argument('--abs-sub-nolines', type=int, default=-1,
                         help="By default, the number of lines of the documents are handled taking into account the "
                              "relative size of the documents. If this options is set, the provided number will be "
                              "the max. number of lines which a pair of documents can have when subtracting the number "
                              "of lines")
-    parser.add_argument('--docalign-threshold', type=float, default=0.1, help="Docalign threshold")
-    parser.add_argument('--print-docalign-score', action='store_true', help="Print docalign threshold")
+    parser.add_argument('--docalign-threshold', type=float, default=0.0, help="Docalign threshold")
 
     parser.add_argument('-q', '--quiet', action='store_true', help="Silent logging mode")
 
