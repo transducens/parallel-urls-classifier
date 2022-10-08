@@ -14,17 +14,16 @@ import utils.utils as utils
 
 import numpy as np
 
-def store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=10,
-                           logging_cte=2, negative_samples_generator=nsg.get_negative_samples_random):
+def store_negative_samples(parallel_urls, non_parallel_filename, target_domains, unary_generator, logging_cte=2):
     no_parallel_domains = len(target_domains)
     no_non_parallel_urls = 0
     no_non_parallel_domains = 0
     last_perc_shown = -1
 
-    with open(non_parallel_filename, "w") as f:
+    with open(non_parallel_filename, "a") as f:
         for idx, domain in enumerate(target_domains):
             parallel_urls_domain = list(parallel_urls[domain]) # WARNING: you will need to set PYTHONHASHSEED if you want deterministic results across different executions
-            negative_samples = negative_samples_generator(parallel_urls_domain, limit_alignments=limit_alignments, limit_max_alignments_per_url=limit_max_alignments_per_url)
+            negative_samples = unary_generator(parallel_urls_domain)
 
             for src_url, trg_url in negative_samples:
                 f.write(f"{src_url}\t{trg_url}\n")
@@ -42,8 +41,13 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
 
     return no_non_parallel_urls, no_non_parallel_domains
 
+def get_unary_generator(generator, limit_alignments=True, limit_max_alignments_per_url=10, extra_kwargs={}):
+    return lambda data: generator(data, limit_alignments=limit_alignments,
+                                  limit_max_alignments_per_url=limit_max_alignments_per_url, **extra_kwargs)
+
+
 def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2,
-                  negative_samples_generator="random", max_negative_samples_alignments=10):
+                  negative_samples_generator=["random"], max_negative_samples_alignments=10):
     no_parallel_urls = 0
     no_parallel_domains = len(target_domains)
     last_perc_shown = -1
@@ -67,34 +71,48 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
     logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
     logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
 
-    if negative_samples_generator != "none":
-        if negative_samples_generator == "random":
-            negative_samples_generator_f = nsg.get_negative_samples_random
-        elif negative_samples_generator == "bow-overlapping-metric":
-            negative_samples_generator_f = nsg.get_negative_samples_intersection_metric
+    with open(non_parallel_filename, "w") as f:
+        # Create file and remove content if exists
+        pass
+
+    for idx, generator in enumerate(negative_samples_generator, 1):
+        if generator != "none":
+            extra_kwargs = {}
+
+            if generator == "random":
+                negative_samples_generator_f = nsg.get_negative_samples_random
+            elif generator == "bow-overlapping-metric":
+                negative_samples_generator_f = nsg.get_negative_samples_intersection_metric
+            else:
+                logging.warning("Generator %d: unknown negative samples generator (%s): skipping", idx, generator)
+
+                continue
+
+            unary_generator = get_unary_generator(negative_samples_generator_f, limit_alignments=True,
+                                                  limit_max_alignments_per_url=max_negative_samples_alignments,
+                                                  extra_kwargs=extra_kwargs)
+
+            # Create negative samples -> same domain and get all combinations (store non-parallel URLs)
+            no_non_parallel_urls, no_non_parallel_domains = \
+                store_negative_samples(parallel_urls, non_parallel_filename, target_domains, unary_generator, logging_cte=logging_cte)
+
+            logging.info("Generator %d: total URLs for '%s' (negative samples): %d", idx, non_parallel_filename, no_non_parallel_urls)
+            logging.info("Generator %d: total domains for '%s' (negative samples): %d", idx, non_parallel_filename, no_non_parallel_domains)
         else:
-            logging.warning("Unknown negative samples generator (%s): using 'random'", negative_samples_generator)
-
-            negative_samples_generator_f = nsg.get_negative_samples_random
-
-        # Create negative samples -> same domain and get all combinations (store non-parallel URLs)
-        no_non_parallel_urls, no_non_parallel_domains = store_negative_samples(parallel_urls, non_parallel_filename, target_domains, limit_alignments=True, limit_max_alignments_per_url=max_negative_samples_alignments,
-                                                                               logging_cte=logging_cte, negative_samples_generator=negative_samples_generator_f)
-
-        logging.info("Total URLs for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_urls)
-        logging.info("Total domains for '%s' (negative samples): %d", non_parallel_filename, no_non_parallel_domains)
-    else:
-        logging.debug("Skip negative samples generation")
+            logging.debug("Generator %d: skip negative samples generation", idx)
 
 def main(args):
     input_file_parallel_urls = args.input_file_parallel_urls
     output_file_urls_prefix = args.output_files_prefix
-    negative_samples_generator = args.negative_samples_generator
+    negative_samples_generator = args.generator_technique
     generate_negative_samples = not args.do_not_generate_negative_samples
     seed = args.seed
     max_negative_samples_alignments = args.max_negative_samples_alignments
     same_authority = args.same_authority
     train_perc, dev_perc, test_perc = args.sets_percentage
+
+    if not isinstance(negative_samples_generator, list):
+        negative_samples_generator = list(negative_samples_generator)
 
     if not np.isclose(sum(args.sets_percentage), 1.0):
         raise Exception("The provided sets percentages do not sum up to 1.0")
@@ -106,7 +124,7 @@ def main(args):
         random.seed(seed)
 
     if not generate_negative_samples:
-        negative_samples_generator = "none" # Force "none" generator in order to do not create negative samples
+        negative_samples_generator = ["none"] # Force "none" generator in order to do not create negative samples
 
     parallel_urls = {}
     skipped_urls = 0
@@ -203,7 +221,7 @@ def initialization():
     parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt'), help="Input TSV file with parallel URLs")
     parser.add_argument('output_files_prefix', help="Output files prefix")
 
-    parser.add_argument('--negative-samples-generator', choices=["none", "random", "bow-overlapping-metric"], default="random", help="Strategy to create negative samples from positive samples")
+    parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric"], default="random", nargs='+', help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=10, help="Max. number of alignments of negative samples per positive samples")
     parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples")
     parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")

@@ -15,6 +15,14 @@ def reqs_from_file(src):
                 requirements.extend(add_req)
     return requirements
 
+def post_installation():
+    import nltk
+
+    try:
+        nltk.tokenize.word_tokenize("puc")
+    except LookupError:
+        nltk.download("punkt")
+
 if __name__ == "__main__":
     with open("README.md", "r") as fh:
         long_description = fh.read()
@@ -50,3 +58,5 @@ if __name__ == "__main__":
             ]
         }
         )
+
+    post_installation()

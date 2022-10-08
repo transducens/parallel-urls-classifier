@@ -9,10 +9,12 @@ cdir = os.path.dirname(os.path.realpath(__file__))
 
 sys.path.insert(0, f"{cdir}/..")
 
-import utils.utils as utils
+#import utils.utils as utils
+
+from nltk.tokenize import wordpunct_tokenize as tokenize
 
 def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10,
-                                             append_metric=False, debug=False):
+                                             append_metric=False):
     parallel_urls_stringify = {}
     urls = set()
 
@@ -23,9 +25,9 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=Tru
         if src_url not in parallel_urls_stringify:
             parallel_urls_stringify[src_url] = {}
 
-        stringify_src_url = utils.stringify_url(src_url)
-        stringify_trg_url = utils.stringify_url(trg_url)
-        metric = len(set(stringify_src_url.split(' ')).intersection(set(stringify_trg_url.split(' '))))
+        tokenized_src_url = tokenize(src_url)
+        tokenized_trg_url = tokenize(trg_url)
+        metric = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
 
         parallel_urls_stringify[src_url][trg_url] = metric
 
@@ -45,13 +47,14 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=Tru
 
     urls.difference_update(parallel_urls)
 
-    if debug:
-        logging.debug("There were %d paralel URLs in the non-parallel set", urls_len - len(urls))
+    urls_overlap = urls_len - len(urls)
+
+    if urls_overlap > 0:
+        logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: %d", urls_overlap)
 
     return list(urls)
 
-def get_negative_samples_random(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10,
-                                debug=False):
+def get_negative_samples_random(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10):
     idxs2 = list(range(len(parallel_urls)))
     urls = set()
 
@@ -81,8 +84,10 @@ def get_negative_samples_random(parallel_urls, limit_alignments=True, limit_max_
 
     urls.difference_update(parallel_urls)
 
-    if debug:
-        logging.debug("There were %d paralel URLs in the non-parallel set", urls_len - len(urls))
+    urls_overlap = urls_len - len(urls)
+
+    if urls_overlap > 0:
+        logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: %d", urls_overlap)
 
     return list(urls)
 
