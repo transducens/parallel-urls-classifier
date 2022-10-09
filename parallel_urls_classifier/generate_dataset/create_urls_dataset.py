@@ -84,6 +84,8 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
                 negative_samples_generator_f = nsg.get_negative_samples_random
             elif generator == "bow-overlapping-metric":
                 negative_samples_generator_f = nsg.get_negative_samples_intersection_metric
+            elif generator == "remove-random-tokens":
+                negative_samples_generator_f = nsg.get_negative_samples_remove_random_tokens
             else:
                 logging.warning("Generator %d: unknown negative samples generator (%s): skipping", idx, generator)
 
@@ -222,7 +224,8 @@ def initialization():
     parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt'), help="Input TSV file with parallel URLs")
     parser.add_argument('output_files_prefix', help="Output files prefix")
 
-    parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric"], default="random", nargs='+', help="Strategy to create negative samples from positive samples")
+    parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens"],
+                        default="random", nargs='+', help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=10, help="Max. number of alignments of negative samples per positive samples")
     parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples")
     parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")

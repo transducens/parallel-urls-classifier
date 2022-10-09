@@ -1,4 +1,5 @@
 
+import re
 import os
 import sys
 import random
@@ -13,31 +14,117 @@ sys.path.insert(0, f"{cdir}/..")
 
 from nltk.tokenize import RegexpTokenizer
 
-tokenize = RegexpTokenizer(r'[^\W_]+|[^\w\s]+|_').tokenize # Similar to wordpunct_tokenize but '_' aware
+_tokenizer_regex = r'[^\W_]+|[^\w\s]+|_' # Similar to wordpunct_tokenize but '_' aware
+_tokenize = RegexpTokenizer(_tokenizer_regex).tokenize
+_tokenize_gaps = RegexpTokenizer(_tokenizer_regex, gaps=True).tokenize
+
+def common_last_checks(negative_samples_set, parallel_urls_set):
+    urls_len = len(negative_samples_set)
+
+    # Update reference set removing parallel pairs, if any
+    negative_samples_set.difference_update(parallel_urls_set)
+
+    urls_overlap = urls_len - len(negative_samples_set)
+
+    if urls_overlap > 0:
+        logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: %d", urls_overlap)
+
+def tokenize(s, check_gaps=True):
+    tokenized_str = _tokenize(s)
+
+    if check_gaps:
+        tokenized_str_gaps = _tokenize_gaps(s)
+
+        if len(tokenized_str_gaps) != 0:
+            logging.error("Found gaps tokenizing, but the tokenizer should be complete (bug): %s", s)
+            logging.error("Gaps: %d: %s", len(tokenized_str_gaps), str(tokenized_str_gaps))
+
+    return tokenized_str
+
+def get_negative_samples_remove_random_tokens(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10, remove_percentage=0.4):
+    if remove_percentage < 0.0 or remove_percentage > 1.0:
+        raise Exception(f"0.0 <= remove_percentage <= 1.0: {remove_percentage}")
+
+    parallel_urls_dict = {}
+    urls = set()
+
+    def get_idx_resource(url):
+        idx = 0
+
+        if url.startswith("http://") and not url.startswith("http:///"):
+            idx += 7
+        if url.startswith("https://") and not url.startswith("https:///"):
+            idx += 8
+
+        idx = url.find('/', idx)
+
+        if idx == -1:
+            return len(url) # There is no resource
+
+        return idx + 1
+
+    def run(src_url, trg_url):
+        h = hash(f"{src_url}\t{trg_url}")
+
+        # Get tokens
+        resource_idx_src_url = get_idx_resource(src_url)
+        resource_idx_trg_url = get_idx_resource(trg_url)
+        tokenized_src_url = tokenize(src_url[resource_idx_src_url:])
+        tokenized_trg_url = tokenize(trg_url[resource_idx_trg_url:])
+
+        # We want to remove from URL resource forward
+        src_url_before_resource = src_url[:resource_idx_src_url]
+        trg_url_before_resource = trg_url[:resource_idx_trg_url]
+
+        # Remove elements
+        src_url_remove_idxs = reversed([idx for idx in range(len(tokenized_src_url)) if random.random() <= remove_percentage])
+        trg_url_remove_idxs = reversed([idx for idx in range(len(tokenized_trg_url)) if random.random() <= remove_percentage])
+
+        for idx in src_url_remove_idxs:
+            tokenized_src_url.pop(idx)
+        for idx in trg_url_remove_idxs:
+            tokenized_trg_url.pop(idx)
+
+        # Reconstruct
+        src_url_again = src_url_before_resource + ''.join(tokenized_src_url)
+        trg_url_again = trg_url_before_resource + ''.join(tokenized_trg_url)
+
+        if hash(f"{src_url_again}\t{trg_url_again}") == h:
+            # Do not add a negative sample which actually is a positive sample
+            return src_url, trg_url
+
+        # Replace multiple '/' with one '/'
+        src_url_again = re.sub(r'/+', r'/', src_url_again)
+        trg_url_again = re.sub(r'/+', r'/', trg_url_again)
+
+        return src_url_again, trg_url_again
+
+    return random_combinations(parallel_urls, limit_alignments=limit_alignments,
+                               limit_max_alignments_per_url=limit_max_alignments_per_url,
+                               binary_callback=run)
 
 def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10,
                                              append_metric=False):
-    parallel_urls_stringify = {}
+    parallel_urls_dict = {}
     urls = set()
 
     for src_pair, trg_pair in itertools.combinations(parallel_urls, r=2):
         src_url = src_pair[0]
         trg_url = trg_pair[1]
 
-        if src_url not in parallel_urls_stringify:
-            parallel_urls_stringify[src_url] = {}
+        if src_url not in parallel_urls_dict:
+            parallel_urls_dict[src_url] = {}
 
         tokenized_src_url = tokenize(src_url)
         tokenized_trg_url = tokenize(trg_url)
         metric1 = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
         metric2 = len(set(src_url).intersection(set(trg_url)))
+        parallel_urls_dict[src_url][trg_url] = (metric1, metric2)
 
-        parallel_urls_stringify[src_url][trg_url] = (metric1, metric2)
+    for src_url in parallel_urls_dict:
+        sorted_trg_parallel_urls_dict = sorted(parallel_urls_dict[src_url].items(), key=lambda item: (item[1][0], item[1][1]), reverse=True)
 
-    for src_url in parallel_urls_stringify:
-        sorted_trg_parallel_urls_stringify = sorted(parallel_urls_stringify[src_url].items(), key=lambda item: (item[1][0], item[1][1]), reverse=True)
-
-        for idx, (trg_url, metrics) in enumerate(sorted_trg_parallel_urls_stringify):
+        for idx, (trg_url, metrics) in enumerate(sorted_trg_parallel_urls_dict):
             if limit_alignments and idx >= limit_max_alignments_per_url:
                 break
 
@@ -46,18 +133,15 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=Tru
             else:
                 urls.add((src_url, trg_url))
 
-    urls_len = len(urls)
-
-    urls.difference_update(parallel_urls)
-
-    urls_overlap = urls_len - len(urls)
-
-    if urls_overlap > 0:
-        logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: %d", urls_overlap)
+    common_last_checks(urls, parallel_urls)
 
     return list(urls)
 
 def get_negative_samples_random(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10):
+    return random_combinations(parallel_urls, limit_alignments=limit_alignments,
+                               limit_max_alignments_per_url=limit_max_alignments_per_url)
+
+def random_combinations(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10, binary_callback=None, **kwargs):
     idxs2 = list(range(len(parallel_urls)))
     urls = set()
 
@@ -81,16 +165,12 @@ def get_negative_samples_random(parallel_urls, limit_alignments=True, limit_max_
             src_url = src_pair[0]
             trg_url = trg_pair[1]
 
+            if binary_callback:
+                src_url, trg_url = binary_callback(src_url, trg_url, **kwargs)
+
             urls.add((src_url, trg_url))
 
-    urls_len = len(urls)
-
-    urls.difference_update(parallel_urls)
-
-    urls_overlap = urls_len - len(urls)
-
-    if urls_overlap > 0:
-        logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: %d", urls_overlap)
+    common_last_checks(urls, parallel_urls)
 
     return list(urls)
 
