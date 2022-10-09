@@ -1,11 +1,16 @@
 
+import os
 import sys
 import math
 import base64
 import logging
 import argparse
 
-import utils
+cdir = os.path.dirname(os.path.realpath(__file__))
+
+sys.path.insert(0, f"{cdir}/..")
+
+import utils.utils as utils
 
 def get_urls_from_sent(sent_file, src_url_idx, trg_url_idx):
     urls = {}
@@ -71,23 +76,87 @@ def get_urls_from_idxs(url_file, idxs):
     return urls
 
 def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1):
+    if src_nolines < 0 or trg_nolines < 0:
+        raise Exception(f"nolines can't be < 0: {src_nolines} - {trg_nolines}")
+
     max_doc_nolines = max(src_nolines, trg_nolines)
-    min_doc_nolines = min(src_nolines, trg_nolines)
+    min_doc_nolines = min(src_nolines, trg_nolines) # always (if provided): occurrences <= min_doc_nolines
     diff = abs(src_nolines - trg_nolines)
 
     if occurrences >=0 and occurrences > min_doc_nolines:
-        logging.warning("Occurrences > min(src_nolines, trg_nolines): changing occurrences=0")
-
-        occurrences = 0
+        raise Exception("Occurrences > min(src_nolines, trg_nolines), and that can't be possible")
 
     def top_margin(x):
-        return math.log2(x) + 1
+        # WMT16 numbers in order to know how to select a good margin:
+        #
+        # range_max_nolines: max(src_doc_nolines, trg_doc_nolines)
+        #  for a doc in the GS
+        # sum_of_diffs: sum(abs(src_doc_nolines - trg_doc_nolines) for
+        #  each pair of docs in the range in the GS)
+        # avg_diff: sum_of_diffs / range_max_nolines
+        #
+        # train set:
+        #
+        #  range_max_nolines  docs_in_range  sum_of_diffs  avg_diff
+        #  ----------------------------------------------------------
+        #  1 < x <= 2         0              0             0
+        #  2 < x <= 4         0              0             0
+        #  4 < x <= 8         7              2             0.285714
+        #  8 < x <= 16        74             18            0.243243
+        #  16 < x <= 32       231            172           0.744589
+        #  32 < x <= 64       221            291           1.31674
+        #  64 < x <= 128      511            1151          2.25245
+        #  128 < x <= 256     398            1954          4.90955
+        #  256 < x <= 512     143            1224          8.55944
+        #  512 < x <= 1024    28             549           19.6071
+        #  1024 < x <= 2048   10             240           24
+        #  2048 < x <= 4096   0              0             0
+        #  4096 < x <= 8192   1              810           810
+        #
+        # test set:
+        #
+        #  range_max_nolines  docs_in_range  sum_of_diffs  avg_diff
+        #  ----------------------------------------------------------
+        #  1 < x <= 2         1              0             0
+        #  2 < x <= 4         0              0             0
+        #  4 < x <= 8         3              2             0.666667
+        #  8 < x <= 16        33             5             0.151515
+        #  16 < x <= 32       193            129           0.668394
+        #  32 < x <= 64       601            812           1.35108
+        #  64 < x <= 128      650            1684          2.59077
+        #  128 < x <= 256     638            1941          3.04232
+        #  256 < x <= 512     198            1131          5.71212
+        #  512 < x <= 1024    79             13            17.557
+        #  1024 < x <= 2048   3              41            13.6667
+        #  2048 < x <= 4096   1              87            87
+        #  4096 < x <= 8192   2              681           340.5
 
-    m = top_margin(max_doc_nolines)
+
+        # Explanation: every 2 ^ x, x E N, the limit is incresed by 1 -> too much limit
+        #return math.log2(x) + 1
+
+        # Explanation: x is a good aproximation, but too much open -> limit multiplying a number < 1 or a function < f(x) = x
+        #  1. log2 is a good way of limiting the amount the slope increases
+        #  2. log2(x) is too much open -> x * x
+        #  3. log2(x * x) + 2 in order to allow that 1 is inside the domain and is inside the increasing domain
+        #  4. (log2(x * x) + 2) + 1 in order to allow that 1 is not punished that hard
+        # if x is 128 -> limit is 9, which according to intuition and WMT16 pairs of documents is a good value
+        #return x / (math.log2(x * x) + 2) + 1
+
+        # Explanation: based in the data from WMT16 -> we use 16 instead of 64 in order to set 75 of score for edge cases
+        return x / 16
+
+    if max_doc_nolines == 0:
+        m = 1.0 # diff will be 0, so score = 0, but we avoid / 0
+    else:
+        m = top_margin(max_doc_nolines)
 
     # Score: the higher, the better
-    nolines_score = (1.0 - max(diff / m, 1.0)) * 100.0 # Domain: [0, 100]
-    occurrences_score = occurrences / min_doc_nolines * 100.0 if occurrences >= 0 else None # Domain: [0, 100]
+    nolines_score = (1.0 - min(max(diff / m, 0.0), 1.0)) * 100.0 # Domain: [0, 100]; diff / m -> if 1, too much distance -> negative
+    occurrences_score = None
+
+    if occurrences >= 0:
+        occurrences_score = occurrences / min_doc_nolines * 100.0 if min_doc_nolines > 0 else 0.0 # Domain: [0, 100]
 
     return nolines_score, occurrences_score
 
@@ -315,8 +384,9 @@ def main(args):
 
             total_printed_urls += 1
 
-    logging.info("Total skipped URLs (min occ., docalign, diff. nolines): (%d, %d, %d)",
-                 skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_url_diff)
+        logging.info("Total skipped URLs (min occ., docalign, diff. nolines): (%d, %d, %d)",
+                     skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_url_diff)
+
     logging.info("Total printed URLs: %d", total_printed_urls)
 
 def initialization():

@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 import setuptools
+from setuptools.command.develop import develop
+from setuptools.command.install import install
 
 def reqs_from_file(src):
     requirements = []
@@ -15,13 +17,25 @@ def reqs_from_file(src):
                 requirements.extend(add_req)
     return requirements
 
-def post_installation():
+def post():
     import nltk
 
     try:
         nltk.tokenize.word_tokenize("puc")
     except LookupError:
         nltk.download("punkt")
+
+class post_develop(develop):
+    def run(self):
+        develop.run(self)
+
+        post()
+
+class post_install(install):
+    def run(self):
+        install.run(self)
+
+        post()
 
 if __name__ == "__main__":
     with open("README.md", "r") as fh:
@@ -56,7 +70,9 @@ if __name__ == "__main__":
                 #"parallel-urls-classifier-train = parallel_urls_classifier.cli:train",
                 #"parallel-urls-classifier-interactive = parallel_urls_classifier.cli:interactive_inference",
             ]
-        }
+        },
+        cmdclass={
+            "install": post_install,
+            "develop": post_develop,
+        },
         )
-
-    post_installation()
