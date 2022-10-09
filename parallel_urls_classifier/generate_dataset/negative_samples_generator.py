@@ -11,7 +11,9 @@ sys.path.insert(0, f"{cdir}/..")
 
 #import utils.utils as utils
 
-from nltk.tokenize import wordpunct_tokenize as tokenize
+from nltk.tokenize import RegexpTokenizer
+
+tokenize = RegexpTokenizer(r'[^\W_]+|[^\w\s]+|_').tokenize # Similar to wordpunct_tokenize but '_' aware
 
 def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10,
                                              append_metric=False):
@@ -27,19 +29,20 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=Tru
 
         tokenized_src_url = tokenize(src_url)
         tokenized_trg_url = tokenize(trg_url)
-        metric = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
+        metric1 = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
+        metric2 = len(set(src_url).intersection(set(trg_url)))
 
-        parallel_urls_stringify[src_url][trg_url] = metric
+        parallel_urls_stringify[src_url][trg_url] = (metric1, metric2)
 
     for src_url in parallel_urls_stringify:
-        sorted_trg_parallel_urls_stringify = sorted(parallel_urls_stringify[src_url].items(), key=lambda item: item[1], reverse=True)
+        sorted_trg_parallel_urls_stringify = sorted(parallel_urls_stringify[src_url].items(), key=lambda item: (item[1][0], item[1][1]), reverse=True)
 
-        for idx, (trg_url, metric) in enumerate(sorted_trg_parallel_urls_stringify):
+        for idx, (trg_url, metrics) in enumerate(sorted_trg_parallel_urls_stringify):
             if limit_alignments and idx >= limit_max_alignments_per_url:
                 break
 
             if append_metric:
-                urls.add((src_url, trg_url, metric))
+                urls.add((src_url, trg_url, *metrics))
             else:
                 urls.add((src_url, trg_url))
 

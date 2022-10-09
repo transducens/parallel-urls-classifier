@@ -75,6 +75,7 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
         # Create file and remove content if exists
         pass
 
+    # Generate negative samples
     for idx, generator in enumerate(negative_samples_generator, 1):
         if generator != "none":
             extra_kwargs = {}
@@ -227,6 +228,7 @@ def initialization():
     parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")
     parser.add_argument('--sets-percentage', type=float, nargs=3, default=[0.8, 0.1, 0.1], help="Train, dev and test percentages")
 
+    parser.add_argument('--force-non-deterministic', action='store_true', help="If PYTHONHASHSEED is not set, it will be set in order to obtain deterministic results. If this flag is set, this action will not be done")
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (fully guaranteed if you also set PYTHONHASHSEED envvar). Set a negative number in order to disable this feature")
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
 
@@ -239,6 +241,17 @@ if __name__ == "__main__":
 
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)
 
-    logging.debug("Arguments processed: {}".format(str(args)))
+    if "PYTHONHASHSEED" not in os.environ and not args.force_non_deterministic:
+        # Wrapper call in order to define PYTHONHASHSEED (https://stackoverflow.com/questions/30585108/disable-hash-randomization-from-within-python-program)
 
-    main(args)
+        PYTHONHASHSEED_value = args.seed
+
+        logging.warning("PYTHONHASHSEED not set: using seed: %d", args.seed)
+
+        import subprocess
+
+        subprocess.run([sys.executable] + sys.argv, env={**dict(os.environ), **{"PYTHONHASHSEED": str(PYTHONHASHSEED_value)}})
+    else:
+        logging.debug("Arguments processed: {}".format(str(args)))
+
+        main(args)
