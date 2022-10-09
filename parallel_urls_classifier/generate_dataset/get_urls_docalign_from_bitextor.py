@@ -251,7 +251,7 @@ def main(args):
     sys.stdout.write("src_url\ttrg_url\tdocalign_score\tsrc_doc_nolines\ttrg_doc_nolines\tsrc_and_trg_docs_nolines_score")
 
     if sent_file:
-        sys.stdout.write("\tsegalign_src_and_trg_nolines\nsegalign_src_and_trg_nolines_score\nsegalign_and_docs_nolines_score_f1")
+        sys.stdout.write("\tsegalign_src_and_trg_nolines\tsegalign_src_and_trg_nolines_score\tsegalign_and_docs_nolines_score_f1")
 
     sys.stdout.write('\n')
 
@@ -287,7 +287,7 @@ def main(args):
 
         logging.debug("Number of aligned URLs from '%s': %d", docalign_mt_matches_file, len(src_urls))
 
-        for src_url, trg_url in zip(src_urls, trg_urls):
+        for score, src_url, trg_url in zip(scores, src_urls, trg_urls):
             try:
                 docalign_src_urls[src_url] += 1
             except KeyError:
@@ -297,14 +297,13 @@ def main(args):
             except KeyError:
                 docalign_trg_urls[trg_url] = 1
 
-        if not sent_file:
-            for score, src_url, trg_url in zip(scores, src_urls, trg_urls):
-                k = hash(f"{src_url}\t{trg_url}")
-                docalign_url_scores[k] = score
-                src_url_nolines = src_urls_nolines[src_url]
-                trg_url_nolines = trg_urls_nolines[trg_url]
-                nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
+            k = hash(f"{src_url}\t{trg_url}")
+            docalign_url_scores[k] = score
+            src_url_nolines = src_urls_nolines[src_url]
+            trg_url_nolines = trg_urls_nolines[trg_url]
+            nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
 
+            if not sent_file:
                 sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
                 sys.stdout.write('\n')
 
