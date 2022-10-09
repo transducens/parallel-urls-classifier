@@ -6,6 +6,8 @@ import base64
 import logging
 import argparse
 
+import numpy as np
+
 cdir = os.path.dirname(os.path.realpath(__file__))
 
 sys.path.insert(0, f"{cdir}/..")
@@ -75,7 +77,7 @@ def get_urls_from_idxs(url_file, idxs):
 
     return urls
 
-def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1):
+def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None, trg_url=None):
     if src_nolines < 0 or trg_nolines < 0:
         raise Exception(f"nolines can't be < 0: {src_nolines} - {trg_nolines}")
 
@@ -84,7 +86,9 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1):
     diff = abs(src_nolines - trg_nolines)
 
     if occurrences >=0 and occurrences > min_doc_nolines:
-        raise Exception("Occurrences > min(src_nolines, trg_nolines), and that can't be possible")
+        logging.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer "
+                        "(re-segmentation might increase the number of occurrences): %s    %s",
+                        occurrences, src_nolines, trg_nolines, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
 
     def top_margin(x):
         # WMT16 numbers in order to know how to select a good margin:
@@ -163,12 +167,13 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1):
 def main(args):
     min_occurrences = args.min_occurrences
     sent_file = args.sent_file
+    sent_file_src_url_idx = args.sent_file_src_url_idx
+    sent_file_trg_url_idx = args.sent_file_trg_url_idx
     docalign_mt_matches_files = args.docalign_mt_matches_files
     src_url_files = args.src_url_files
     trg_url_files = args.trg_url_files
     src_sentences_files = args.src_sentences_files
     trg_sentences_files = args.trg_sentences_files
-    abs_sub_nolines = args.abs_sub_nolines
     docalign_threshold = args.docalign_threshold
 
     if len(src_url_files) != len(src_sentences_files):
@@ -309,19 +314,18 @@ def main(args):
     if sent_file:
         logging.info("Processing sent.gz file")
 
-        aligned_urls = get_urls_from_sent(sent_file, 0, 1)
+        aligned_urls = get_urls_from_sent(sent_file, sent_file_src_url_idx, sent_file_trg_url_idx)
 
         logging.info("Unique different paired URLs: %d", len(aligned_urls))
 
         skipped_bc_docalign = 0
-        skipped_bc_url_diff = 0
         skipped_bc_min_occ = 0
 
         for idx, (url, occurrences) in enumerate(aligned_urls.items()):
             if (idx + 1) % 10000 == 0:
                 logging.debug("%.2f finished", (idx + 1) * 100.0 / len(aligned_urls))
-                logging.debug("Currently skipped URLs (min occ., docalign, diff. nolines): (%d, %d, %d)",
-                              skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_url_diff)
+                logging.debug("Currently skipped URLs (min occ., docalign, diff. nolines): (%d, %d)",
+                              skipped_bc_min_occ, skipped_bc_docalign)
 
             if occurrences < min_occurrences:
                 skipped_bc_min_occ += 1
@@ -349,26 +353,10 @@ def main(args):
 
                 continue
 
-            max_url_nolines = max(src_url_nolines, trg_url_nolines)
-            urls_diff = abs(src_url_nolines - trg_url_nolines)
-
-            # Check out if the aligned URLs have very different number of lines
-            if abs_sub_nolines >= 0:
-                if urls_diff > abs_sub_nolines:
-                    skipped_bc_url_diff += 1
-                    continue
-            #elif max_url_nolines >= 5:
-            #     # TODO is the following equation broken? 2 * 5 - 2 * 8 < 0 -> not in log domain
-            #    actual_urls_diff = math.log2(2 * max_url_nolines - 2 * 8) # The equation is very close to realistic values
-            #    actual_urls_diff = round(actual_urls_diff)
-            #
-            #    if urls_diff > actual_urls_diff:
-            #        skipped_bc_url_diff += 1
-            #        continue
-
             k = hash(f"{src_url}\t{trg_url}")
             score = 0.0
-            nolines_score, occurrences_score = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
+            nolines_score, occurrences_score = get_doc_nolines_score(src_url_nolines, trg_url_nolines, occurrences=occurrences,
+                                                                     src_url=src_url, trg_url=trg_url)
             nolines_and_occurences_score_f1 = 2 * ((nolines_score * occurrences_score) / (nolines_score + occurrences_score)) if not np.isclose(nolines_score + occurrences_score, 0.0) else 0.0
 
             try:
@@ -384,8 +372,8 @@ def main(args):
 
             total_printed_urls += 1
 
-        logging.info("Total skipped URLs (min occ., docalign, diff. nolines): (%d, %d, %d)",
-                     skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_url_diff)
+        logging.info("Total skipped URLs (min occ., docalign, diff. nolines): (%d, %d)",
+                     skipped_bc_min_occ, skipped_bc_docalign)
 
     logging.info("Total printed URLs: %d", total_printed_urls)
 
@@ -399,13 +387,10 @@ def initialization():
     parser.add_argument('--src-sentences-files', nargs='+', required=True, help="Source sentences.gz files from sharding")
     parser.add_argument('--trg-sentences-files', nargs='+', required=True, help="Target sentences.gz files from sharding")
     parser.add_argument('--sent-file', help=".sent.gz file. If not provided, only docalign will be taken into account")
+    parser.add_argument('--sent-file-src-url-idx', type=int, default=0, help=".sent.gz file src URL idx")
+    parser.add_argument('--sent-file-trg-url-idx', type=int, default=1, help=".sent.gz file trg URL idx")
 
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
-    parser.add_argument('--abs-sub-nolines', type=int, default=-1,
-                        help="By default, the number of lines of the documents are handled taking into account the "
-                             "relative size of the documents. If this options is set, the provided number will be "
-                             "the max. number of lines which a pair of documents can have when subtracting the number "
-                             "of lines")
     parser.add_argument('--docalign-threshold', type=float, default=0.0, help="Docalign threshold")
 
     parser.add_argument('-q', '--quiet', action='store_true', help="Silent logging mode")
