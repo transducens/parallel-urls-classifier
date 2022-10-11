@@ -8,15 +8,9 @@ import itertools
 
 cdir = os.path.dirname(os.path.realpath(__file__))
 
-sys.path.insert(0, f"{cdir}/..")
+sys.path.insert(0, f"{cdir}/../..")
 
-#import utils.utils as utils
-
-from nltk.tokenize import RegexpTokenizer
-
-_tokenizer_regex = r'[^\W_]+|[^\w\s]+|_' # Similar to wordpunct_tokenize but '_' aware
-_tokenize = RegexpTokenizer(_tokenizer_regex).tokenize
-_tokenize_gaps = RegexpTokenizer(_tokenizer_regex, gaps=True).tokenize
+from parallel_urls_classifier.tokenizer import tokenize
 
 def common_last_checks(negative_samples_set, parallel_urls_set):
     urls_len = len(negative_samples_set)
@@ -28,18 +22,6 @@ def common_last_checks(negative_samples_set, parallel_urls_set):
 
     if urls_overlap > 0:
         logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: %d", urls_overlap)
-
-def tokenize(s, check_gaps=True):
-    tokenized_str = _tokenize(s)
-
-    if check_gaps:
-        tokenized_str_gaps = _tokenize_gaps(s)
-
-        if len(tokenized_str_gaps) != 0:
-            logging.error("Found gaps tokenizing, but the tokenizer should be complete (bug): %s", s)
-            logging.error("Gaps: %d: %s", len(tokenized_str_gaps), str(tokenized_str_gaps))
-
-    return tokenized_str
 
 def get_negative_samples_remove_random_tokens(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10, remove_percentage=0.4):
     if remove_percentage < 0.0 or remove_percentage > 1.0:

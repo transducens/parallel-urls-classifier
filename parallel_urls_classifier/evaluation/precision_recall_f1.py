@@ -6,9 +6,9 @@ import argparse
 
 cdir = os.path.dirname(os.path.realpath(__file__))
 
-sys.path.insert(0, f"{cdir}/..")
+sys.path.insert(0, f"{cdir}/../..")
 
-import utils.utils as utils
+import parallel_urls_classifier.utils.utils as utils
 
 import numpy as np
 

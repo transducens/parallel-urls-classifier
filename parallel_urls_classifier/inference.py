@@ -5,6 +5,7 @@ import parallel_urls_classifier.utils.utils as utils
 from parallel_urls_classifier.metrics import (
     get_metrics,
 )
+import parallel_urls_classifier.preprocess as preprocess
 
 import numpy as np
 import torch
@@ -87,14 +88,21 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     if not inference_from_stdin:
         logger.info("Insert 2 blank lines in order to end")
 
-    logger_verbose["tokens"].debug("model_input\ttokens\ttokens2str\tunk_chars\tinitial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
+    logger_verbose["tokens"].debug("model_input\ttokens\ttokens2str\tunk_chars\tinitial_tokens_vs_detokenized\t" \
+                                   "initial_tokens_vs_detokenized_len_1")
 
     model.eval()
 
     while True:
         if inference_from_stdin:
             try:
-                target_urls, initial_urls = next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator), return_urls=True))
+                target_urls, initial_urls = \
+                    next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size,
+                            f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
+                                                                  remove_positional_data=remove_positional_data_from_resource,
+                                                                  separator=url_separator),
+                            return_urls=True))
+
             except StopIteration:
                 break
 
@@ -109,7 +117,11 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             src_url = initial_src_urls[0]
             trg_url = initial_trg_urls[0]
-            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"], tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator)))
+            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"],
+                               tokenizer, batch_size,
+                               f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
+                                                                     remove_positional_data=remove_positional_data_from_resource,
+                                                                     separator=url_separator)))
 
         # Tokens
         tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
@@ -126,7 +138,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             str_from_tokens = ' '.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a space between tokens
             ## Unk
             unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
-            sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(url_separator))} vs {len(str_from_tokens.split(url_separator))}"
+            sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(url_separator))} vs " \
+                                   f"{len(str_from_tokens.split(url_separator))}"
             sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(url_separator)))} vs " \
                                        f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(url_separator)))}"
 
@@ -151,8 +164,10 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         if len(outputs_argmax.shape) == 0:
             outputs_argmax = np.array([outputs_argmax])
 
-        assert outputs.numpy().shape[0] == len(initial_src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {len(initial_src_urls)})"
-        assert outputs.numpy().shape[0] == len(initial_trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {len(initial_trg_urls)})"
+        assert outputs.numpy().shape[0] == len(initial_src_urls), "Output samples does not match with the length of src URLs " \
+                                                                  f"({outputs.numpy().shape[0]} vs {len(initial_src_urls)})"
+        assert outputs.numpy().shape[0] == len(initial_trg_urls), "Output samples does not match with the length of trg URLs " \
+                                                                  f"({outputs.numpy().shape[0]} vs {len(initial_trg_urls)})"
 
         if parallel_likelihood:
             for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
@@ -176,9 +191,9 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     trg_urls = [trg_url.replace('\t', ' ') for trg_url in trg_urls]
     str_urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
     target_urls = next(utils.tokenize_batch_from_fd(str_urls, tokenizer, batch_size,
-                                                    f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority,
-                                                                                     remove_positional_data=remove_positional_data_from_resource,
-                                                                                     separator=url_separator)))
+                            f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
+                                                                  remove_positional_data=remove_positional_data_from_resource,
+                                                                  separator=url_separator)))
 
     # Tokens
     tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
@@ -204,8 +219,10 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     if len(outputs_argmax.shape) == 0:
         outputs_argmax = np.array([outputs_argmax])
 
-    assert outputs.numpy().shape[0] == len(src_urls), f"Output samples does not match with the length of src URLs ({outputs.numpy().shape[0]} vs {len(src_urls)})"
-    assert outputs.numpy().shape[0] == len(trg_urls), f"Output samples does not match with the length of trg URLs ({outputs.numpy().shape[0]} vs {len(trg_urls)})"
+    assert outputs.numpy().shape[0] == len(src_urls), "Output samples does not match with the length of src URLs " \
+                                                      f"({outputs.numpy().shape[0]} vs {len(src_urls)})"
+    assert outputs.numpy().shape[0] == len(trg_urls), "Output samples does not match with the length of trg URLs " \
+                                                      f"({outputs.numpy().shape[0]} vs {len(trg_urls)})"
 
     if parallel_likelihood:
         results = [data[0] if regression else data[1] for data in outputs.numpy()]

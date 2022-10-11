@@ -6,13 +6,13 @@ import base64
 import logging
 import argparse
 
-import numpy as np
-
 cdir = os.path.dirname(os.path.realpath(__file__))
 
-sys.path.insert(0, f"{cdir}/..")
+sys.path.insert(0, f"{cdir}/../..")
 
-import utils.utils as utils
+import parallel_urls_classifier.utils.utils as utils
+
+import numpy as np
 
 def get_urls_from_sent(sent_file, src_url_idx, trg_url_idx):
     urls = {}

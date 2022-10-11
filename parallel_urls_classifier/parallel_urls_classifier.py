@@ -17,6 +17,7 @@ from parallel_urls_classifier.metrics import (
     get_metrics,
     plot_statistics,
 )
+import parallel_urls_classifier.preprocess as preprocess
 
 import numpy as np
 import torch
@@ -106,7 +107,6 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
 
     return scheduler_instance
 
-# TODO use load_model in main
 def load_model(base=AutoModelForSequenceClassification, model_input="", pretrained_model="", device="", num_labels=2):
     model = base
 
@@ -124,7 +124,6 @@ def load_model(base=AutoModelForSequenceClassification, model_input="", pretrain
 
     return model
 
-# TODO use load_tokenizer in main
 def load_tokenizer(pretrained_model):
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
 
@@ -185,7 +184,7 @@ def main(args):
     patience = args.patience
     do_not_load_best_model = args.do_not_load_best_model
     remove_authority = args.remove_authority
-    remove_positional_data_from_resource = not args.do_not_remove_positional_data_from_resource
+    remove_positional_data_from_resource = args.remove_positional_data_from_resource
     add_symmetric_samples = args.add_symmetric_samples
     log_directory = args.log_directory
     regression = args.regression
@@ -212,19 +211,11 @@ def main(args):
     waiting_time = 20
     num_labels = 1 if regression else 2
     classes = 2
-    amp_context_manager = contextlib.nullcontext()
+    amp_context_manager = get_amp_context_manager(cuda_amp, force_cpu)
 
     if scheduler_str in ("linear",) and train_until_patience:
         # Depending on the LR scheduler, the training might even stop at some point (e.g. linear LR scheduler will set the LR=0 if the run epochs is greater than the provided epochs)
         logger.warning("You set a LR scheduler ('%s' scheduler) which conflicts with --train-until-patince: you might want to check this out and change the configuration", scheduler_str)
-
-    # Configure AMP context manager
-    if cuda_amp and not force_cpu and use_cuda:
-        amp_context_manager = torch.cuda.amp.autocast()
-
-        logger.debug("AMP enabled for CUDA")
-    elif cuda_amp:
-        logger.warning("AMP could not been enabled")
 
     # Enable cuDNN benchmark
     if use_cuda and not force_cpu:
@@ -306,16 +297,9 @@ def main(args):
         logger.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
-    model = AutoModelForSequenceClassification
-
-    if model_input:
-        logger.info("Loading model: '%s'", model_input)
-
-        model = model.from_pretrained(model_input).to(device)
-    else:
-        model = model.from_pretrained(pretrained_model, num_labels=num_labels).to(device)
-
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+    model = load_model(base=AutoModelForSequenceClassification, model_input=model_input, pretrained_model=pretrained_model,
+                       device=device, num_labels=num_labels)
+    tokenizer = load_tokenizer(pretrained_model)
     fine_tuning = not args.do_not_fine_tune
     model_embeddings_size = model.base_model.embeddings.word_embeddings.weight.shape[0]
 
@@ -367,12 +351,25 @@ def main(args):
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
     for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator), add_symmetric_samples=add_symmetric_samples)):
+        batch = utils.tokenize_batch_from_fd(
+                    fd, tokenizer, batch_size,
+                    f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
+                                                          remove_positional_data=remove_positional_data_from_resource,
+                                                          separator=url_separator),
+                    add_symmetric_samples=add_symmetric_samples)
+
+        for batch_urls in batch:
             l.extend(batch_urls)
 
     for fd, l in ((file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
                   (file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
-        for idx, batch_urls in enumerate(utils.tokenize_batch_from_fd(fd, tokenizer, batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=remove_authority, remove_positional_data=remove_positional_data_from_resource, separator=url_separator))):
+        batch = utils.tokenize_batch_from_fd(
+                    fd, tokenizer, batch_size,
+                    f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
+                                                          remove_positional_data=remove_positional_data_from_resource,
+                                                          separator=url_separator))
+
+        for batch_urls in batch:
             l.extend(batch_urls)
 
     logger.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
@@ -838,12 +835,12 @@ def initialization():
     parser.add_argument('--do-not-load-best-model', action="store_true", help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
     parser.add_argument('--overwrite-output-model', action="store_true", help="Overwrite output model if it exists (initial loading)")
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
-    parser.add_argument('--do-not-remove-positional-data-from-resource', action="store_true", help="Remove content after '#' in the resorce (e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
+    parser.add_argument('--remove-positional-data-from-resource', action="store_true", help="Remove content after '#' in the resorce (e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
     parser.add_argument('--add-symmetric-samples', action="store_true", help="Add symmetric samples for training (if (src, trg) URL pair is provided, (trg, src) URL pair will be provided as well)")
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
     parser.add_argument('--log-directory', help="Directory where different log files will be stored")
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
-    parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
+    parser.add_argument('--url-separator', default='/', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
     parser.add_argument('--learning-rate', type=float, default=2e-5, help="Learning rate")
     parser.add_argument('--lr-scheduler', choices=["linear", "CLR", "inverse_sqrt"], default="CLR", help="LR scheduler")

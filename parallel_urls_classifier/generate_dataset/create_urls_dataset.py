@@ -7,10 +7,10 @@ import argparse
 
 cdir = os.path.dirname(os.path.realpath(__file__))
 
-sys.path.insert(0, f"{cdir}/..")
+sys.path.insert(0, f"{cdir}/../..")
 
-import negative_samples_generator as nsg
-import utils.utils as utils
+import parallel_urls_classifier.generate_dataset.negative_samples_generator as nsg
+import parallel_urls_classifier.utils.utils as utils
 
 import numpy as np
 
@@ -226,8 +226,8 @@ def initialization():
 
     parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens"],
                         default="random", nargs='+', help="Strategy to create negative samples from positive samples")
-    parser.add_argument('--max-negative-samples-alignments', type=int, default=10, help="Max. number of alignments of negative samples per positive samples")
-    parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples")
+    parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")
+    parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples. Useful if you only want to split the data in train/dev/test")
     parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")
     parser.add_argument('--sets-percentage', type=float, nargs=3, default=[0.8, 0.1, 0.1], help="Train, dev and test percentages")
 

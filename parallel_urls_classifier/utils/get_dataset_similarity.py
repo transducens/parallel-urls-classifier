@@ -1,8 +1,13 @@
 
+import os
 import sys
 import logging
 
-import utils
+cdir = os.path.dirname(os.path.realpath(__file__))
+
+sys.path.insert(0, f"{cdir}/../..")
+
+from parallel_urls_classifier.tokenizer import tokenize
 
 logging.basicConfig(level=logging.INFO)
 
@@ -17,15 +22,15 @@ for idx, url_pair in enumerate(sys.stdin):
     assert len(url_pair) == 2, f"The provided line does not have 2 tab-separated values (line #{idx + 1})"
 
     src_url, trg_url = url_pair[0], url_pair[1]
-    stringify_src_url = utils.stringify_url(src_url)
-    stringify_trg_url = utils.stringify_url(trg_url)
-    src_set = set(stringify_src_url.split(' '))
-    trg_set = set(stringify_trg_url.split(' '))
+    tokenized_src_url = ' '.join(tokenize(src_url))
+    tokenized_trg_url = ' '.join(tokenize(trg_url))
+    src_set = set(tokenized_src_url.split(' '))
+    trg_set = set(tokenized_trg_url.split(' '))
     intersection = len(src_set.intersection(trg_set))
     union = len(src_set.union(trg_set))
     ratio = intersection / union
 
-    print(f"{src_url}\t{trg_url}\t{stringify_src_url}\t{stringify_trg_url}\t{intersection}\t{union}\t{ratio}")
+    print(f"{src_url}\t{trg_url}\t{tokenized_src_url}\t{tokenized_trg_url}\t{intersection}\t{union}\t{ratio}")
 
     final_intersection += intersection
     final_union += union

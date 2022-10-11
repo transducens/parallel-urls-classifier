@@ -9,10 +9,11 @@ import subprocess
 
 cdir = os.path.dirname(os.path.realpath(__file__))
 
-sys.path.insert(0, f"{cdir}/..")
+sys.path.insert(0, f"{cdir}/../..")
 
-import utils.levenshtein as levenshtein
-import utils.utils as utils
+# TODO TBD replace own custom levenshtein with https://pypi.org/project/Levenshtein/
+import parallel_urls_classifier.utils.levenshtein as levenshtein
+import parallel_urls_classifier.utils.utils as utils
 
 import numpy as np
 

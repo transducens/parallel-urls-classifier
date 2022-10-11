@@ -6,10 +6,8 @@ import logging
 import gzip
 import lzma
 from contextlib import contextmanager
-import urllib.parse
-import argparse
 
-logging.getLogger("urllib3").setLevel(logging.WARNING)
+import argparse
 
 def wc_l(fd, do_not_count_empty=True):
     no_lines = 0
@@ -193,26 +191,6 @@ def replace_multiple(s, replace_list, replace_char=' '):
         s = s.replace(original_char, replace_char)
     return s
 
-def stringify_url(url, separator=' ', lower=False):
-    if url[:8] == "https://":
-        url = url[8:]
-    elif url[:7] == "http://":
-        url = url[7:]
-
-    replace_chars = ['.', '-', '_', '=', '?', '\n', '\r', '\t']
-
-    url = url.rstrip('/')
-
-    if lower:
-        url = url.lower()
-
-    url = url.split('/')
-    url = list(map(lambda u: replace_multiple(u, replace_chars).strip(), url))
-    url = [' '.join([s for s in u.split(' ') if s != '']) for u in url] # Remove multiple ' '
-    url = separator.join(url)
-
-    return url
-
 def set_up_logging(filename=None, level=logging.INFO, format="[%(asctime)s] [%(levelname)s] [%(module)s:%(lineno)d] %(message)s",
                    display_when_file=False):
     handlers = [
@@ -236,57 +214,6 @@ def update_defined_variables_from_dict(d, provided_locals, smash=False):
             raise Exception(f"Variable '{v}' is already defined and smash=False")
 
     provided_locals.update(d)
-
-def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_data=False, separator=' '):
-    urls = []
-
-    if isinstance(url, str):
-        url = [url]
-
-    for u in url:
-        u = u.rstrip('/')
-
-        if remove_protocol_and_authority:
-            # Remove protocol
-            if u.startswith("https://"):
-                u = u[8:]
-            elif u.startswith("http://"):
-                u = u[7:]
-            else:
-                d = u.find(':')
-                s = u.find('/')
-
-                if d != -1 and s != -1 and s - d == 1 and u[d:s + 2] == "://":
-                    if len(u) > s + 2:
-                        if u[s + 2] != '/':
-                            u = u[s + 2:]
-                    else:
-                        u = u[s + 2:]
-
-            # Remove authority
-            s = u.find('/')
-
-            if s == -1:
-                u = "" # No resource
-            else:
-                u = u[s + 1:]
-
-        if remove_positional_data:
-            # e.g. https://www.example.com/resource#position -> https://www.example.com/resource
-
-            ur = u.split('/')
-            h = ur[-1].find('#')
-
-            if h != -1:
-                ur[-1] = ur[-1][:h]
-
-            u = '/'.join(ur)
-
-        preprocessed_url = stringify_url(urllib.parse.unquote(u), separator=separator, lower=True)
-
-        urls.append(preprocessed_url)
-
-    return urls
 
 def init_weight_and_bias(model, module):
     import torch.nn as nn
@@ -401,8 +328,16 @@ def get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01):
 
     return opt_parameters
 
-def get_tuple_if_is_not_tuple(obj):
+# TODO check old code in nevis and verify that this updated version is different from
+#  that code, since we might have lose some code there (check diff)
+def get_tuple_if_is_not_tuple(obj, check_not_list=True):
     if not isinstance(obj, tuple):
-        return (obj,)
+        if check_not_list:
+            if not isinstance(obj, list):
+                return (obj,)
+            else:
+                return tuple(obj)
+        else:
+            return (obj,)
 
     return obj

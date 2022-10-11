@@ -1,10 +1,17 @@
 
+import os
+import sys
 import logging
 import argparse
 
-from transformers import AutoTokenizer
+cdir = os.path.dirname(os.path.realpath(__file__))
 
-import utils
+sys.path.insert(0, f"{cdir}/../..")
+
+import parallel_urls_classifier.preprocess as preprocess
+import parallel_urls_classifier.utils.utils as utils
+
+from transformers import AutoTokenizer
 
 def main(args):
     dataset = args.dataset
@@ -17,16 +24,20 @@ def main(args):
 
     print(f"src_url\ttrg_url\tpre_tokenized_urls\tno_tokens")
 
-    for pre_tokenized_urls_batch, initial_urls_batch in utils.tokenize_batch_from_fd(dataset, tokenizer, args.batch_size, f=lambda u: utils.preprocess_url(u, remove_protocol_and_authority=args.remove_authority), return_urls=True):
+    batch = utils.tokenize_batch_from_fd(dataset, tokenizer, args.batch_size,
+                                         f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=args.remove_authority),
+                                         return_urls=True)
+
+    for pre_tokenized_urls_batch, initial_urls_batch in batch:
         tokens_batch = tokenizer(pre_tokenized_urls_batch)["input_ids"]
 
         assert len(tokens_batch) == len(pre_tokenized_urls_batch), f"len(tokens_batch) != len(pre_tokenized_urls_batch): {len(tokens_batch)} vs {len(pre_tokenized_urls_batch)}"
         assert len(tokens_batch) == len(initial_urls_batch), f"len(tokens_batch) != len(initial_urls_batch): {len(tokens_batch)} vs {len(initial_urls_batch)}"
 
         for initial_urls, pre_tokenized_urls, tokens in zip(initial_urls_batch, pre_tokenized_urls_batch, tokens_batch):
-            len_tokens = len(tokens) + 2 # add 2 tokens since eos and sep are added at the beginning and ending of the sentence respectively
+            len_tokens = len(tokens)
 
-            if threshold < 0 or len_tokens < threshold:
+            if threshold >= 0 and threshold < 0 or len_tokens < threshold:
                 continue
 
             print(f"{initial_urls[0]}\t{initial_urls[1]}\t{pre_tokenized_urls}\t{len_tokens}")
@@ -40,7 +51,7 @@ def initialization():
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
-    parser.add_argument('--threshold', type=int, default=-1, help="Remove protocol and authority from provided URLs")
+    parser.add_argument('--threshold', type=int, default=-1, help="Minimum number of tokens in order to consider the pair of URLs")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 
