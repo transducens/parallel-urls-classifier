@@ -1,8 +1,10 @@
 
+import re
 import logging
 import urllib.parse
 
 import parallel_urls_classifier.utils.utils as utils
+from parallel_urls_classifier.tokenizer import tokenize
 
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
@@ -26,7 +28,8 @@ def stringify_url(url, separator=' ', lower=False):
 
     return url
 
-def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_data=False, separator=' '):
+def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_data=False, separator=' ',
+                   stringify_instead_of_tokenization=False):
     urls = []
 
     if isinstance(url, str):
@@ -73,9 +76,18 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
 
             u = '/'.join(ur)
 
-        preprocessed_url = stringify_url(urllib.parse.unquote(u), separator=separator, lower=True)
+        u = urllib.parse.unquote(u)
+        u = u.lower()
 
-        urls.append(preprocessed_url)
+        # TODO TBD stringify instead of tokenize or stringify after tokenization
+        if stringify_instead_of_tokenization:
+            u = stringify_url(u, separator=separator)
+        else:
+            u = u.replace('/', separator)
+            u = re.sub(r'\s+', r' ', u)
+            u = ' '.join(tokenize(u))
+
+        urls.append(u)
 
     return urls
 

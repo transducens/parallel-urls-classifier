@@ -200,6 +200,7 @@ def main(args):
     cuda_amp = args.cuda_amp
     llrd = args.llrd
     lock_file = args.lock_file
+    stringify_instead_of_tokenization = args.stringify_instead_of_tokenization
 
     if lock_file and utils.exists(lock_file):
         logger.warning("Lock file ('%s') exists: finishing training", lock_file)
@@ -355,7 +356,8 @@ def main(args):
                     fd, tokenizer, batch_size,
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,
-                                                          separator=url_separator),
+                                                          separator=url_separator,
+                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization),
                     add_symmetric_samples=add_symmetric_samples)
 
         for batch_urls in batch:
@@ -367,7 +369,8 @@ def main(args):
                     fd, tokenizer, batch_size,
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,
-                                                          separator=url_separator))
+                                                          separator=url_separator,
+                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization))
 
         for batch_urls in batch:
             l.extend(batch_urls)
@@ -855,6 +858,7 @@ def initialization():
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")
+    parser.add_argument('--stringify-instead-of-tokenization', action="store_true", help="Preprocess URLs applying custom stringify instead of tokenization")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
