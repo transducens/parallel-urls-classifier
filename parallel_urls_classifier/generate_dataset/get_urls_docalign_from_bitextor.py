@@ -11,71 +11,12 @@ cdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, f"{cdir}/../..")
 
 import parallel_urls_classifier.utils.utils as utils
+import parallel_urls_classifier.generate_dataset.utils_bitextor as utils_bitextor
 
 import numpy as np
 
-def get_urls_from_sent(sent_file, src_url_idx, trg_url_idx):
-    urls = {}
-
-    with utils.open_xz_or_gzip_or_plain(sent_file) as fd:
-        for line in fd:
-            line = line.split('\t')
-            line[-1] = line[-1].rstrip('\n')
-            src_url = line[src_url_idx]
-            trg_url = line[trg_url_idx]
-            url = f"{src_url}\t{trg_url}"
-
-            try:
-                urls[url] += 1
-            except KeyError:
-                urls[url] = 1
-
-    return urls
-
-def get_nolines_from_url_and_sentences(url_files, sentences_files):
-    urls_nolines = {}
-
-    for url_file, sentences_file in zip(url_files, sentences_files):
-        with utils.open_xz_or_gzip_or_plain(url_file) as url_fd, utils.open_xz_or_gzip_or_plain(sentences_file) as sentences_fd:
-            for url_line, sentences_line in zip(url_fd, sentences_fd):
-                url_line = url_line.strip().replace('\t', '')
-                sentences_line = sentences_line.strip()
-
-                # URL should not be the same twice
-                sentences_line = base64.b64decode(sentences_line).decode('utf-8', errors="ignore").strip()
-
-                urls_nolines[url_line] = sentences_line.count('\n') + (1 if sentences_line != '' else 0)
-
-            logging.debug("Read url.gz and sentences.gz number of lines: %d", len(urls_nolines))
-
-    return urls_nolines
-
-def get_urls_from_idxs(url_file, idxs):
-    idxs_sorted = sorted(idxs)
-    idxs_dict = {}
-    urls = []
-    current_idx_idx = 0
-
-    with utils.open_xz_or_gzip_or_plain(url_file) as f:
-        for idx, url in enumerate(f, 1):
-            if current_idx_idx >= len(idxs_sorted):
-                break
-
-            if idx < idxs_sorted[current_idx_idx]:
-                continue
-
-            url = url.strip().replace('\t', ' ')
-            idxs_dict[idx] = url
-
-            current_idx_idx += 1
-
-    for idx in idxs:
-        urls.append(idxs_dict[idx])
-
-    assert current_idx_idx == len(idxs_sorted), f"current_idx_idx != len(idxs_sorted) = {current_idx_idx} != {len(idxs_sorted)}"
-    assert len(idxs_sorted) == len(urls), f"len(idxs_sorted) != len(urls) = {len(idxs_sorted)} != {len(urls)}"
-
-    return urls
+_occurrences_warning_only_once = True
+_occurrences_warning_already_done = False
 
 def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None, trg_url=None):
     if src_nolines < 0 or trg_nolines < 0:
@@ -86,9 +27,17 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
     diff = abs(src_nolines - trg_nolines)
 
     if occurrences >=0 and occurrences > min_doc_nolines:
-        logging.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer "
-                        "(re-segmentation might increase the number of occurrences): %s    %s",
-                        occurrences, src_nolines, trg_nolines, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
+        if _occurrences_warning_only_once and _occurrences_warning_already_done:
+            pass
+        else:
+            logging.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer "
+                            "(re-segmentation might increase the number of occurrences): %s    %s",
+                            occurrences, src_nolines, trg_nolines, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
+
+            _occurrences_warning_already_done = True
+
+            if _occurrences_warning_only_once:
+                logging.warning("Previous warning will only be shown once: you can modify '_occurrences_warning_only_once' for changing this behavior")
 
     def top_margin(x):
         # WMT16 numbers in order to know how to select a good margin:
@@ -160,7 +109,13 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
     occurrences_score = None
 
     if occurrences >= 0:
-        occurrences_score = occurrences / min_doc_nolines * 100.0 if min_doc_nolines > 0 else 0.0 # Domain: [0, 100]
+        # Fix the score in order to deal with --ignore_segmentation from Bifixer
+        # Workaround for fix this issue with awk passing the content through pipe:
+        #  awk -F$'\t' 'NR == 1 {print $0} NR > 1 {
+        #    a=($8 > 100) ? 100 : $8;
+        #    b=($8 <= 100) ? $9 : ($6 + a > 0) ? 2 * (($6 * a) / ($6 + a)): 0;
+        #    print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7"\t"a"\t"b}' # if docalign and sent.gz were provided
+        occurrences_score = min(occurrences, min_doc_nolines) / min_doc_nolines * 100.0 if min_doc_nolines > 0 else 0.0 # Domain: [0, 100]
 
     return nolines_score, occurrences_score
 
@@ -175,6 +130,10 @@ def main(args):
     src_sentences_files = args.src_sentences_files
     trg_sentences_files = args.trg_sentences_files
     docalign_threshold = args.docalign_threshold
+    process_docalign = True if docalign_mt_matches_files else False
+
+    if not docalign_mt_matches_files:
+        docalign_mt_matches_files = []
 
     if len(src_url_files) != len(src_sentences_files):
         raise Exception("Unexpected different number of source files provided for url.gz and sentences.gz " \
@@ -182,6 +141,8 @@ def main(args):
     if len(trg_url_files) != len(trg_sentences_files):
         raise Exception("Unexpected different number of target files provided for url.gz and sentences.gz " \
                         f"({len(trg_url_files)} vs {len(trg_sentences_files)})")
+    if not process_docalign and not sent_file:
+        raise Exception("You need to provide either docalign files, sent.gz file or both of them")
 
     urls_shard_batch = {"src": {}, "trg": {}}
     sentences_shard_batch = {"src": {}, "trg": {}}
@@ -211,30 +172,32 @@ def main(args):
             urls_shard_batch[direction][url_shard][url_batch] = url_file
             sentences_shard_batch[direction][sentences_shard][sentences_batch] = sentences_file
 
-    # Get shard and batches for matches
-    for docalign_mt_matches_file in docalign_mt_matches_files:
-        data = docalign_mt_matches_file.split('/')
-        shard = data[-2]
-        data = data[-1].split('.')[0].split('_')
-        src_batch = data[0][2:]
-        trg_batch = data[1][2:]
+    if process_docalign:
+        # Get shard and batches for matches
+        for docalign_mt_matches_file in docalign_mt_matches_files:
+            data = docalign_mt_matches_file.split('/')
+            shard = data[-2]
+            data = data[-1].split('.')[0].split('_')
+            src_batch = data[0][2:]
+            trg_batch = data[1][2:]
 
-        if shard not in shards:
-            raise Exception(f"Shard found in matches but not in url.gz/sentences.gz files: {shard}")
+            if shard not in shards:
+                raise Exception(f"Shard found in matches but not in url.gz/sentences.gz files: {shard}")
 
-        docalign_mt_matches_shard_batches.append((shard, (src_batch, trg_batch)))
+            docalign_mt_matches_shard_batches.append((shard, (src_batch, trg_batch)))
 
-        if shard not in docalign_mt_matches_shard_quantity:
-            docalign_mt_matches_shard_quantity[shard] = 0
+            if shard not in docalign_mt_matches_shard_quantity:
+                docalign_mt_matches_shard_quantity[shard] = 0
 
-        docalign_mt_matches_shard_quantity[shard] += 1
+            docalign_mt_matches_shard_quantity[shard] += 1
 
-    for shard in shards:
-        urls_quantity = len(urls_shard_batch["src"][shard]) * len(urls_shard_batch["trg"][shard])
+        # Docalign sanity check
+        for shard in shards:
+            urls_quantity = len(urls_shard_batch["src"][shard]) * len(urls_shard_batch["trg"][shard])
 
-        if urls_quantity != docalign_mt_matches_shard_quantity[shard]:
-            raise Exception("Unexpected quantity of url.gz/sentences.gz files taking into account matches files " \
-                            f"(shard {shard}: {urls_quantity} vs {docalign_mt_matches_shard_quantity[shard]})")
+            if urls_quantity != docalign_mt_matches_shard_quantity[shard]:
+                raise Exception("Unexpected quantity of url.gz/sentences.gz files taking into account matches files " \
+                                f"(shard {shard}: {urls_quantity} vs {docalign_mt_matches_shard_quantity[shard]})")
 
     docalign_src_urls, docalign_trg_urls = {}, {}
     docalign_url_scores = {}
@@ -242,78 +205,88 @@ def main(args):
     total_possible_printed_urls = 0
 
     # Get number of lines per document/URL
-    src_urls_nolines = get_nolines_from_url_and_sentences(src_url_files, src_sentences_files)
-    trg_urls_nolines = get_nolines_from_url_and_sentences(trg_url_files, trg_sentences_files)
+    src_urls_nolines = utils_bitextor.get_nolines_from_url_and_sentences(src_url_files, src_sentences_files)
+    trg_urls_nolines = utils_bitextor.get_nolines_from_url_and_sentences(trg_url_files, trg_sentences_files)
 
     logging.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_nolines), len(trg_urls_nolines))
 
     # Print header
-    sys.stdout.write("src_url\ttrg_url\tdocalign_score\tsrc_doc_nolines\ttrg_doc_nolines\tsrc_and_trg_docs_nolines_score")
+    sys.stdout.write("src_url\ttrg_url")
+
+    if process_docalign:
+        sys.stdout.write("\tdocalign_score")
+
+    sys.stdout.write("\tsrc_doc_nolines\ttrg_doc_nolines\tsrc_and_trg_docs_nolines_score")
 
     if sent_file:
         sys.stdout.write("\tsegalign_src_and_trg_nolines\tsegalign_src_and_trg_nolines_score\tsegalign_and_docs_nolines_score_f1")
 
     sys.stdout.write('\n')
 
-    # Get aligned URLs from matches
-    for docalign_mt_matches_file, docalign_mt_matches_shard_batch in zip(docalign_mt_matches_files, docalign_mt_matches_shard_batches):
-        src_urls_idx, trg_urls_idx, scores = [], [], []
+    if process_docalign:
+        # Get aligned URLs from matches
+        for docalign_mt_matches_file, docalign_mt_matches_shard_batch in zip(docalign_mt_matches_files, docalign_mt_matches_shard_batches):
+            src_urls_idx, trg_urls_idx, scores = [], [], []
 
-        with utils.open_xz_or_gzip_or_plain(docalign_mt_matches_file) as f:
-            logging.debug("Processing '%s'", docalign_mt_matches_file)
+            with utils.open_xz_or_gzip_or_plain(docalign_mt_matches_file) as f:
+                logging.debug("Processing '%s'", docalign_mt_matches_file)
 
-            for line in f:
-                line = line.strip().split('\t')
-                score = float(line[0])
-                src_url_idx = int(line[1])
-                trg_url_idx = int(line[2])
+                for line in f:
+                    line = line.strip().split('\t')
+                    score = float(line[0])
+                    src_url_idx = int(line[1])
+                    trg_url_idx = int(line[2])
 
-                if score < docalign_threshold:
-                    continue
+                    if score < docalign_threshold:
+                        continue
 
-                scores.append(score)
-                src_urls_idx.append(src_url_idx)
-                trg_urls_idx.append(trg_url_idx)
+                    scores.append(score)
+                    src_urls_idx.append(src_url_idx)
+                    trg_urls_idx.append(trg_url_idx)
 
-        src_urls = get_urls_from_idxs(urls_shard_batch["src"][docalign_mt_matches_shard_batch[0]][docalign_mt_matches_shard_batch[1][0]], src_urls_idx)
-        trg_urls = get_urls_from_idxs(urls_shard_batch["trg"][docalign_mt_matches_shard_batch[0]][docalign_mt_matches_shard_batch[1][1]], trg_urls_idx)
+            src_urls = utils_bitextor.get_urls_from_idxs(
+                        urls_shard_batch["src"][docalign_mt_matches_shard_batch[0]][docalign_mt_matches_shard_batch[1][0]],
+                        src_urls_idx)
+            trg_urls = utils_bitextor.get_urls_from_idxs(
+                        urls_shard_batch["trg"][docalign_mt_matches_shard_batch[0]][docalign_mt_matches_shard_batch[1][1]],
+                        trg_urls_idx)
 
-        if len(src_urls) != len(trg_urls):
-            raise Exception("Unexpected different number of src and trg URLs "
-                            f"({len(src_urls)} vs {len(trg_urls)}) in file '{docalign_mt_matches_file}'")
-        if len(src_urls) != len(scores):
-            raise Exception("Unexpected different number of URLs and scores "
-                            f"({len(src_urls)} vs {len(scores)}) in file '{docalign_mt_matches_file}'")
+            if len(src_urls) != len(trg_urls):
+                raise Exception("Unexpected different number of src and trg URLs "
+                                f"({len(src_urls)} vs {len(trg_urls)}) in file '{docalign_mt_matches_file}'")
+            if len(src_urls) != len(scores):
+                raise Exception("Unexpected different number of URLs and scores "
+                                f"({len(src_urls)} vs {len(scores)}) in file '{docalign_mt_matches_file}'")
 
-        logging.debug("Number of aligned URLs from '%s': %d", docalign_mt_matches_file, len(src_urls))
+            logging.debug("Number of aligned URLs from '%s': %d", docalign_mt_matches_file, len(src_urls))
 
-        for score, src_url, trg_url in zip(scores, src_urls, trg_urls):
-            try:
-                docalign_src_urls[src_url] += 1
-            except KeyError:
-                docalign_src_urls[src_url] = 1
-            try:
-                docalign_trg_urls[trg_url] += 1
-            except KeyError:
-                docalign_trg_urls[trg_url] = 1
+            for score, src_url, trg_url in zip(scores, src_urls, trg_urls):
+                try:
+                    docalign_src_urls[src_url] += 1
+                except KeyError:
+                    docalign_src_urls[src_url] = 1
+                try:
+                    docalign_trg_urls[trg_url] += 1
+                except KeyError:
+                    docalign_trg_urls[trg_url] = 1
 
-            k = hash(f"{src_url}\t{trg_url}")
-            docalign_url_scores[k] = score
-            src_url_nolines = src_urls_nolines[src_url]
-            trg_url_nolines = trg_urls_nolines[trg_url]
-            nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
+                k = hash(f"{src_url}\t{trg_url}")
+                docalign_url_scores[k] = score
+                src_url_nolines = src_urls_nolines[src_url]
+                trg_url_nolines = trg_urls_nolines[trg_url]
+                nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
 
-            if not sent_file:
-                sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
-                sys.stdout.write('\n')
+                if not sent_file:
+                    sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
+                    sys.stdout.write('\n')
 
-                total_printed_urls += 1
+                    total_printed_urls += 1
 
     # Process sent.gz file
     if sent_file:
         logging.info("Processing sent.gz file")
 
-        aligned_urls = get_urls_from_sent(sent_file, sent_file_src_url_idx, sent_file_trg_url_idx)
+        aligned_urls = utils_bitextor.get_urls_from_sent(sent_file, sent_file_src_url_idx, sent_file_trg_url_idx)
 
         logging.info("Unique different paired URLs: %d", len(aligned_urls))
 
@@ -337,12 +310,13 @@ def main(args):
             src_url = urls[0]
             trg_url = urls[1]
 
-            try:
-                docalign_src_urls[src_url]
-                docalign_trg_urls[trg_url]
-            except KeyError:
-                skipped_bc_docalign += 1
-                continue
+            if process_docalign:
+                try:
+                    docalign_src_urls[src_url]
+                    docalign_trg_urls[trg_url]
+                except KeyError:
+                    skipped_bc_docalign += 1
+                    continue
 
             try:
                 src_url_nolines = src_urls_nolines[src_url]
@@ -363,9 +337,15 @@ def main(args):
             except KeyError:
                 score = -1.0
 
-                logging.warning("Docalign score not found for URLs: ('%s', '%s')", src_url, trg_url)
+                if process_docalign:
+                    logging.warning("Docalign score not found for URLs: ('%s', '%s')", src_url, trg_url)
 
-            sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
+            sys.stdout.write(f"{src_url}\t{trg_url}")
+
+            if process_docalign:
+                sys.stdout.write(f"\t{score}")
+
+            sys.stdout.write(f"\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
             sys.stdout.write(f"\t{occurrences}\t{occurrences_score}\t{nolines_and_occurences_score_f1}")
             sys.stdout.write('\n')
 
@@ -380,7 +360,7 @@ def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Get aligned URLs")
 
-    parser.add_argument('--docalign-mt-matches-files', nargs='+', required=True, help=".matches files")
+    parser.add_argument('--docalign-mt-matches-files', nargs='+', help=".matches files")
     parser.add_argument('--src-url-files', nargs='+', required=True, help="Source url.gz files from sharding")
     parser.add_argument('--trg-url-files', nargs='+', required=True, help="Target url.gz files from sharding")
     parser.add_argument('--src-sentences-files', nargs='+', required=True, help="Source sentences.gz files from sharding")
