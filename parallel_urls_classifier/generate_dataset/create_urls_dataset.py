@@ -174,8 +174,11 @@ def main(args):
     dev_domains, dev_max_idx = set(), train_max_idx + int(dev_perc * len(parallel_urls.keys()))
     test_domains, test_max_idx = set(), len(parallel_urls.keys())
     idx = 0
+    all_domains = list(parallel_urls.keys())
 
-    for idx, domain in enumerate(parallel_urls.keys()):
+    random.shuffle(all_domains) # Shuffle domains in order to avoid dependency between the data and the order it was provided
+
+    for idx, domain in enumerate(all_domains):
         if idx < train_max_idx:
             train_domains.add(domain)
         elif idx < dev_max_idx:

@@ -14,6 +14,7 @@ import parallel_urls_classifier.utils.utils as utils
 import parallel_urls_classifier.generate_dataset.utils_bitextor as utils_bitextor
 
 import numpy as np
+import Levenshtein
 
 _occurrences_warning_only_once = True
 _occurrences_warning_already_done = False
@@ -206,6 +207,7 @@ def main(args):
     docalign_url_scores = {}
     total_printed_urls = 0
     total_possible_printed_urls = 0
+    levenshtein_url_distances = {}
 
     # Get number of lines per document/URL
     src_urls_nolines = utils_bitextor.get_nolines_from_url_and_sentences(src_url_files, src_sentences_files)
@@ -220,6 +222,7 @@ def main(args):
         sys.stdout.write("\tdocalign_score")
 
     sys.stdout.write("\tsrc_doc_nolines\ttrg_doc_nolines\tsrc_and_trg_docs_nolines_score")
+    sys.stdout.write("\tlevenshtein_urls_distance")
 
     if sent_file:
         sys.stdout.write("\tsegalign_src_and_trg_nolines\tsegalign_src_and_trg_nolines_score\tsegalign_and_docs_nolines_score_f1")
@@ -275,12 +278,14 @@ def main(args):
 
                 k = hash(f"{src_url}\t{trg_url}")
                 docalign_url_scores[k] = score
+                levenshtein_url_distances[k] = Levenshtein.distance(src_url, trg_url, score_cutoff=256)
                 src_url_nolines = src_urls_nolines[src_url]
                 trg_url_nolines = trg_urls_nolines[trg_url]
                 nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
 
                 if not sent_file:
                     sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
+                    sys.stdout.write(f"\t{levenshtein_url_distances[k]}")
                     sys.stdout.write('\n')
 
                     total_printed_urls += 1
@@ -312,6 +317,7 @@ def main(args):
 
             src_url = urls[0]
             trg_url = urls[1]
+            k = hash(f"{src_url}\t{trg_url}")
 
             if process_docalign:
                 try:
@@ -322,6 +328,11 @@ def main(args):
                     continue
 
             try:
+                levenshtein_url_distance = levenshtein_url_distances[k]
+            except KeyError:
+                levenshtein_url_distances[k] = Levenshtein.distance(src_url, trg_url, score_cutoff=256)
+
+            try:
                 src_url_nolines = src_urls_nolines[src_url]
                 trg_url_nolines = trg_urls_nolines[trg_url]
             except KeyError:
@@ -329,7 +340,6 @@ def main(args):
 
                 continue
 
-            k = hash(f"{src_url}\t{trg_url}")
             score = 0.0
             nolines_score, occurrences_score = get_doc_nolines_score(src_url_nolines, trg_url_nolines, occurrences=occurrences,
                                                                      src_url=src_url, trg_url=trg_url)
@@ -349,6 +359,7 @@ def main(args):
                 sys.stdout.write(f"\t{score}")
 
             sys.stdout.write(f"\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
+            sys.stdout.write(f"\t{levenshtein_url_distances[k]}")
             sys.stdout.write(f"\t{occurrences}\t{occurrences_score}\t{nolines_and_occurences_score_f1}")
             sys.stdout.write('\n')
 

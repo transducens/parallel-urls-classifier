@@ -29,17 +29,22 @@ def stringify_url(url, separator=' ', lower=False):
     return url
 
 def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_data=False, separator=' ',
-                   stringify_instead_of_tokenization=False):
+                   stringify_instead_of_tokenization=False, remove_protocol=True):
     urls = []
 
     if isinstance(url, str):
         url = [url]
 
+    if remove_protocol_and_authority:
+        if not remove_protocol:
+            logging.warning("'remove_protocol' is not True, but since 'remove_protocol_and_authority' is True, it will enabled")
+
+        remove_protocol = True
+
     for u in url:
         u = u.rstrip('/')
 
-        if remove_protocol_and_authority:
-            # Remove protocol
+        if remove_protocol:
             if u.startswith("https://"):
                 u = u[8:]
             elif u.startswith("http://"):
@@ -57,7 +62,9 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
                     else:
                         u = u[s + 2:]
 
-            # Remove authority
+        if remove_protocol_and_authority:
+            # The protocol should have been removed once reached this point
+
             s = u.find('/')
 
             if s == -1:
