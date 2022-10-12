@@ -19,6 +19,9 @@ _occurrences_warning_only_once = True
 _occurrences_warning_already_done = False
 
 def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None, trg_url=None):
+    global _occurrences_warning_only_once
+    global _occurrences_warning_already_done
+
     if src_nolines < 0 or trg_nolines < 0:
         raise Exception(f"nolines can't be < 0: {src_nolines} - {trg_nolines}")
 
