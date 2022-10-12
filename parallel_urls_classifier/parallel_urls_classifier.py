@@ -166,7 +166,7 @@ def main(args):
     non_parallel_urls_test = []
 
     batch_size = args.batch_size
-    epochs = args.epochs
+    epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
     device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
@@ -437,7 +437,7 @@ def main(args):
 
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     training_steps_per_epoch = len(dataloader_train)
-    training_steps = training_steps_per_epoch * epochs
+    training_steps = training_steps_per_epoch * epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
 
     if regression:
         # Regression
@@ -725,11 +725,11 @@ def main(args):
         elif not train_until_patience:
             stop_training = epoch >= epochs
 
-    final_loss /= epochs
-    final_acc /= epochs
-    final_acc_per_class /= epochs
-    final_acc_per_class_abs /= epochs
-    final_macro_f1 /= epochs
+    final_loss /= epoch
+    final_acc /= epoch
+    final_acc_per_class /= epoch
+    final_acc_per_class_abs /= epoch
+    final_macro_f1 /= epoch
 
     logger.info("[train] Avg. loss: %f", final_loss)
     logger.info("[train] Avg. acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
