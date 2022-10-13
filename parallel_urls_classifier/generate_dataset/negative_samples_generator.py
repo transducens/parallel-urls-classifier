@@ -21,7 +21,9 @@ def common_last_checks(negative_samples_set, parallel_urls_set):
     urls_overlap = urls_len - len(negative_samples_set)
 
     if urls_overlap > 0:
-        logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: %d", urls_overlap)
+        logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: "
+                        "this might happen if you have provided >1 pair of URLs where are >1 translation for the same document: "
+                        "%d", urls_overlap)
 
 def get_negative_samples_remove_random_tokens(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10, remove_percentage=0.4):
     if remove_percentage < 0.0 or remove_percentage > 1.0:

@@ -91,6 +91,8 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
                 continue
 
+            logging.info("Generator %d: generating negative samples using '%s'", idx, generator)
+
             unary_generator = get_unary_generator(negative_samples_generator_f, limit_alignments=True,
                                                   limit_max_alignments_per_url=max_negative_samples_alignments,
                                                   extra_kwargs=extra_kwargs)
@@ -260,5 +262,8 @@ if __name__ == "__main__":
         subprocess.run([sys.executable] + sys.argv, env={**dict(os.environ), **{"PYTHONHASHSEED": str(PYTHONHASHSEED_value)}})
     else:
         logging.debug("Arguments processed: {}".format(str(args)))
+
+        if "PYTHONHASHSEED" in os.environ:
+            logging.debug("PYTHONHASHSEED: %s", os.environ["PYTHONHASHSEED"])
 
         main(args)
