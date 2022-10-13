@@ -29,7 +29,7 @@ def stringify_url(url, separator=' ', lower=False):
     return url
 
 def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_data=False, separator=' ',
-                   stringify_instead_of_tokenization=False, remove_protocol=True):
+                   stringify_instead_of_tokenization=False, remove_protocol=True, lower=True):
     urls = []
 
     if isinstance(url, str):
@@ -83,12 +83,14 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
 
             u = '/'.join(ur)
 
-        u = urllib.parse.unquote(u)
-        u = u.lower()
+        u = urllib.parse.unquote(u) # WARNING! It is necessary to replace, at least, \t
+
+        if lower:
+            u = u.lower()
 
         # TODO TBD stringify instead of tokenize or stringify after tokenization
         if stringify_instead_of_tokenization:
-            u = stringify_url(u, separator=separator)
+            u = stringify_url(u, separator=separator, lower=lower)
         else:
             u = u.replace('/', separator)
             u = re.sub(r'\s+', r' ', u)

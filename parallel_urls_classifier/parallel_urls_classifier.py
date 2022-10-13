@@ -201,6 +201,7 @@ def main(args):
     llrd = args.llrd
     lock_file = args.lock_file
     stringify_instead_of_tokenization = args.stringify_instead_of_tokenization
+    lower = not args.do_not_lower
 
     if lock_file and utils.exists(lock_file):
         logger.warning("Lock file ('%s') exists: finishing training", lock_file)
@@ -326,7 +327,7 @@ def main(args):
         interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, logger,
                               logger_verbose, inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
                               parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
-                              remove_positional_data_from_resource=remove_positional_data_from_resource)
+                              remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower)
 
         # Stop execution
         return
@@ -356,7 +357,7 @@ def main(args):
                     fd, tokenizer, batch_size,
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,
-                                                          separator=url_separator,
+                                                          separator=url_separator, lower=lower,
                                                           stringify_instead_of_tokenization=stringify_instead_of_tokenization),
                     add_symmetric_samples=add_symmetric_samples)
 
@@ -369,7 +370,7 @@ def main(args):
                     fd, tokenizer, batch_size,
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,
-                                                          separator=url_separator,
+                                                          separator=url_separator, lower=lower,
                                                           stringify_instead_of_tokenization=stringify_instead_of_tokenization))
 
         for batch_urls in batch:
@@ -859,6 +860,7 @@ def initialization():
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")
     parser.add_argument('--stringify-instead-of-tokenization', action="store_true", help="Preprocess URLs applying custom stringify instead of tokenization")
+    parser.add_argument('--do-not-lower', action="store_true", help="Do not lower URLs while preprocessing")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")

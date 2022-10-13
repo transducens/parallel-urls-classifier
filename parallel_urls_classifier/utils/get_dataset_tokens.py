@@ -17,6 +17,7 @@ def main(args):
     dataset = args.dataset
     pretrained_model = args.pretrained_model
     threshold = args.threshold
+    lower = not args.do_not_lower
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model, max_length_tokens=int(1e30))
 
@@ -25,7 +26,8 @@ def main(args):
     print(f"src_url\ttrg_url\tpre_tokenized_urls\tno_tokens")
 
     batch = utils.tokenize_batch_from_fd(dataset, tokenizer, args.batch_size,
-                                         f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=args.remove_authority),
+                                         f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=args.remove_authority,
+                                                                               lower=lower),
                                          return_urls=True)
 
     for pre_tokenized_urls_batch, initial_urls_batch in batch:
@@ -52,6 +54,7 @@ def initialization():
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
     parser.add_argument('--threshold', type=int, default=-1, help="Minimum number of tokens in order to consider the pair of URLs")
+    parser.add_argument('--do-not-lower', action="store_true", help="Do not lower URLs while preprocessing")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 

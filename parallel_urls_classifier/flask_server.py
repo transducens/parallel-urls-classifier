@@ -33,6 +33,7 @@ global_conf = {
     "streamer": None,
     "disable_streamer": None,
     "expect_urls_base64": None,
+    "lower": None,
 }
 logger = logging
 
@@ -145,6 +146,7 @@ def batch_prediction(urls):
     remove_positional_data_from_resource = global_conf["remove_positional_data_from_resource"]
     parallel_likelihood = global_conf["parallel_likelihood"]
     url_separator = global_conf["url_separator"]
+    lower = global_conf["lower"]
 
     for url in urls:
         src_url, trg_url = url.split('\t')
@@ -154,9 +156,10 @@ def batch_prediction(urls):
 
     # Inference
     results = \
-    puc_inference.non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, src_urls, trg_urls,
-                                            remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
-                                            parallel_likelihood=parallel_likelihood, url_separator=url_separator)
+        puc_inference.non_interactive_inference(
+            model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, src_urls, trg_urls,
+            remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
+            parallel_likelihood=parallel_likelihood, url_separator=url_separator, lower=lower)
 
     return results
 
@@ -167,6 +170,7 @@ def main(args):
     device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
     pretrained_model = args.pretrained_model
     flask_port = args.flask_port
+    lower = args.do_not_lower
 
     logger.debug("Device: %s", device)
 
@@ -183,6 +187,7 @@ def main(args):
     global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size)
     global_conf["disable_streamer"] = args.disable_streamer
     global_conf["expect_urls_base64"] = args.expect_urls_base64
+    global_conf["lower"] = lower
 
     # Run flask server
     app.run(debug=args.flask_debug, port=flask_port)
@@ -206,6 +211,7 @@ def initialization():
     parser.add_argument('--disable-streamer', action="store_true", help="Do not use streamer (it might lead to slower inference and OOM errors)")
     parser.add_argument('--expect-urls-base64', action="store_true", help="Decode BASE64 URLs")
     parser.add_argument('--flask-port', type=int, default=5000, help="Flask port")
+    parser.add_argument('--do-not-lower', action="store_true", help="Do not lower URLs while preprocessing")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")

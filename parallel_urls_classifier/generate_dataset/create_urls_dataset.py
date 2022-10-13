@@ -248,6 +248,7 @@ if __name__ == "__main__":
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)
 
     if "PYTHONHASHSEED" not in os.environ and not args.force_non_deterministic:
+        # TODO it closes opened temporary named pipe files -> the execution crashes -> how to fix and still keep this behavior?
         # Wrapper call in order to define PYTHONHASHSEED (https://stackoverflow.com/questions/30585108/disable-hash-randomization-from-within-python-program)
 
         PYTHONHASHSEED_value = args.seed

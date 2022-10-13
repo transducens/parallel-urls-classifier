@@ -82,7 +82,7 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
 @torch.no_grad()
 def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, logger, logger_verbose,
                           inference_from_stdin=False, remove_authority=False, remove_positional_data_from_resource=False,
-                          parallel_likelihood=False, threshold=-np.inf, url_separator=' '):
+                          parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True):
     logger.info("Inference mode enabled")
 
     if not inference_from_stdin:
@@ -100,7 +100,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                     next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size,
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
-                                                                  separator=url_separator),
+                                                                  separator=url_separator, lower=lower),
                             return_urls=True))
 
             except StopIteration:
@@ -121,7 +121,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                tokenizer, batch_size,
                                f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                      remove_positional_data=remove_positional_data_from_resource,
-                                                                     separator=url_separator)))
+                                                                     separator=url_separator, lower=lower)))
 
         # Tokens
         tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
@@ -182,7 +182,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 @torch.no_grad()
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
-                              parallel_likelihood=False, threshold=-np.inf, url_separator=' '):
+                              parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True):
     model.eval()
     results = []
 
@@ -193,7 +193,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     target_urls = next(utils.tokenize_batch_from_fd(str_urls, tokenizer, batch_size,
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
-                                                                  separator=url_separator)))
+                                                                  separator=url_separator, lower=lower)))
 
     # Tokens
     tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
