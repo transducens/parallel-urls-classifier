@@ -8,4 +8,3 @@ Flask==2.2.2
 psutil==5.9.0
 service_streamer==0.1.2
 nltk==3.7
-Levenshtein==0.20.5
