@@ -7,6 +7,7 @@ import logging
 import argparse
 import tempfile
 import contextlib
+from datetime import datetime
 
 import parallel_urls_classifier.utils.utils as utils
 from parallel_urls_classifier.inference import (
@@ -227,7 +228,7 @@ def main(args):
     os.environ["TOKENIZERS_PARALLELISM"] = "False"
 
     if not log_directory:
-        log_directory = tempfile.mkdtemp()
+        log_directory = tempfile.mkdtemp(prefix=f"puc_{datetime.now().strftime('%Y%m%d%H%M%S')}_")
 
     if not utils.exists(log_directory, f=os.path.isdir):
         raise Exception(f"Provided log directory does not exist: '{log_directory}'")
