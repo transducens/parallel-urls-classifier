@@ -553,8 +553,8 @@ def main(args):
 
                 if regression:
                     # Regression
-                    outputs = torch.sigmoid(outputs).squeeze()
-                    outputs_argmax = torch.round(outputs).squeeze().type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+                    outputs = torch.sigmoid(outputs).squeeze(1)
+                    outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
                 else:
                     # Binary classification
                     outputs = F.softmax(outputs, dim=1)

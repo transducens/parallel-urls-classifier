@@ -35,13 +35,12 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
         # Inference
         with amp_context_manager:
             outputs = model(urls, attention_mask).logits
-
             regression = outputs.cpu().detach().numpy().shape[1] == 1
 
             if regression:
                 # Regression
-                outputs = torch.sigmoid(outputs).squeeze()
-                outputs_argmax = torch.round(outputs).squeeze().cpu().numpy().astype(np.int64) # Workaround for https://github.com/pytorch/pytorch/issues/54774
+                outputs = torch.sigmoid(outputs).squeeze(1)
+                outputs_argmax = torch.round(outputs).cpu().numpy().astype(np.int64) # Workaround for https://github.com/pytorch/pytorch/issues/54774
             else:
                 # Binary classification
                 outputs = F.softmax(outputs, dim=1)
@@ -153,7 +152,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         if regression:
             # Regression
             outputs = torch.sigmoid(outputs).detach()
-            outputs_argmax = torch.round(outputs).squeeze().cpu().numpy().astype(np.int64)
+            outputs_argmax = torch.round(outputs).squeeze(1).cpu().numpy().astype(np.int64)
         else:
             # Binary classification
             outputs = F.softmax(outputs, dim=1).detach()
@@ -161,6 +160,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
         outputs = outputs.cpu()
 
+        # TODO TEST_BEFORE if we use outputs_argmax.squeeze(1) instead of outputs_argmax.squeeze(), the following condition should be safe to be removed
         if len(outputs_argmax.shape) == 0:
             outputs_argmax = np.array([outputs_argmax])
 
@@ -208,7 +208,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     if regression:
         # Regression
         outputs = torch.sigmoid(outputs).detach()
-        outputs_argmax = torch.round(outputs).squeeze().cpu().numpy().astype(np.int64)
+        outputs_argmax = torch.round(outputs).squeeze(1).cpu().numpy().astype(np.int64)
     else:
         # Binary classification
         outputs = F.softmax(outputs, dim=1).detach()
@@ -216,6 +216,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
 
     outputs = outputs.cpu()
 
+    # TODO TEST_BEFORE if we use outputs_argmax.squeeze(1) instead of outputs_argmax.squeeze(), the following condition should be safe to be removed
     if len(outputs_argmax.shape) == 0:
         outputs_argmax = np.array([outputs_argmax])
 
