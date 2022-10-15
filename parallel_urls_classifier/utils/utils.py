@@ -98,6 +98,7 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
 
         urls.append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
                                                                 #  (or other special tokens) since they are automatically added
+                                                                #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
         initial_urls.append((url[0], url[1]))
 
         if add_symmetric_samples:

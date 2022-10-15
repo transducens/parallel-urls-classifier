@@ -373,7 +373,8 @@ def main(args):
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,
                                                           separator=url_separator, lower=lower,
-                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization))
+                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization),
+                    add_symmetric_samples=add_symmetric_samples) # We add symmetric examples in dev and test in order to be sure we get a robust model
 
         for batch_urls in batch:
             l.extend(batch_urls)
