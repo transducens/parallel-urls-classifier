@@ -47,7 +47,7 @@ def get_unary_generator(generator, limit_alignments=True, limit_max_alignments_p
 
 
 def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2,
-                  negative_samples_generator=["random"], max_negative_samples_alignments=10):
+                  negative_samples_generator=["random"], max_negative_samples_alignments=10, other_args={}):
     no_parallel_urls = 0
     no_parallel_domains = len(target_domains)
     last_perc_shown = -1
@@ -86,6 +86,10 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
                 negative_samples_generator_f = nsg.get_negative_samples_intersection_metric
             elif generator == "remove-random-tokens":
                 negative_samples_generator_f = nsg.get_negative_samples_remove_random_tokens
+            elif generator == "replace-freq-words":
+                # TODO provide monolingual dictionaries with lambda function
+                src_freq_file, trg_freq_file = other_args["src_freq_file"], other_args["trg_freq_file"]
+                negative_samples_generator_f = nsg.get_negative_samples_replace_freq_words
             else:
                 logging.warning("Generator %d: unknown negative samples generator (%s): skipping", idx, generator)
 
@@ -115,6 +119,11 @@ def main(args):
     max_negative_samples_alignments = args.max_negative_samples_alignments
     same_authority = args.same_authority
     train_perc, dev_perc, test_perc = args.sets_percentage
+    src_freq_file = args.src_freq_file
+    trg_freq_file = args.trg_freq_file
+
+    other_args = {"src_freq_file": src_freq_file,
+                  "trg_freq_file": trg_freq_file}
 
     if not isinstance(negative_samples_generator, list):
         negative_samples_generator = list(negative_samples_generator)
@@ -195,7 +204,8 @@ def main(args):
     assert len(train_domains) + len(dev_domains) + len(test_domains) == len(parallel_urls.keys()), "Not all the domains have been set to a set"
 
     common_kwargs = {"negative_samples_generator": negative_samples_generator,
-                     "max_negative_samples_alignments": max_negative_samples_alignments}
+                     "max_negative_samples_alignments": max_negative_samples_alignments,
+                     "other_args": other_args}
 
     if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
         logging.warning("Some set has been detected to contain 0 domains (train, dev, test: %d, %d, %d): merging all the domains")
@@ -229,12 +239,14 @@ def initialization():
     parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt'), help="Input TSV file with parallel URLs")
     parser.add_argument('output_files_prefix', help="Output files prefix")
 
-    parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens"],
+    parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens", "replace-freq-words"],
                         default="random", nargs='+', help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")
     parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples. Useful if you only want to split the data in train/dev/test")
     parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")
     parser.add_argument('--sets-percentage', type=float, nargs=3, default=[0.8, 0.1, 0.1], help="Train, dev and test percentages")
+    parser.add_argument('--src-freq-file', help="Src monolingual freq dictionary. Used if 'replace-freq-words' is in --generator-technique")
+    parser.add_argument('--trg-freq-file', help="Src monolingual freq dictionary. Used if 'replace-freq-words' is in --generator-technique")
 
     parser.add_argument('--force-non-deterministic', action='store_true', help="If PYTHONHASHSEED is not set, it will be set in order to obtain deterministic results. If this flag is set, this action will not be done")
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (fully guaranteed if you also set PYTHONHASHSEED envvar). Set a negative number in order to disable this feature")
