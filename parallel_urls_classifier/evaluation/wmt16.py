@@ -11,11 +11,11 @@ cdir = os.path.dirname(os.path.realpath(__file__))
 
 sys.path.insert(0, f"{cdir}/../..")
 
-# TODO TBD replace own custom levenshtein with https://pypi.org/project/Levenshtein/
-import parallel_urls_classifier.utils.levenshtein as levenshtein
+#import parallel_urls_classifier.utils.levenshtein as levenshtein
 import parallel_urls_classifier.utils.utils as utils
 
 import numpy as np
+import Levenshtein
 
 def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_classify_missing_pairs=True):
     def log_classifier_stderr(msg):
@@ -198,8 +198,20 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                     logging.debug("Near-match?\t%s\t%s", url_1, url_2)
                     logging.debug("(GS, Not GS) pair:\t%s\t%s\t%s\t%s", src_gs_pair, trg_gs_pair, src_pair, trg_pair)
 
-                    early_stopping = abs(doc_1.count('\n') - doc_2.count('\n')) * 75.0 if max(doc_1.count('\n'), doc_2.count('\n')) > 10 else np.inf
-                    similarity = levenshtein.levenshtein_opt_space_and_band(doc_1, doc_2, nfactor=max(len(doc_1), len(doc_2)), percentage=0.06, early_stopping=early_stopping)["similarity"]
+                    nolines_doc_1 = doc_1.strip().count('\n') + (1 if doc_1.strip() != '' else 0)
+                    nolines_doc_2 = doc_2.strip().count('\n') + (1 if doc_2.strip() != '' else 0)
+                    early_stopping = abs(nolines_doc_1 - nolines_doc_2) * 75 if max(nolines_doc_1, nolines_doc_2) > 10 else None
+                    lev_distance = Levenshtein.distance(doc_1, doc_2, score_cutoff=early_stopping if early_stopping != 0 else None)
+
+                    if early_stopping and lev_distance == early_stopping + 1:
+                        # Early stopping hit
+                        similarity = 0.0
+                    else:
+                        # Calculate actual similarity
+                        similarity = 1.0 - lev_distance / max(len(doc_1), len(doc_2))
+
+                    #early_stopping = abs(nolines_doc_1 - nolines_doc_2) * 75.0 if max(nolines_doc_1, nolines_doc_2) > 10 else np.inf
+                    #similarity = levenshtein.levenshtein_opt_space_and_band(doc_1, doc_2, nfactor=max(len(doc_1), len(doc_2)), percentage=0.06, early_stopping=early_stopping)["similarity"]
 
                     logging.debug("Near-match similarity (url_1, url_2, similarity_score):\t%s\t%s\t%f", url_1, url_2, similarity)
 
@@ -430,7 +442,7 @@ def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="WMT16 evaluation for a single domain")
 
-    parser.add_argument('input_file', type=argparse.FileType('rt'), help="Input file with the following format: lang<tab>URL<tab>base64-doc")
+    parser.add_argument('input_file', type=argparse.FileType('rt', errors="ignore"), help="Input file from the test set with the following format: lang<tab>URL<tab>base64-doc (they should be 1st, 4th and 6th column in the original WMT16 test set)")
     parser.add_argument('gold_standard_file', type=argparse.FileType('rt'), help="Gold standard file")
 
     parser.add_argument('--classifier-command', required=True, help="Classifier command whose expected output format is: class<tab>src_url<tab>trg_url (class is expected to be 'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)")

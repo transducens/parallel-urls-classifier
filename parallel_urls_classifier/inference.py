@@ -87,10 +87,12 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     if not inference_from_stdin:
         logger.info("Insert 2 blank lines in order to end")
 
-    logger_verbose["tokens"].debug("model_input\ttokens\ttokens2str\tunk_chars\tinitial_tokens_vs_detokenized\t" \
-                                   "initial_tokens_vs_detokenized_len_1")
+    logger_verbose["tokens"].debug("preprocessed_urls\tmodel_input\ttokens\ttokens2str\tunk_chars\t" \
+                                   "initial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
 
     model.eval()
+
+    pad_token = utils.encode(tokenizer, tokenizer.pad_token, 1, False).input_ids.squeeze()
 
     while True:
         if inference_from_stdin:
@@ -129,12 +131,12 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
         # Debug info
         ## Tokens
-        urls_tokens = urls.cpu() * attention_mask.cpu()
+        urls_tokens = urls.cpu() * attention_mask.cpu() # PAD tokens -> 0
 
-        for ut in urls_tokens:
-            url_tokens = ut[ut.nonzero()][:,0]
+        for idx, ut in enumerate(urls_tokens):
+            url_tokens = ut[ut != pad_token]
             original_str_from_tokens = tokenizer.decode(url_tokens) # Detokenize
-            str_from_tokens = ' '.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a space between tokens
+            str_from_tokens = '<tok_sep>'.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a mark between tokens
             ## Unk
             unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
             sp_unk_vs_tokens_len = f"{len(original_str_from_tokens.split(url_separator))} vs " \
@@ -142,7 +144,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(url_separator)))} vs " \
                                        f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(url_separator)))}"
 
-            logger_verbose["tokens"].debug("%s\t%s\t%s\t%d\t%s\t%s", original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
+            logger_verbose["tokens"].debug("%s\t%s\t%s\t%s\t%d\t%s\t%s", target_urls[idx], original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
         with amp_context_manager:
             outputs = model(urls, attention_mask).logits

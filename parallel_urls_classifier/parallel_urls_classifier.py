@@ -335,7 +335,8 @@ def main(args):
 
     if regression:
         if imbalanced_strategy == "weighted-loss":
-            logger.warning("Incompatible weight strategy ('%s'): it will not be applied", imbalanced_strategy)
+            logger.warning("Incompatible weight strategy ('%s'): regression can't be applied with the selected strategy: "
+                           "it will not be applied", imbalanced_strategy)
 
     # Freeze layers, if needed
     for param in model.parameters():

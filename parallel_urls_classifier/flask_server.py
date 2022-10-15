@@ -206,7 +206,7 @@ def initialization():
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
     parser.add_argument('--do-not-remove-positional-data-from-resource', action="store_true", help="Remove content after '#' in the resorce (e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
-    parser.add_argument('--url-separator', default=' ', help="Separator to use when URLs are stringified")
+    parser.add_argument('--url-separator', default='/', help="Separator to use when URLs are stringified")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--disable-streamer', action="store_true", help="Do not use streamer (it might lead to slower inference and OOM errors)")
     parser.add_argument('--expect-urls-base64', action="store_true", help="Decode BASE64 URLs")
