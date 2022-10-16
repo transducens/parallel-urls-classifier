@@ -47,16 +47,18 @@ def get_unary_generator(generator, limit_max_alignments_per_url=10, extra_kwargs
 
 
 def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2,
-                  negative_samples_generator=["random"], max_negative_samples_alignments=10, other_args={}):
+                  negative_samples_generator=["random"], max_negative_samples_alignments=10, other_args={},
+                  generate_positive_samples=True):
     no_parallel_urls = 0
     no_parallel_domains = len(target_domains)
     last_perc_shown = -1
 
     # Store parallel URLs
-    with open(parallel_filename, "w") as f:
+    with open(parallel_filename, 'w') as f: # File will be created even if 'generate_positive_samples' -> easier scripting later
         for idx, domain in enumerate(target_domains):
             for url1, url2 in parallel_urls[domain]:
-                f.write(f"{url1}\t{url2}\n")
+                if generate_positive_samples:
+                    f.write(f"{url1}\t{url2}\n")
 
                 no_parallel_urls += 1
 
@@ -68,8 +70,12 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
                             finished_perc, idx + 1, no_parallel_domains, no_parallel_urls)
                 last_perc_shown = int(finished_perc * 100.0)
 
-    logging.info("Total URLs for '%s' (positive samples): %d", parallel_filename, no_parallel_urls)
-    logging.info("Total domains for '%s' (positive samples): %d", parallel_filename, no_parallel_domains)
+    if generate_positive_samples:
+        logging.info("Total URLs (positive samples): stored in '%s': %d", parallel_filename, no_parallel_urls)
+    else:
+        logging.info("Total URLs (positive samples): not stored in file: %d", no_parallel_urls)
+
+    logging.info("Total domains (positive samples): %d", no_parallel_domains)
 
     with open(non_parallel_filename, "w") as f:
         # Create file and remove content if exists
@@ -115,6 +121,7 @@ def main(args):
     output_file_urls_prefix = args.output_files_prefix
     negative_samples_generator = args.generator_technique
     generate_negative_samples = not args.do_not_generate_negative_samples
+    generate_positive_samples = not args.do_not_generate_positive_samples
     seed = args.seed
     max_negative_samples_alignments = args.max_negative_samples_alignments
     same_authority = args.same_authority
@@ -207,6 +214,7 @@ def main(args):
 
     common_kwargs = {"negative_samples_generator": negative_samples_generator,
                      "max_negative_samples_alignments": max_negative_samples_alignments,
+                     "generate_positive_samples": generate_positive_samples,
                      "other_args": other_args}
 
     if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
@@ -244,6 +252,7 @@ def initialization():
     parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens", "replace-freq-words"],
                         default="random", nargs='+', help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")
+    parser.add_argument('--do-not-generate-positive-samples', action='store_true', help="Do not generate positive samples. Useful if you only want to generate negative samples")
     parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples. Useful if you only want to split the data in train/dev/test")
     parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")
     parser.add_argument('--sets-percentage', type=float, nargs=3, default=[0.8, 0.1, 0.1], help="Train, dev and test percentages")
