@@ -71,21 +71,29 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                     wfreq = double_linked_freqs.get_word_freq(w)
                     alternatives = double_linked_freqs.get_words_for_freq(wfreq)
 
-                    if alternatives is not None:
-                        alternatives = list(sorted(alternatives))
+                    # Avoid replace with the same word
+                    if alternatives and w.lower() in alternatives:
+                        alternatives.remove(w.lower())
+
+                    # Try a non-exact approach, if needed
+                    if not alternatives:
+                        # Let's try a non-exact approach
+                        woccs = double_linked_freqs.get_word_occs(w)
+                        alternatives = double_linked_freqs.get_words_for_occs(woccs, exact=False)
 
                         # Avoid replace with the same word
-                        if w.lower() in alternatives:
+                        if alternatives and w.lower() in alternatives:
                             alternatives.remove(w.lower())
 
-                        if alternatives:
-                            tokenized_url[wordpos] = random.choice(alternatives)
+                    if alternatives:
+                        alternatives = list(alternatives)
+                        tokenized_url[wordpos] = random.choice(alternatives)
 
-                            # Restore starting capital letter
-                            if wordpos == 0 and w[0].isupper():
-                                tokenized_url[wordpos] = tokenized_url[wordpos].capitalize()
+                        # Restore starting capital letter
+                        if wordpos == 0 and w[0].isupper():
+                            tokenized_url[wordpos] = tokenized_url[wordpos].capitalize()
 
-                            total_replacements += 1
+                        total_replacements += 1
 
                 if total_replacements < min_replacements:
                     tokenized_src_url = orig_src_url
@@ -94,15 +102,11 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                 count += 1
 
                 if tokenized_src_url != orig_src_url or tokenized_trg_url != orig_trg_url:
-                    # We got different URLs!
+                    # We got different URLs! 1 hit, at least (we might have had more since 'len(tokenized_url_and_dic) > 1' is possible)
+                    # We can't restore original URLs because we might remove the modifications done by
+                    #  other loop instance from 'tokenized_url_and_dic' element
                     break
                 if count >= max_tries:
-                    tokenized_src_url = orig_src_url # Not totally necessary since we previously checked we have the same content
-                    tokenized_trg_url = orig_trg_url # Not totally necessary since we previously checked we have the same content
-
-                    logging.warning("Couldn't find words with the same frequency: return original src and trg URLs: ('%s', '%s')",
-                                    str(tokenized_src_url), str(tokenized_trg_url))
-
                     break
 
         return tokenized_src_url, tokenized_trg_url
@@ -111,6 +115,8 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
     _side = side
 
     for src_url, trg_url in parallel_urls:
+        hit = False
+
         for idx in range(limit_max_alignments_per_url):
             if side == "all":
                 _side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
@@ -120,7 +126,14 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                 lambda s, t: run(s, t, side=_side, min_replacements=min_replacements),
                 "replace_freq_words")
 
-            urls.add((_src_url, _trg_url))
+            if src_url != _src_url or trg_url != _trg_url:
+                hit = True
+
+                urls.add((_src_url, _trg_url))
+
+        if not hit:
+            logging.warning("Couldn't find words with the same frequency: couldn't generate negative sample for the provided URLs: ('%s', '%s')",
+                            str(src_url), str(trg_url))
 
     common_last_checks(urls, parallel_urls)
 
@@ -195,7 +208,11 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
     return random_combinations(parallel_urls, limit_max_alignments_per_url=limit_max_alignments_per_url)
 
+_long_warning_raised = False
+
 def common_last_checks(negative_samples_set, parallel_urls_set):
+    global _long_warning_raised
+
     urls_len = len(negative_samples_set)
 
     # Update reference set removing parallel pairs, if any
@@ -204,9 +221,14 @@ def common_last_checks(negative_samples_set, parallel_urls_set):
     urls_overlap = urls_len - len(negative_samples_set)
 
     if urls_overlap > 0:
-        logging.warning("Bug? Parallel and non-parallel URLs sets overlap > 0: "
-                        "this might happen if you have provided >1 pair of URLs where are >1 translation for the same document: "
-                        "%d", urls_overlap)
+        if _long_warning_raised:
+            logging.warning("Parallel and non-parallel URLs sets overlap > 0: %d", urls_overlap)
+        else:
+            logging.warning("Parallel and non-parallel URLs sets overlap > 0: "
+                            "this might happen for different reasons (e.g. your strategy couldn't generate a negative sample, "
+                            "you have provided >1 pair of URLs where are >1 translation for the same document): %d", urls_overlap)
+
+            _long_warning_raised = True
 
 def random_combinations(parallel_urls, limit_max_alignments_per_url=10, binary_callback=None, **kwargs):
     idxs2 = list(range(len(parallel_urls)))

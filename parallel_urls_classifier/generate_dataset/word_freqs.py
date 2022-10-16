@@ -14,8 +14,8 @@ class WordFreqDist(object):
     # Constructor
     def __init__(self, file_with_freq):
         self.word_freqs = dict()
+        self.word_occs = dict()
         fname = file_with_freq if not hasattr(file_with_freq, 'name') else file_with_freq.name
-        word_ocss = dict()
 
         with utils.open_xz_or_gzip_or_plain(fname) as reader:
             for line in reader:
@@ -23,11 +23,11 @@ class WordFreqDist(object):
                 parts = line.split()
                 word = parts[-1]
                 occs = int(parts[0])
-                word_ocss[word] = occs
+                self.word_occs[word] = occs
 
-        self.total_words = sum(word_ocss.values())
+        self.total_words = sum(self.word_occs.values())
 
-        for word, occs in word_ocss.items():
+        for word, occs in self.word_occs.items():
             self.word_freqs[word] = int(math.log(float(occs)/float(self.total_words))*100)
 
         self.min_freq = int(math.log(1.0/float(self.total_words))*100)
@@ -102,3 +102,11 @@ class WordFreqDist(object):
             return self.word_freqs[word]
         else:
             return self.min_freq
+
+    def get_word_occs(self, word):
+        word = word.lower()
+
+        if word in self.word_occs:
+            return self.word_occs[word]
+        else:
+            return 0
