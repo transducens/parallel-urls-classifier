@@ -18,12 +18,12 @@ def main(args):
 
     with gzip.open(src_urls_data, "rb") if src_urls_data != '-' else sys.stdin as urls_data:
         for idx, url in enumerate(urls_data, 1):
-            url = url.decode("utf-8", errors="ignore").rstrip('\n')
+            url = url.decode("utf-8", errors="backslashreplace").rstrip('\n')
             index_urls["src"][url] = idx
 
     with gzip.open(trg_urls_data, "rb") if trg_urls_data != '-' else sys.stdin as urls_data:
         for idx, url in enumerate(urls_data, 1):
-            url = url.decode("utf-8", errors="ignore").rstrip('\n')
+            url = url.decode("utf-8", errors="backslashreplace").rstrip('\n')
             index_urls["trg"][url] = idx
 
     logging.info("Total (src, trg) entries (deduplicated): (%d, %d)", len(index_urls["src"]), len(index_urls["trg"]))

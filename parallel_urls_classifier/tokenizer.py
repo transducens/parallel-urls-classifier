@@ -1,4 +1,5 @@
 
+import sys
 import logging
 
 from nltk.tokenize import RegexpTokenizer
@@ -22,3 +23,7 @@ def tokenize(s, check_gaps=True, gaps_whitelist=[' ']):
                     break
 
     return tokenized_str
+
+if __name__ == "__main__":
+    for s in sys.stdin:
+        print(' '.join(tokenize(s.rstrip('\n'))))

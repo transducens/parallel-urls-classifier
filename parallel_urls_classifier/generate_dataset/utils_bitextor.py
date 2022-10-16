@@ -38,7 +38,7 @@ def get_nolines_from_url_and_sentences(url_files, sentences_files):
                 sentences_line = sentences_line.strip()
 
                 # URL should not be the same twice
-                sentences_line = base64.b64decode(sentences_line).decode('utf-8', errors="ignore").strip()
+                sentences_line = base64.b64decode(sentences_line).decode('utf-8', errors="backslashreplace").strip()
 
                 urls_nolines[url_line] = sentences_line.count('\n') + (1 if sentences_line != '' else 0)
 

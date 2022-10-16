@@ -113,10 +113,10 @@ def main(args):
                     pair = f"{src_url}\t{trg_url}"
 
                     if not src_added:
-                        src_mime_file.write(f"{mime}\n".encode("utf-8", errors="ignore"))
-                        src_urls_file.write(f"{src_url}\n".encode("utf-8", errors="ignore"))
-                        src_html_file.write(f"{src_html[src_idx]}\n".encode("utf-8", errors="ignore"))
-                        src_text_file.write(f"{src_text[src_idx]}\n".encode("utf-8", errors="ignore"))
+                        src_mime_file.write(f"{mime}\n".encode("utf-8", errors="backslashreplace"))
+                        src_urls_file.write(f"{src_url}\n".encode("utf-8", errors="backslashreplace"))
+                        src_html_file.write(f"{src_html[src_idx]}\n".encode("utf-8", errors="backslashreplace"))
+                        src_text_file.write(f"{src_text[src_idx]}\n".encode("utf-8", errors="backslashreplace"))
 
                         src_entries += 1
 
@@ -124,10 +124,10 @@ def main(args):
                         index["src"][src_url] = src_entries # Start: 1
 
                     if trg_idx not in trg_idxs:
-                        trg_mime_file.write(f"{mime}\n".encode("utf-8", errors="ignore"))
-                        trg_urls_file.write(f"{trg_url}\n".encode("utf-8", errors="ignore"))
-                        trg_html_file.write(f"{trg_html[trg_idx]}\n".encode("utf-8", errors="ignore"))
-                        trg_text_file.write(f"{trg_text[trg_idx]}\n".encode("utf-8", errors="ignore"))
+                        trg_mime_file.write(f"{mime}\n".encode("utf-8", errors="backslashreplace"))
+                        trg_urls_file.write(f"{trg_url}\n".encode("utf-8", errors="backslashreplace"))
+                        trg_html_file.write(f"{trg_html[trg_idx]}\n".encode("utf-8", errors="backslashreplace"))
+                        trg_text_file.write(f"{trg_text[trg_idx]}\n".encode("utf-8", errors="backslashreplace"))
 
                         trg_idxs.add(trg_idx)
 

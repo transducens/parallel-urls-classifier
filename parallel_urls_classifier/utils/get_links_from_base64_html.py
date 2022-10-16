@@ -19,7 +19,7 @@ def process(base64_data):
     results = []
 
     try:
-        html = base64.b64decode(base64_html).decode("utf-8", errors="ignore")
+        html = base64.b64decode(base64_html).decode("utf-8", errors="backslashreplace")
 
         if not html:
             return results

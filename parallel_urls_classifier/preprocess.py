@@ -9,13 +9,8 @@ from parallel_urls_classifier.tokenizer import tokenize
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 def stringify_url(url, separator=' ', lower=False):
-    if url[:8] == "https://":
-        url = url[8:]
-    elif url[:7] == "http://":
-        url = url[7:]
-
+    url = url[utils.get_idx_after_protocol(url):]
     replace_chars = ['.', '-', '_', '=', '?', '\n', '\r', '\t']
-
     url = url.rstrip('/')
 
     if lower:
@@ -39,38 +34,15 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
         if not remove_protocol:
             logging.warning("'remove_protocol' is not True, but since 'remove_protocol_and_authority' is True, it will enabled")
 
-        remove_protocol = True
+        remove_protocol = True # Just for logic, but it will have no effect
 
     for u in url:
         u = u.rstrip('/')
 
-        if remove_protocol:
-            if u.startswith("https://"):
-                u = u[8:]
-            elif u.startswith("http://"):
-                u = u[7:]
-            else:
-                # Check for other protocols different from HTTP
-
-                d = u.find(':')
-                s = u.find('/')
-
-                if d != -1 and s != -1 and s - d == 1 and u[d:s + 2] == "://":
-                    if len(u) > s + 2:
-                        if u[s + 2] != '/':
-                            u = u[s + 2:]
-                    else:
-                        u = u[s + 2:]
-
         if remove_protocol_and_authority:
-            # The protocol should have been removed once reached this point
-
-            s = u.find('/')
-
-            if s == -1:
-                u = "" # No resource
-            else:
-                u = u[s + 1:]
+            u = u[get_idx_resource(u):]
+        elif remove_protocol:
+            u = u[utils.get_idx_after_protocol(u):]
 
         if remove_positional_data:
             # e.g. https://www.example.com/resource#position -> https://www.example.com/resource
@@ -83,7 +55,7 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
 
             u = '/'.join(ur)
 
-        u = urllib.parse.unquote(u) # WARNING! It is necessary to replace, at least, \t
+        u = urllib.parse.unquote(u, errors="backslashreplace") # WARNING! It is necessary to replace, at least, \t
 
         if lower:
             u = u.lower()

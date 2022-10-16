@@ -63,10 +63,10 @@ def main(args):
             if write_data:
                 url = urls[idx]
 
-                mime_file.write(f"{mime}\n".encode("utf-8", errors="ignore"))
-                urls_file.write(f"{url}\n".encode("utf-8", errors="ignore"))
-                html_file.write(f"{html[idx]}\n".encode("utf-8", errors="ignore"))
-                text_file.write(f"{text[idx]}\n".encode("utf-8", errors="ignore"))
+                mime_file.write(f"{mime}\n".encode("utf-8", errors="backslashreplace"))
+                urls_file.write(f"{url}\n".encode("utf-8", errors="backslashreplace"))
+                html_file.write(f"{html[idx]}\n".encode("utf-8", errors="backslashreplace"))
+                text_file.write(f"{text[idx]}\n".encode("utf-8", errors="backslashreplace"))
 
                 entries += 1
 

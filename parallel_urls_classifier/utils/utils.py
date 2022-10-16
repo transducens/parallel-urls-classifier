@@ -342,3 +342,36 @@ def get_tuple_if_is_not_tuple(obj, check_not_list=True):
             return (obj,)
 
     return obj
+
+def get_idx_after_protocol(url):
+    idx = 0
+
+    if url.startswith("http://"):
+        idx += 7
+    elif url.startswith("https://"):
+        idx += 8
+    else:
+        # Other protocols
+
+        idx = url.find("://")
+
+        if idx == -1:
+            # No "after" protocol found
+            logging.warning("Protocol not found for the provided URL: %s", url)
+
+            return 0
+
+        idx += 3 # Sum len("://")
+
+    return idx
+
+def get_idx_resource(url, url_has_protocol=True):
+    if url_has_protocol:
+        idx = get_idx_after_protocol(url)
+
+    idx = url.find('/', idx)
+
+    if idx == -1:
+        return len(url) # There is no resource (likely is just the authority, i.e., main resource of the website)
+
+    return idx + 1

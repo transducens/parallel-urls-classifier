@@ -31,7 +31,7 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
     obtained_pairs = []
 
     if results_fd:
-        clean_pairs = set(map(lambda p: p.encode("utf-8", errors="ignore").decode(), pairs))
+        clean_pairs = set(map(lambda p: p.encode("utf-8", errors="backslashreplace").decode(), pairs))
         set_pairs = set(pairs)
         missing_pairs = 0
         seen_pairs = set()
@@ -65,8 +65,8 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
             else:
                 # It has failed, but we still might have the pair and have skipped it due to encoding
 
-                src_pair_2 = src_pair.encode(errors="ignore").decode("utf-8", errors="ignore")
-                trg_pair_2 = trg_pair.encode(errors="ignore").decode("utf-8", errors="ignore")
+                src_pair_2 = src_pair.encode(errors="backslashreplace").decode("utf-8", errors="backslashreplace")
+                trg_pair_2 = trg_pair.encode(errors="backslashreplace").decode("utf-8", errors="backslashreplace")
                 pair_2 = f"{src_pair_2}\t{trg_pair_2}"
                 pair_reversed_2 = f"{trg_pair_2}\t{src_pair_2}"
 
@@ -97,10 +97,10 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
             logging.warning("Not all results were provided: %d elements will be calculated with the classifier: evaluation might change", len(classifier_list_results))
 
         sp_result = subprocess.Popen(f"{command}", shell=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-        aux_result, aux_err = sp_result.communicate('\n'.join(classifier_list_results).encode(errors="ignore"))
+        aux_result, aux_err = sp_result.communicate('\n'.join(classifier_list_results).encode(errors="backslashreplace"))
 
-        list_results.extend(list(map(lambda v: v.split('\t'), aux_result.decode("utf-8", errors="ignore").strip().split('\n'))))
-        classifier_output.extend(list(map(lambda e: f"from classifier command (subprocess): {e}", aux_err.decode("utf-8", errors="ignore").strip().split('\n'))))
+        list_results.extend(list(map(lambda v: v.split('\t'), aux_result.decode("utf-8", errors="backslashreplace").strip().split('\n'))))
+        classifier_output.extend(list(map(lambda e: f"from classifier command (subprocess): {e}", aux_err.decode("utf-8", errors="backslashreplace").strip().split('\n'))))
 
     if not do_not_classify_missing_pairs and len(list_results) != len(pairs):
         log_classifier_stderr(classifier_output)
@@ -315,7 +315,7 @@ def main(args):
         if lang not in ("en", "fr"):
             raise Exception(f"Unexpected lang (expected: en, fr): {lang}")
 
-        doc = base64.b64decode(doc).decode("utf-8", errors="ignore").strip()
+        doc = base64.b64decode(doc).decode("utf-8", errors="backslashreplace").strip()
 
         if lang == "en":
             src_urls.append(url)
@@ -442,7 +442,7 @@ def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="WMT16 evaluation for a single domain")
 
-    parser.add_argument('input_file', type=argparse.FileType('rt', errors="ignore"), help="Input file from the test set with the following format: lang<tab>URL<tab>base64-doc (they should be 1st, 4th and 6th column in the original WMT16 test set)")
+    parser.add_argument('input_file', type=argparse.FileType('rt', errors="backslashreplace"), help="Input file from the test set with the following format: lang<tab>URL<tab>base64-doc (they should be 1st, 4th and 6th column in the original WMT16 test set)")
     parser.add_argument('gold_standard_file', type=argparse.FileType('rt'), help="Gold standard file")
 
     parser.add_argument('--classifier-command', required=True, help="Classifier command whose expected output format is: class<tab>src_url<tab>trg_url (class is expected to be 'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)")

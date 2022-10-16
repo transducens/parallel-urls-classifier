@@ -26,7 +26,7 @@ def main():
         lang, mime, encoding, url, html_b64, text_b64 = lett_data
         url = url.replace('\t', ' ')
 
-        html = base64.b64decode(html_b64).decode("utf-8", errors="ignore")
+        html = base64.b64decode(html_b64).decode("utf-8", errors="backslashreplace")
 
         if not html:
             logging.error("Line %d: could not get HTML", idx + 1)

@@ -97,8 +97,8 @@ def inference():
 
     if base64_encoded:
         try:
-            src_urls = [base64.b64decode(f"{u}==").decode("utf-8", errors="ignore").replace('\n', ' ') for u in src_urls]
-            trg_urls = [base64.b64decode(f"{u}==").decode("utf-8", errors="ignore").replace('\n', ' ') for u in trg_urls]
+            src_urls = [base64.b64decode(f"{u}==").decode("utf-8", errors="backslashreplace").replace('\n', ' ') for u in src_urls]
+            trg_urls = [base64.b64decode(f"{u}==").decode("utf-8", errors="backslashreplace").replace('\n', ' ') for u in trg_urls]
         except Exception as e:
             logger.error("Exception when decoding BASE64: %s", e)
 

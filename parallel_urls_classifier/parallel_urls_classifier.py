@@ -354,7 +354,9 @@ def main(args):
 
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
-    for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train)):
+    for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train),
+                  (file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev)):
+                  # We add symmetric examples in dev as well in order to be sure we get a robust model
         batch = utils.tokenize_batch_from_fd(
                     fd, tokenizer, batch_size,
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
@@ -366,15 +368,13 @@ def main(args):
         for batch_urls in batch:
             l.extend(batch_urls)
 
-    for fd, l in ((file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev),
-                  (file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
+    for fd, l in ((file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
         batch = utils.tokenize_batch_from_fd(
                     fd, tokenizer, batch_size,
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,
                                                           separator=url_separator, lower=lower,
-                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization),
-                    add_symmetric_samples=add_symmetric_samples) # We add symmetric examples in dev and test in order to be sure we get a robust model
+                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization))
 
         for batch_urls in batch:
             l.extend(batch_urls)
