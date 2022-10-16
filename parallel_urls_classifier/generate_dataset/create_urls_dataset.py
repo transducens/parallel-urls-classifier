@@ -42,9 +42,8 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
 
     return no_non_parallel_urls, no_non_parallel_domains
 
-def get_unary_generator(generator, limit_alignments=True, limit_max_alignments_per_url=10, extra_kwargs={}):
-    return lambda data: generator(data, limit_alignments=limit_alignments,
-                                  limit_max_alignments_per_url=limit_max_alignments_per_url, **extra_kwargs)
+def get_unary_generator(generator, limit_max_alignments_per_url=10, extra_kwargs={}):
+    return lambda data: generator(data, limit_max_alignments_per_url=limit_max_alignments_per_url, **extra_kwargs)
 
 
 def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2,
@@ -90,6 +89,7 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
             elif generator == "replace-freq-words":
                 extra_kwargs["src_monolingual_file"] = other_args["src_freq_file"]
                 extra_kwargs["trg_monolingual_file"] = other_args["trg_freq_file"]
+                extra_kwargs["min_replacements"] = 2
                 negative_samples_generator_f = nsg.get_negative_samples_replace_freq_words
             else:
                 logging.warning("Generator %d: unknown negative samples generator (%s): skipping", idx, generator)
@@ -98,8 +98,7 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
             logging.info("Generator %d: generating negative samples using '%s'", idx, generator)
 
-            unary_generator = get_unary_generator(negative_samples_generator_f, limit_alignments=True,
-                                                  limit_max_alignments_per_url=max_negative_samples_alignments,
+            unary_generator = get_unary_generator(negative_samples_generator_f, limit_max_alignments_per_url=max_negative_samples_alignments,
                                                   extra_kwargs=extra_kwargs)
 
             # Create negative samples -> same domain and get all combinations (store non-parallel URLs)

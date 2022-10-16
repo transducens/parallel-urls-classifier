@@ -18,7 +18,7 @@ class WordFreqDistDoubleLinked(WordFreqDist):
 
     # Constructor
     def __init__(self, file_with_freq):
-        WordZipfFreqDist.__init__(self,file_with_freq)
+        WordFreqDist.__init__(self, file_with_freq)
 
         self.freq_words = dict()
 

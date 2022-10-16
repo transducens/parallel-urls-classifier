@@ -19,7 +19,7 @@ class WordFreqDist(object):
 
         with utils.open_xz_or_gzip_or_plain(fname) as reader:
             for line in reader:
-                line = line.decode().strip()
+                line = line.strip()
                 parts = line.split()
                 word = parts[-1]
                 occs = int(parts[0])

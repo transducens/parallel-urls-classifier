@@ -1,4 +1,5 @@
 
+import os
 import sys
 import logging
 
@@ -25,5 +26,7 @@ def tokenize(s, check_gaps=True, gaps_whitelist=[' ']):
     return tokenized_str
 
 if __name__ == "__main__":
-    for s in sys.stdin:
-        print(' '.join(tokenize(s.rstrip('\n'))))
+    for s in sys.stdin.buffer:
+        s = s.decode(errors="backslashreplace")
+
+        print(' '.join(tokenize(s.rstrip('\n'), check_gaps=False if ("PUC_CHECK_GAPS" in os.environ and os.environ["PUC_CHECK_GAPS"] in ("False", "false")) else True)))

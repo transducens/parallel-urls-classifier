@@ -15,26 +15,29 @@ from parallel_urls_classifier.tokenizer import tokenize
 from parallel_urls_classifier.generate_dataset.word_freqs_double_linked import WordFreqDistDoubleLinked
 import parallel_urls_classifier.utils.utils as utils
 
-def get_negative_samples_replace_freq_words(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10,
+def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_per_url=10, min_replacements=1,
                                             src_monolingual_file='', trg_monolingual_file='', side="both"):
     """
     Original function from https://github.com/bitextor/bicleaner-ai/blob/master/bicleaner_ai/training.py
     """
-    if side not in ("src", "trg", "both"):
+    if side not in ("src", "trg", "both", "all"):
         raise Exception(f"'side' must be in ('src', 'trg', 'both'): '{side}'")
 
     if side == "src" and not utils.exists(src_monolingual_file):
         raise Exception(f"Src monolingual file does not exist: '{src_monolingual_file}'")
     elif side == "trg" and not utils.exists(trg_monolingual_file):
         raise Exception(f"Trg monolingual file does not exist: '{trg_monolingual_file}'")
-    elif side == "both" and (not utils.exists(src_monolingual_file) or not utils.exists(trg_monolingual_file)):
+    elif side in ("both", "all") and (not utils.exists(src_monolingual_file) or not utils.exists(trg_monolingual_file)):
         raise Exception(f"Either src, trg or both monolingual files do not exist: ('{src_monolingual_file}', '{trg_monolingual_file}')")
 
-    double_linked_freqs_src = WordFreqDistDoubleLinked(src_monolingual_file)
-    double_linked_freqs_trg = WordFreqDistDoubleLinked(trg_monolingual_file)
+    if side in ("src", "both", "all"):
+        double_linked_freqs_src = WordFreqDistDoubleLinked(src_monolingual_file)
+    if side in ("trg", "both", "all"):
+        double_linked_freqs_trg = WordFreqDistDoubleLinked(trg_monolingual_file)
+
     urls = set()
 
-    def run(tokenized_src_url, tokenized_trg_url, side='trg', max_tries=6, percentage_tokens_affected=0.5, min_replacements=1):
+    def run(tokenized_src_url, tokenized_trg_url, side="both", max_tries=6, percentage_tokens_affected=0.5, min_replacements=1):
         if side not in ("src", "trg", "both"):
             raise Exception(f"'side' must be in ('src', 'trg', 'both'): '{side}'")
 
@@ -105,11 +108,17 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_alignments=True
         return tokenized_src_url, tokenized_trg_url
 
     side_priority = ("trg", "src", "both") # Priority for modifying src, trg or both URLs -> the priority is important since it will depend on 'limit_max_alignments_per_url'
+    _side = side
 
     for src_url, trg_url in parallel_urls:
         for idx in range(limit_max_alignments_per_url):
-            side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
-            _src_url, _trg_url = apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, lambda s, t: run(s, t, side=side), "replace_freq_words")
+            if side == "all":
+                _side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
+
+            _src_url, _trg_url = apply_function_to_negative_sample_tokenized_urls(
+                src_url, trg_url,
+                lambda s, t: run(s, t, side=_side, min_replacements=min_replacements),
+                "replace_freq_words")
 
             urls.add((_src_url, _trg_url))
 
@@ -117,7 +126,7 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_alignments=True
 
     return list(urls)
 
-def get_negative_samples_remove_random_tokens(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10, remove_percentage=0.5):
+def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignments_per_url=10, remove_percentage=0.5):
     if remove_percentage < 0.0 or remove_percentage > 1.0:
         raise Exception(f"0.0 <= remove_percentage <= 1.0: {remove_percentage}")
 
@@ -150,8 +159,7 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_alignments=Tr
 
     return list(urls)
 
-def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10,
-                                             append_metric=False):
+def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments_per_url=10, append_metric=False):
     parallel_urls_dict = {}
     urls = set()
 
@@ -172,7 +180,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=Tru
         sorted_trg_parallel_urls_dict = sorted(parallel_urls_dict[src_url].items(), key=lambda item: (item[1][0], item[1][1]), reverse=True)
 
         for idx, (trg_url, metrics) in enumerate(sorted_trg_parallel_urls_dict):
-            if limit_alignments and idx >= limit_max_alignments_per_url:
+            if idx >= limit_max_alignments_per_url:
                 break
 
             if append_metric:
@@ -184,9 +192,8 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_alignments=Tru
 
     return list(urls)
 
-def get_negative_samples_random(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10):
-    return random_combinations(parallel_urls, limit_alignments=limit_alignments,
-                               limit_max_alignments_per_url=limit_max_alignments_per_url)
+def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
+    return random_combinations(parallel_urls, limit_max_alignments_per_url=limit_max_alignments_per_url)
 
 def common_last_checks(negative_samples_set, parallel_urls_set):
     urls_len = len(negative_samples_set)
@@ -201,7 +208,7 @@ def common_last_checks(negative_samples_set, parallel_urls_set):
                         "this might happen if you have provided >1 pair of URLs where are >1 translation for the same document: "
                         "%d", urls_overlap)
 
-def random_combinations(parallel_urls, limit_alignments=True, limit_max_alignments_per_url=10, binary_callback=None, **kwargs):
+def random_combinations(parallel_urls, limit_max_alignments_per_url=10, binary_callback=None, **kwargs):
     idxs2 = list(range(len(parallel_urls)))
     urls = set()
 
@@ -216,7 +223,7 @@ def random_combinations(parallel_urls, limit_alignments=True, limit_max_alignmen
                 max_alignments_per_url += 1
                 continue
 
-            if limit_alignments and sort_idx2 >= max_alignments_per_url:
+            if sort_idx2 >= max_alignments_per_url:
                 # Try to avoid very large combinations
                 break
 
