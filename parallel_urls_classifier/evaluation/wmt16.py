@@ -198,9 +198,10 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                     logging.debug("Near-match?\t%s\t%s", url_1, url_2)
                     logging.debug("(GS, Not GS) pair:\t%s\t%s\t%s\t%s", src_gs_pair, trg_gs_pair, src_pair, trg_pair)
 
-                    nolines_doc_1 = doc_1.strip().count('\n') + (1 if doc_1.strip() != '' else 0)
-                    nolines_doc_2 = doc_2.strip().count('\n') + (1 if doc_2.strip() != '' else 0)
-                    early_stopping = abs(nolines_doc_1 - nolines_doc_2) * 75 if max(nolines_doc_1, nolines_doc_2) > 10 else None
+                    # Early stopping: if the documents are the same, the documents will have a very similar length, and if they are not, we want to
+                    #  avoid calculation as many as possible, so we use min of the doc lengths. Since we are looking for a similarity >= 95%, out
+                    #  criteria has to be >= 5% of the difference, and since documents might not be equal but very similar, we use a 15% of difference
+                    early_stopping = int(0.15 * min(len(doc_1), len(doc_2))) if min(len(doc_1), len(doc_2)) > 20 else None
                     lev_distance = Levenshtein.distance(doc_1, doc_2, score_cutoff=early_stopping if early_stopping != 0 else None)
 
                     if early_stopping and lev_distance == early_stopping + 1:
@@ -210,6 +211,10 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                         # Calculate actual similarity
                         similarity = 1.0 - lev_distance / max(len(doc_1), len(doc_2))
 
+                    #nolines_doc_1 = doc_1.strip().count('\n') + (1 if doc_1.strip() != '' else 0)
+                    #nolines_doc_2 = doc_2.strip().count('\n') + (1 if doc_2.strip() != '' else 0)
+                    # This early stopping approach doesn't work since similar documents will have similar nolines (even the same), what would
+                    #  lead to, likely, skip just the documents we want to check with Levenshtein
                     #early_stopping = abs(nolines_doc_1 - nolines_doc_2) * 75.0 if max(nolines_doc_1, nolines_doc_2) > 10 else np.inf
                     #similarity = levenshtein.levenshtein_opt_space_and_band(doc_1, doc_2, nfactor=max(len(doc_1), len(doc_2)), percentage=0.06, early_stopping=early_stopping)["similarity"]
 
