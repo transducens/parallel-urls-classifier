@@ -50,7 +50,7 @@ class URLsDataset(Dataset):
         self.labels[len(non_parallel_urls):] = 1
 
         self.labels = torch.from_numpy(self.labels)
-        self.labels = self.labels.type(torch.FloatTensor) if regression else self.labels.type(torch.LongTensor)
+        self.labels = torch.round(self.labels.type(torch.FloatTensor)).type(torch.LongTensor) if regression else self.labels.type(torch.LongTensor)
 
     def __len__(self):
         return len(self.data)
@@ -130,7 +130,6 @@ def load_tokenizer(pretrained_model):
 
     return tokenizer
 
-# TODO use get_amp_context_manager in main
 def get_amp_context_manager(cuda_amp, force_cpu):
     use_cuda = torch.cuda.is_available()
     amp_context_manager = contextlib.nullcontext()
@@ -144,6 +143,8 @@ def get_amp_context_manager(cuda_amp, force_cpu):
         logger.warning("AMP could not been enabled")
 
     return amp_context_manager
+
+# TODO TBD use https://pypi.org/project/imbalanced-learn/ for unbalanced data instead of custom implementation
 
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
@@ -412,9 +413,6 @@ def main(args):
         for t in dataset_train:
             l = t["label"]
 
-            if regression:
-                l = torch.round(l).type(torch.LongTensor)
-
             target_list.append(l)
 
         target_list = torch.tensor(target_list)
@@ -448,7 +446,7 @@ def main(args):
         criterion = nn.MSELoss()
     else:
         # Binary classification
-        criterion = nn.CrossEntropyLoss(weight=loss_weight)
+        criterion = nn.CrossEntropyLoss(weight=loss_weight) # Raw input, not normalized (i.e. don't apply softmax)
 
     criterion = criterion.to(device)
 
@@ -560,17 +558,13 @@ def main(args):
                     outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
                 else:
                     # Binary classification
-                    outputs = F.softmax(outputs, dim=1)
-                    outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
+                    outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
 
                 loss = criterion(outputs, labels)
 
             # Results
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
-
-            if regression:
-                labels = torch.round(labels).type(torch.LongTensor)
 
             all_outputs.extend(outputs_argmax.tolist())
             all_labels.extend(labels.tolist())

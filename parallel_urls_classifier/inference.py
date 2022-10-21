@@ -43,16 +43,11 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
                 outputs_argmax = torch.round(outputs).cpu().numpy().astype(np.int64) # Workaround for https://github.com/pytorch/pytorch/issues/54774
             else:
                 # Binary classification
-                outputs = F.softmax(outputs, dim=1)
-                outputs_argmax = torch.argmax(outputs.cpu(), dim=1).numpy()
+                outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1).numpy()
 
             loss = criterion(outputs, labels).cpu().detach().numpy()
 
         labels = labels.cpu()
-
-        if regression:
-            labels = torch.round(labels).type(torch.LongTensor)
-
         total_loss += loss
 
         all_outputs.extend(outputs_argmax.tolist())
@@ -157,8 +152,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             outputs_argmax = torch.round(outputs).squeeze(1).cpu().numpy().astype(np.int64)
         else:
             # Binary classification
-            outputs = F.softmax(outputs, dim=1).detach()
-            outputs_argmax = torch.argmax(outputs, dim=1).cpu().numpy()
+            outputs = outputs.detach()
+            outputs_argmax = torch.argmax(F.softmax(outputs, dim=1), dim=1).cpu().numpy()
 
         outputs = outputs.cpu()
 
@@ -213,8 +208,8 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
         outputs_argmax = torch.round(outputs).squeeze(1).cpu().numpy().astype(np.int64)
     else:
         # Binary classification
-        outputs = F.softmax(outputs, dim=1).detach()
-        outputs_argmax = torch.argmax(outputs, dim=1).cpu().numpy()
+        outputs = outputs.detach()
+        outputs_argmax = torch.argmax(F.softmax(outputs, dim=1), dim=1).cpu().numpy()
 
     outputs = outputs.cpu()
 
