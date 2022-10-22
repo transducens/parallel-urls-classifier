@@ -196,7 +196,7 @@ def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model
             raise Exception(f"It seems that the model variable name is not correct: '{model_variable_name}' not found in '{head_name_full}' in '{pretrained_model}'") from e
 
         setattr(head, model_variable_name, ModelWrapper())
-        setattr(head, "get_head_variable_name", model_variable_name)
+        setattr(head, "head_variable_name", model_variable_name)
 
         # Move head to device
         if device:
@@ -253,7 +253,7 @@ def main(args):
     use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
     device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
-    is_device_gpu = device.startswith("cuda")
+    is_device_gpu = device.type.startswith("cuda")
     pretrained_model = args.pretrained_model
     max_length_tokens = args.max_length_tokens
     model_input = utils.resolve_path(args.model_input)
@@ -518,6 +518,7 @@ def main(args):
     else:
         train_sampler = RandomSampler(dataset_train)
 
+    # TODO pin_memory_device -> torch >= 1.12
     dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler,
                                   num_workers=no_workers, pin_memory=True, pin_memory_device=device)
     dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev),
@@ -657,11 +658,12 @@ def main(args):
             with amp_context_manager:
                 model_outputs = model(urls, attention_mask)
 
-                for head in heads:
+                for head in all_heads:
                     # TODO fix for fit different heads
-                    head.set_tensor_for_returning(model_outputs) # Set the output of the model, so we don't need to execute again
+                    head_wrapper_name = head.head_variable_name
+                    getattr(head, head_wrapper_name).set_tensor_for_returning(model_outputs) # Set the output of the model -> don't execute again the model
 
-                    outputs = head(None).logits
+                    outputs = head(None).logits # Get head result
 
                     if regression:
                         # Regression
