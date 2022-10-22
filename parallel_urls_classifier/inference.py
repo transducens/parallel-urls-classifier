@@ -45,7 +45,7 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
                 # Binary classification
                 outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1).numpy()
 
-            loss = criterion(outputs, labels).cpu().detach().numpy()
+            loss = criterion(outputs, labels.type(torch.FloatTensor) if regression else labels).cpu().detach().numpy()
 
         labels = labels.cpu()
         total_loss += loss

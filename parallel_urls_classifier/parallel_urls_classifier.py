@@ -560,7 +560,7 @@ def main(args):
                     # Binary classification
                     outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
 
-                loss = criterion(outputs, labels)
+                loss = criterion(outputs, labels.type(torch.FloatTensor) if regression else labels)
 
             # Results
             loss_value = loss.cpu().detach().numpy()
