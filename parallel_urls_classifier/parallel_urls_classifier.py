@@ -50,7 +50,7 @@ class URLsDataset(Dataset):
         self.labels[len(non_parallel_urls):] = 1
 
         self.labels = torch.from_numpy(self.labels)
-        self.labels = torch.round(self.labels.type(torch.FloatTensor)).type(torch.LongTensor) if regression else self.labels.type(torch.LongTensor)
+        self.labels = self.labels.type(torch.FloatTensor) if regression else self.labels.type(torch.LongTensor)
 
     def __len__(self):
         return len(self.data)
@@ -413,6 +413,9 @@ def main(args):
         for t in dataset_train:
             l = t["label"]
 
+            if regression:
+                l = torch.round(l).type(torch.LongTensor)
+
             target_list.append(l)
 
         target_list = torch.tensor(target_list)
@@ -560,11 +563,14 @@ def main(args):
                     # Binary classification
                     outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
 
-                loss = criterion(outputs, labels.type(torch.FloatTensor) if regression else labels)
+                loss = criterion(outputs, labels)
 
             # Results
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
+
+            if regression:
+                labels = torch.round(labels).type(torch.LongTensor)
 
             all_outputs.extend(outputs_argmax.tolist())
             all_labels.extend(labels.tolist())
