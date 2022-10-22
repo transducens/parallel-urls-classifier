@@ -11,8 +11,41 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+def inference_with_heads(model, all_heads, criteria, urls, attention_mask, labels, regression, amp_context_manager):
+    if len(all_heads) != len(criteria):
+        raise Exception(f"Different length in the provided heads and criteria: {len(all_heads)} vs {len(criteria)}")
+
+    results = []
+
+    with amp_context_manager:
+        model_outputs = model(urls, attention_mask)
+
+        for idx in range(len(all_heads)):
+            # TODO fix for fit different heads
+            head = all_heads[idx]
+            criterion = criteria[idx]
+            head_wrapper_name = head.head_variable_name
+            getattr(head, head_wrapper_name).set_tensor_for_returning(model_outputs) # Set the output of the model -> don't execute again the model
+
+            outputs = head(None).logits # Get head result
+
+            if regression:
+                # Regression
+                outputs = torch.sigmoid(outputs).squeeze(1)
+                outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+            else:
+                # Binary classification
+                outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
+
+            loss = criterion(outputs, labels)
+
+            results.append((outputs, outputs_argmax, loss))
+
+    return results
+
 @torch.no_grad()
-def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device, amp_context_manager, logger, classes=2):
+def inference(model, all_heads, tokenizer, criterion, dataloader, max_length_tokens, device, regression,
+              amp_context_manager, logger, classes=2):
     model.eval()
 
     total_loss = 0.0
@@ -33,19 +66,10 @@ def inference(model, tokenizer, criterion, dataloader, max_length_tokens, device
         labels = batch["label"].to(device)
 
         # Inference
-        with amp_context_manager:
-            outputs = model(urls, attention_mask).logits
-            regression = outputs.cpu().detach().numpy().shape[1] == 1
+        results = inference_with_heads(model, all_heads, [criterion], urls, attention_mask, labels, regression, amp_context_manager)
 
-            if regression:
-                # Regression
-                outputs = torch.sigmoid(outputs).squeeze(1)
-                outputs_argmax = torch.round(outputs).cpu().numpy().astype(np.int64) # Workaround for https://github.com/pytorch/pytorch/issues/54774
-            else:
-                # Binary classification
-                outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1).numpy()
-
-            loss = criterion(outputs, labels).cpu().detach().numpy()
+        # TODO fix
+        outputs, outputs_argmax, loss = results[0]
 
         labels = labels.cpu()
 

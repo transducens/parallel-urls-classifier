@@ -13,6 +13,7 @@ import parallel_urls_classifier.utils.utils as utils
 from parallel_urls_classifier.inference import (
     inference,
     interactive_inference,
+    inference_with_heads,
 )
 from parallel_urls_classifier.metrics import (
     get_metrics,
@@ -518,13 +519,12 @@ def main(args):
     else:
         train_sampler = RandomSampler(dataset_train)
 
-    # TODO pin_memory_device -> torch >= 1.12
     dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler,
-                                  num_workers=no_workers, pin_memory=True, pin_memory_device=device)
+                                  num_workers=no_workers, pin_memory=True, pin_memory_device=device.type)
     dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev),
-                                num_workers=no_workers, pin_memory=True, pin_memory_device=device)
+                                num_workers=no_workers, pin_memory=True, pin_memory_device=device.type)
     dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test),
-                                 num_workers=no_workers, pin_memory=True, pin_memory_device=device)
+                                 num_workers=no_workers, pin_memory=True, pin_memory_device=device.type)
 
     #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
@@ -655,25 +655,9 @@ def main(args):
                 head.zero_grad()
 
             # Inference
-            with amp_context_manager:
-                model_outputs = model(urls, attention_mask)
-
-                for head in all_heads:
-                    # TODO fix for fit different heads
-                    head_wrapper_name = head.head_variable_name
-                    getattr(head, head_wrapper_name).set_tensor_for_returning(model_outputs) # Set the output of the model -> don't execute again the model
-
-                    outputs = head(None).logits # Get head result
-
-                    if regression:
-                        # Regression
-                        outputs = torch.sigmoid(outputs).squeeze(1)
-                        outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
-                    else:
-                        # Binary classification
-                        outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
-
-                    loss = criterion(outputs, labels)
+            results = inference_with_heads(model, all_heads, [criterion], urls, attention_mask, labels, regression, amp_context_manager)
+            # TODO fix for fit different results (i.e. more than 1 head)
+            outputs, outputs_argmax, loss = results[0]
 
             # Results
             loss_value = loss.cpu().detach().numpy()
@@ -762,8 +746,8 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, amp_context_manager,
-                                          logger, classes=classes)
+        dev_inference_metrics = inference(model, all_heads, tokenizer, criterion, dataloader_dev, max_length_tokens, device, regression,
+                                          amp_context_manager, logger, classes=classes)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -861,8 +845,8 @@ def main(args):
 
         model = model.from_pretrained(model_output).to(device)
 
-    dev_inference_metrics = inference(model, tokenizer, criterion, dataloader_dev, max_length_tokens, device, amp_context_manager,
-                                      logger, classes=classes)
+    dev_inference_metrics = inference(model, all_heads, tokenizer, criterion, dataloader_dev, max_length_tokens, device, regression,
+                                      amp_context_manager, logger, classes=classes)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -881,8 +865,8 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, tokenizer, criterion, dataloader_test, max_length_tokens, device, amp_context_manager,
-                                       logger, classes=classes)
+    test_inference_metrics = inference(model, all_heads, tokenizer, criterion, dataloader_test, max_length_tokens, device, regression,
+                                       amp_context_manager, logger, classes=classes)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
