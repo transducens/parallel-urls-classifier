@@ -174,6 +174,7 @@ def main(args):
 
     logger.debug("Device: %s", device)
 
+    # TODO adapt to new load_model() API
     global_conf["model"] = puc.load_model(model_input=model_input, device=device) if not global_conf["model"] else global_conf["model"]
     global_conf["tokenizer"] = puc.load_tokenizer(pretrained_model)
     global_conf["device"] = device

@@ -28,7 +28,7 @@ from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomS
 from torch.optim.lr_scheduler import CyclicLR, LambdaLR
 from torch.optim import Adam, AdamW
 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, get_linear_schedule_with_warmup
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, get_linear_schedule_with_warmup, AutoModel
 
 # Disable (less verbose) 3rd party logging
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
@@ -108,22 +108,103 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
 
     return scheduler_instance
 
-def load_model(base=AutoModelForSequenceClassification, model_input="", pretrained_model="", device="", num_labels=2):
+# This variable contains, for a pretrained model, the name of the variable
+#  which contains the model in the instance for a specific task
+_load_model_variable_name_map = {
+    "xlm-roberta-base": {
+        "ForSequenceClassification": "roberta",
+        "ForMaskedLM": "roberta",
+    },
+}
+
+class ModelWrapper(torch.nn.Module):
+    def __init__(self, tensor=None, *args, **kwargs):
+        super(ModelWrapper, self).__init__()
+        self.tensor_for_returning = tensor
+
+    def __call__(self, *args, **kwargs):
+        return self.tensor_for_returning
+
+    def set_tensor_for_returning(self, tensor):
+        self.tensor_for_returning = tensor
+
+def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model_input="", pretrained_model="", device="",
+               base_kwargs={}, heads_kwargs=[{}]):
+    if pretrained_model not in _load_model_variable_name_map:
+        raise Exception(f"Model '{pretrained_model}' not supported: complete '_load_model_variable_name_map' variable "
+                        "in order to provide support")
+    if len(heads) == 0:
+        raise Exception("At least 1 head is mandatory")
+    if len(heads) != len(heads_kwargs):
+        raise Exception("Same quantity of elements have to be provided to 'heads' and 'heads_kwargs': "
+                        "you can provide empty dictionaries if you don't want to provide anything")
+
+    # Load main model
     model = base
+    model_loaded_from_file = False
 
     if model_input:
         logger.info("Loading model: '%s'", model_input)
 
         model = model.from_pretrained(model_input)
+        model_loaded_from_file = True
     elif pretrained_model:
-        model = model.from_pretrained(pretrained_model, num_labels=num_labels)
+        model = model.from_pretrained(pretrained_model, **base_kwargs)
     else:
         raise Exception("You need to provide either 'model_input' or 'pretrained_model'")
 
     if device:
         model = model.to(device)
 
-    return model
+    # Load heads
+    all_heads = []
+
+    for idx in range(len(heads)):
+        h = heads[idx]
+        head_kwargs = heads_kwargs[idx]
+        head_name_full = h.__name__
+        head_name = ""
+
+        for _head_name in _load_model_variable_name_map[pretrained_model].keys():
+            if head_name_full.endswith(_head_name):
+                head_name = _head_name
+                break
+
+        if not head_name:
+            raise Exception(f"Head '{head_name_full}' not supported: complete '_load_model_variable_name_map' variable in order to provide support")
+
+        head = h
+        model_input_head = f"{model_input}.{head_name}" if model_input else ""
+
+        if model_input_head:
+            logger.info("Loading head: '%s'", model_input_head)
+
+            head = head.from_pretrained(model_input_head)
+        elif pretrained_model:
+            if model_loaded_from_file:
+                logger.warning("Model was loaded from local checkpoint, but the head '%s' has not: this is expected if you want to train a new head", head_name)
+
+            head = head.from_pretrained(pretrained_model, **head_kwargs)
+
+        # Replace model of the header with wrapper
+        model_variable_name = _load_model_variable_name_map[pretrained_model][head_name]
+
+        try:
+            # Check that we can actually get the model from the head
+            getattr(head, model_variable_name)
+        except AttributeError as e:
+            raise Exception(f"It seems that the model variable name is not correct: '{model_variable_name}' not found in '{head_name_full}' in '{pretrained_model}'") from e
+
+        setattr(head, model_variable_name, ModelWrapper())
+        setattr(head, "get_head_variable_name", model_variable_name)
+
+        # Move head to device
+        if device:
+            head = head.to(device)
+
+        all_heads.append(head)
+
+    return model, all_heads
 
 def load_tokenizer(pretrained_model):
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
@@ -301,8 +382,9 @@ def main(args):
         logger.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
-    model = load_model(base=AutoModelForSequenceClassification, model_input=model_input, pretrained_model=pretrained_model,
-                       device=device, num_labels=num_labels)
+    # TODO adapt all the code to the new load_model() API
+    model, all_heads = load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model_input=model_input,
+                                  pretrained_model=pretrained_model, device=device, heads_kwargs=[{"num_labels": num_labels}],)
     tokenizer = load_tokenizer(pretrained_model)
     fine_tuning = not args.do_not_fine_tune
     model_embeddings_size = model.base_model.embeddings.word_embeddings.weight.shape[0]
@@ -339,13 +421,14 @@ def main(args):
             logger.warning("Incompatible weight strategy ('%s'): regression can't be applied with the selected strategy: "
                            "it will not be applied", imbalanced_strategy)
 
-    # Freeze layers, if needed
+    # Unfreeze heads layers
+    for head in all_heads:
+        for param in head.parameters():
+            param.requires_grad = True
+
+    # Freeze layers of the model, if needed
     for param in model.parameters():
         param.requires_grad = fine_tuning
-
-    # Unfreeze classifier layer
-    for param in model.classifier.parameters():
-        param.requires_grad = True
 
     last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
 
@@ -454,15 +537,22 @@ def main(args):
     criterion = criterion.to(device)
 
     if llrd:
-        #model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.0) # Adam
-        model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01) # AdamW
-    else:
-        model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+        raise Exception("Support disabled by the moment")
 
-    #optimizer = Adam(model_parameters,
-    #                 lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
-    optimizer = AdamW(model_parameters,
-                      lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
+    #if llrd:
+    #    #model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.0) # Adam
+    #    model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01) # AdamW
+    #else:
+    #    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+
+    all_parameters = list(model.parameters())
+
+    for head_parameters in [list(head.parameters()) for head in all_heads]:
+        all_parameters += head_parameters # Merge head parameters with model parameters
+
+    model_parameters = filter(lambda p: p.requires_grad, all_parameters)
+    #optimizer = Adam(model_parameters, lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+    optimizer = AdamW(model_parameters, lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
 
     # Get LR scheduler args
     if scheduler_str == "linear":
