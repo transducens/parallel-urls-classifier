@@ -71,6 +71,7 @@ def inference(model, all_heads, tokenizer, criterion, dataloader, max_length_tok
         # TODO fix
         outputs, outputs_argmax, loss = results[0]
 
+        loss = loss.cpu()
         labels = labels.cpu()
 
         if regression:
