@@ -24,7 +24,7 @@ def inference_with_heads(model, all_heads, criteria, urls, attention_mask, label
             # TODO fix for fit different heads
             head = all_heads[idx]
             criterion = criteria[idx]
-            head_wrapper_name = head.head_variable_name
+            head_wrapper_name = head.head_model_variable_name
             getattr(head, head_wrapper_name).set_tensor_for_returning(model_outputs) # Set the output of the model -> don't execute again the model
 
             outputs = head(None).logits # Get head result

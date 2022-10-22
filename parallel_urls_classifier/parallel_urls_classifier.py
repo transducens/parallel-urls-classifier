@@ -197,7 +197,8 @@ def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model
             raise Exception(f"It seems that the model variable name is not correct: '{model_variable_name}' not found in '{head_name_full}' in '{pretrained_model}'") from e
 
         setattr(head, model_variable_name, ModelWrapper())
-        setattr(head, "head_variable_name", model_variable_name)
+        setattr(head, "head_model_variable_name", model_variable_name)
+        setattr(head, "head_name", head_name)
 
         # Move head to device
         if device:
@@ -784,6 +785,12 @@ def main(args):
             # Store model
             if model_output:
                 model.save_pretrained(model_output)
+
+                # Store the heads
+                for head in all_heads:
+                    head_name = head.head_name
+
+                    head.save_pretrained(f"{model_output}.{head_name}")
 
             current_patience = 0
         else:

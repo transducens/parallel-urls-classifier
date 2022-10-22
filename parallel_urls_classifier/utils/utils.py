@@ -182,7 +182,9 @@ def open_xz_or_gzip_or_plain(file_path, mode='rt'):
             f.close()
 
 def resolve_path(p):
-    return os.path.realpath(os.path.expanduser(p)) if isinstance(p, str) else p
+    result = os.path.realpath(os.path.expanduser(p)) if isinstance(p, str) else p
+
+    return result.rstrip('/')
 
 def exists(p, res_path=False, f=os.path.isfile):
     return f(resolve_path(p) if res_path else p) if isinstance(p, str) else False
