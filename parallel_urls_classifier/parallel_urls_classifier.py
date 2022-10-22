@@ -253,6 +253,7 @@ def main(args):
     use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
     device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
+    is_device_gpu = device.startswith("cuda")
     pretrained_model = args.pretrained_model
     max_length_tokens = args.max_length_tokens
     model_input = utils.resolve_path(args.model_input)
@@ -486,9 +487,13 @@ def main(args):
     logger.debug("Classes weights: %s", str(classes_weights))
 
     classes_weights = torch.tensor(classes_weights, dtype=torch.float)
+    no_workers = 0 if is_device_gpu else args.dataset_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
+                                                              #  when GPU is being used
 
-    no_workers = args.dataset_workers
+    # Datasets
     dataset_train = URLsDataset(parallel_urls_train, non_parallel_urls_train, regression=regression)
+    dataset_dev = URLsDataset(parallel_urls_dev, non_parallel_urls_dev, regression=regression)
+    dataset_test = URLsDataset(parallel_urls_test, non_parallel_urls_test, regression=regression)
 
     if imbalanced_strategy == "over-sampling":
         target_list = []
@@ -513,11 +518,12 @@ def main(args):
     else:
         train_sampler = RandomSampler(dataset_train)
 
-    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler, num_workers=no_workers, pin_memory=True)
-    dataset_dev = URLsDataset(parallel_urls_dev, non_parallel_urls_dev, regression=regression)
-    dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev), num_workers=no_workers, pin_memory=True)
-    dataset_test = URLsDataset(parallel_urls_test, non_parallel_urls_test, regression=regression)
-    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test), num_workers=no_workers, pin_memory=True)
+    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler,
+                                  num_workers=no_workers, pin_memory=True, pin_memory_device=device)
+    dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev),
+                                num_workers=no_workers, pin_memory=True, pin_memory_device=device)
+    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test),
+                                 num_workers=no_workers, pin_memory=True, pin_memory_device=device)
 
     #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
@@ -630,6 +636,9 @@ def main(args):
 
         model.train()
 
+        for head in all_heads:
+            head.train()
+
         for idx, batch in enumerate(dataloader_train):
             batch_urls_str = batch["url_str"]
             tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
@@ -641,19 +650,28 @@ def main(args):
             #optimizer.zero_grad() # https://discuss.pytorch.org/t/model-zero-grad-or-optimizer-zero-grad/28426/6
             model.zero_grad()
 
+            for head in all_heads:
+                head.zero_grad()
+
             # Inference
             with amp_context_manager:
-                outputs = model(urls, attention_mask).logits
+                model_outputs = model(urls, attention_mask)
 
-                if regression:
-                    # Regression
-                    outputs = torch.sigmoid(outputs).squeeze(1)
-                    outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
-                else:
-                    # Binary classification
-                    outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
+                for head in heads:
+                    # TODO fix for fit different heads
+                    head.set_tensor_for_returning(model_outputs) # Set the output of the model, so we don't need to execute again
 
-                loss = criterion(outputs, labels)
+                    outputs = head(None).logits
+
+                    if regression:
+                        # Regression
+                        outputs = torch.sigmoid(outputs).squeeze(1)
+                        outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+                    else:
+                        # Binary classification
+                        outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
+
+                    loss = criterion(outputs, labels)
 
             # Results
             loss_value = loss.cpu().detach().numpy()
