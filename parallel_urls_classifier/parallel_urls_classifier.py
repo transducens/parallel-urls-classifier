@@ -25,11 +25,22 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, RandomSampler, WeightedRandomSampler, SequentialSampler
 from torch.optim.lr_scheduler import CyclicLR, LambdaLR
 from torch.optim import Adam, AdamW
-
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, get_linear_schedule_with_warmup, AutoModel
+from torch.utils.data import (
+    Dataset,
+    DataLoader,
+    RandomSampler,
+    WeightedRandomSampler,
+    SequentialSampler
+)
+from transformers import (
+    AutoModel,
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    AutoModelForMaskedLM,
+    get_linear_schedule_with_warmup,
+)
 
 # Disable (less verbose) 3rd party logging
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
@@ -129,8 +140,8 @@ class ModelWrapper(torch.nn.Module):
     def set_tensor_for_returning(self, tensor):
         self.tensor_for_returning = tensor
 
-def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model_input="", pretrained_model="", device="",
-               base_kwargs={}, heads_kwargs=[{}]):
+def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], heads_tasks=["urls_classification"], model_input="",
+               pretrained_model="", device="", base_kwargs={}, heads_kwargs=[{}]):
     if pretrained_model not in _load_model_variable_name_map:
         raise Exception(f"Model '{pretrained_model}' not supported: complete '_load_model_variable_name_map' variable "
                         "in order to provide support")
@@ -138,7 +149,11 @@ def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model
         raise Exception("At least 1 head is mandatory")
     if len(heads) != len(heads_kwargs):
         raise Exception("Same quantity of elements have to be provided to 'heads' and 'heads_kwargs': "
-                        "you can provide empty dictionaries if you don't want to provide anything")
+                        "you can provide empty dictionaries if you don't want to provide anything: "
+                        f"{len(heads)} vs {len(heads_kwargs)}")
+    if len(heads) != len(heads_tasks):
+        raise Exception("Same quantity of elements have to be provided to 'heads' and 'heads_tasks'"
+                        f"{len(heads)} vs {len(heads_tasks)}")
 
     # Load main model
     model = base
@@ -163,6 +178,7 @@ def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model
     for idx in range(len(heads)):
         h = heads[idx]
         head_kwargs = heads_kwargs[idx]
+        head_task = heads_tasks[idx]
         head_name_full = h.__name__
         head_name = ""
 
@@ -199,6 +215,7 @@ def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model
         setattr(head, model_variable_name, ModelWrapper())
         setattr(head, "head_model_variable_name", model_variable_name)
         setattr(head, "head_name", head_name)
+        setattr(head, "head_task", head_task)
 
         # Move head to device
         if device:
@@ -300,6 +317,7 @@ def main(args):
     num_labels = 1 if regression else 2
     classes = 2
     amp_context_manager = get_amp_context_manager(cuda_amp, force_cpu)
+    pytorch_major, pytorch_minor, pytorch_patch = utils.get_pytorch_version()
 
     if scheduler_str in ("linear",) and train_until_patience:
         # Depending on the LR scheduler, the training might even stop at some point (e.g. linear LR scheduler will set the LR=0 if the run epochs is greater than the provided epochs)
@@ -385,9 +403,11 @@ def main(args):
         logger.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
-    # TODO adapt all the code to the new load_model() API
-    model, all_heads = load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], model_input=model_input,
-                                  pretrained_model=pretrained_model, device=device, heads_kwargs=[{"num_labels": num_labels}],)
+    heads = [AutoModelForSequenceClassification, AutoModelForMaskedLM]
+    heads_tasks = ["urls_classification", "mlm"]
+    heads_kwargs = [{"num_labels": num_labels}, {}]
+    model, all_heads = load_model(base=AutoModel, heads=heads, heads_tasks=heads_tasks, model_input=model_input,
+                                  pretrained_model=pretrained_model, device=device, heads_kwargs=heads_kwargs,)
     tokenizer = load_tokenizer(pretrained_model)
     fine_tuning = not args.do_not_fine_tune
     model_embeddings_size = model.base_model.embeddings.word_embeddings.weight.shape[0]
@@ -489,8 +509,6 @@ def main(args):
     logger.debug("Classes weights: %s", str(classes_weights))
 
     classes_weights = torch.tensor(classes_weights, dtype=torch.float)
-    no_workers = 0 if is_device_gpu else args.dataset_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
-                                                              #  when GPU is being used
 
     # Datasets
     dataset_train = URLsDataset(parallel_urls_train, non_parallel_urls_train, regression=regression)
@@ -520,12 +538,30 @@ def main(args):
     else:
         train_sampler = RandomSampler(dataset_train)
 
-    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler,
-                                  num_workers=no_workers, pin_memory=True, pin_memory_device=device.type)
-    dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev),
-                                num_workers=no_workers, pin_memory=True, pin_memory_device=device.type)
-    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test),
-                                 num_workers=no_workers, pin_memory=True, pin_memory_device=device.type)
+    no_workers = 0 if is_device_gpu else args.dataset_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
+                                                              #  when GPU is being used
+    dataloader_kwargs = {"pin_memory": True,
+                         "pin_memory_device": device.type,
+                         "num_workers": no_workers}
+
+    if pytorch_major > 1 or (pytorch_major == 1 and pytorch_minor >= 12):
+        # Ok
+        pass
+    else:
+        logger.warning("Unexpected pytorch version: making some changes: DataLoader")
+
+        del dataloader_kwargs["pin_memory_device"]
+
+        if force_cpu:
+            # pin_memory uses GPU if available
+
+            dataloader_kwargs["pin_memory"] = False
+            no_workers = args.dataset_workers
+            dataloader_kwargs["num_workers"] = no_workers
+
+    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler, **dataloader_kwargs)
+    dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev), **dataloader_kwargs)
+    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test), **dataloader_kwargs)
 
     #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
@@ -534,16 +570,31 @@ def main(args):
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     training_steps_per_epoch = len(dataloader_train)
     training_steps = training_steps_per_epoch * epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
+    criteria = []
 
-    if regression:
-        # Regression
-        criterion = nn.MSELoss()
-    else:
-        # Binary classification
-        criterion = nn.CrossEntropyLoss(weight=loss_weight) # Raw input, not normalized (i.e. don't apply softmax)
+    # Get criterion for each head task
+    for head in all_heads:
+        head_task = head.head_task
 
-    criterion = criterion.to(device)
+        if head_task == "urls_classification":
+            if regression:
+                # Regression
+                criterion = nn.MSELoss()
+            else:
+                # Binary classification
+                criterion = nn.CrossEntropyLoss(weight=loss_weight) # Raw input, not normalized (i.e. don't apply softmax)
+        elif head_task == "mlm":
+            # TODO
+            #criterion = nn.MSELoss()
+            raise Exception("TODO")
+        else:
+            raise Exception(f"Unknown head task: {head_task}")
 
+        criterion = criterion.to(device)
+
+        criteria.append(criterion)
+
+    # TODO enable again the support (we should test if it works with the new multi tasking environment)
     if llrd:
         raise Exception("Support disabled by the moment")
 
@@ -642,11 +693,8 @@ def main(args):
             head.train()
 
         for idx, batch in enumerate(dataloader_train):
-            batch_urls_str = batch["url_str"]
-            tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
-            urls = tokens["input_ids"].to(device)
-            attention_mask = tokens["attention_mask"].to(device)
-            labels = batch["label"].to(device)
+            inputs_and_outputs = utils.get_data_from_batch(batch, tokenizer, device, max_length_tokens)
+            labels = inputs_and_outputs["labels"]
             current_batch_size = labels.reshape(-1).shape[0]
 
             #optimizer.zero_grad() # https://discuss.pytorch.org/t/model-zero-grad-or-optimizer-zero-grad/28426/6
@@ -656,9 +704,9 @@ def main(args):
                 head.zero_grad()
 
             # Inference
-            results = inference_with_heads(model, all_heads, [criterion], urls, attention_mask, labels, regression, amp_context_manager)
+            results = inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
             # TODO fix for fit different results (i.e. more than 1 head)
-            outputs, outputs_argmax, loss = results[0]
+            outputs, outputs_argmax, loss = results[0] # URLs classification
 
             # Results
             loss_value = loss.cpu().detach().numpy()
@@ -747,7 +795,7 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, all_heads, tokenizer, criterion, dataloader_dev, max_length_tokens, device, regression,
+        dev_inference_metrics = inference(model, all_heads, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
                                           amp_context_manager, logger, classes=classes)
 
         # Dev metrics
@@ -852,7 +900,7 @@ def main(args):
 
         model = model.from_pretrained(model_output).to(device)
 
-    dev_inference_metrics = inference(model, all_heads, tokenizer, criterion, dataloader_dev, max_length_tokens, device, regression,
+    dev_inference_metrics = inference(model, all_heads, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
                                       amp_context_manager, logger, classes=classes)
 
     # Dev metrics
@@ -872,7 +920,7 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, all_heads, tokenizer, criterion, dataloader_test, max_length_tokens, device, regression,
+    test_inference_metrics = inference(model, all_heads, tokenizer, criteria, dataloader_test, max_length_tokens, device, regression,
                                        amp_context_manager, logger, classes=classes)
 
     # Test metrics

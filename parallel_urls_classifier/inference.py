@@ -1,5 +1,7 @@
 
 import sys
+import random
+import logging
 
 import parallel_urls_classifier.utils.utils as utils
 from parallel_urls_classifier.metrics import (
@@ -11,35 +13,88 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-def inference_with_heads(model, all_heads, criteria, urls, attention_mask, labels, regression, amp_context_manager):
+logger = logging.getLogger("parallel_urls_classifier")
+
+def inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outputs, regression,
+                         amp_context_manager):
     if len(all_heads) != len(criteria):
         raise Exception(f"Different length in the provided heads and criteria: {len(all_heads)} vs {len(criteria)}")
 
     results = []
 
+    # Inputs and outputs
+    labels = inputs_and_outputs["labels"]
+    urls = inputs_and_outputs["urls"]
+    attention_mask = inputs_and_outputs["attention_mask"]
+
     with amp_context_manager:
-        model_outputs = model(urls, attention_mask)
+        model_outputs = None
 
         for idx in range(len(all_heads)):
             # TODO fix for fit different heads
             head = all_heads[idx]
+            head_task = head.head_task
             criterion = criteria[idx]
             head_wrapper_name = head.head_model_variable_name
-            getattr(head, head_wrapper_name).set_tensor_for_returning(model_outputs) # Set the output of the model -> don't execute again the model
+
+            if head_task == "mlm":
+                # We need to execute again because the input is not the whole sentence but masked :(
+
+                # TODO easy way to execute on both sides? By the moment, 50% src or trg side
+                if random.random() < 0.5:
+                    _urls = inputs_and_outputs["src_urls"]
+                    _attention_mask = inputs_and_outputs["src_attention_mask"]
+                    _model_outputs = model(_urls, _attention_mask)
+                else:
+                    _urls = inputs_and_outputs["trg_urls"]
+                    _attention_mask = inputs_and_outputs["trg_attention_mask"]
+                    _model_outputs = model(_urls, _attention_mask)
+
+                # Mask tokens
+                for idx1, batch in enumerate(_model_outputs):
+                    for idx2, v in enumerate(batch):
+                        if v == tokenizer.pad_token_id:
+                            break
+
+                        # We don't want to mask special tokens
+                        if v in tokenizer.all_special_ids:
+                            continue
+
+                        # Mask with 15% (i.e. BERT)
+                        if random.random() < 0.15:
+                            _model_outputs[idx1][idx2] = tokenizer.mask_token_id
+            else:
+                # Common behavior
+
+                if not model_outputs:
+                    model_outputs = model(urls, attention_mask)
+
+                _urls = urls
+                _model_outputs = model_outputs
+
+            getattr(head, head_wrapper_name).set_tensor_for_returning(_model_outputs) # Set the output of the model -> don't execute again the model
 
             outputs = head(None).logits # Get head result
 
-            if regression:
-                # Regression
-                outputs = torch.sigmoid(outputs).squeeze(1)
-                outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+            if head_task == "urls_classification":
+                if regression:
+                    # Regression
+                    outputs = torch.sigmoid(outputs).squeeze(1)
+                    outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+                else:
+                    # Binary classification
+                    outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
+
+                loss = criterion(outputs, labels)
+
+                results.append((outputs, outputs_argmax, loss))
+            elif head_task == "mlm":
+                # TODO
+                logger.error("outputs.shape: %s", str(outputs.shape))
+                logger.error("outputs: %s", str(outputs))
+                raise Exception("TODO")
             else:
-                # Binary classification
-                outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
-
-            loss = criterion(outputs, labels)
-
-            results.append((outputs, outputs_argmax, loss))
+                raise Exception(f"Unknown head task: {head_task}")
 
     return results
 
@@ -47,6 +102,9 @@ def inference_with_heads(model, all_heads, criteria, urls, attention_mask, label
 def inference(model, all_heads, tokenizer, criterion, dataloader, max_length_tokens, device, regression,
               amp_context_manager, logger, classes=2):
     model.eval()
+
+    for head in all_heads:
+        head.eval()
 
     total_loss = 0.0
     total_acc = 0.0
@@ -59,14 +117,11 @@ def inference(model, all_heads, tokenizer, criterion, dataloader, max_length_tok
     all_labels = []
 
     for idx, batch in enumerate(dataloader):
-        batch_urls_str = batch["url_str"]
-        tokens = utils.encode(tokenizer, batch_urls_str, max_length_tokens)
-        urls = tokens["input_ids"].to(device)
-        attention_mask = tokens["attention_mask"].to(device)
-        labels = batch["label"].to(device)
+        inputs_and_outputs = utils.get_data_from_batch(batch, tokenizer, device, max_length_tokens)
+        labels = inputs_and_outputs["labels"]
 
         # Inference
-        results = inference_with_heads(model, all_heads, [criterion], urls, attention_mask, labels, regression, amp_context_manager)
+        results = inference_with_heads(model, all_heads, tokenizer, [criterion], inputs_and_outputs, regression, amp_context_manager)
 
         # TODO fix
         outputs, outputs_argmax, loss = results[0]
@@ -116,8 +171,6 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
     model.eval()
 
-    pad_token = utils.encode(tokenizer, tokenizer.pad_token, 1, False).input_ids.squeeze()
-
     while True:
         if inference_from_stdin:
             try:
@@ -158,7 +211,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         urls_tokens = urls.cpu() * attention_mask.cpu() # PAD tokens -> 0
 
         for idx, ut in enumerate(urls_tokens):
-            url_tokens = ut[ut != pad_token]
+            url_tokens = ut[ut != tokenizer.pad_token_id]
             original_str_from_tokens = tokenizer.decode(url_tokens) # Detokenize
             str_from_tokens = '<tok_sep>'.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a mark between tokens
             ## Unk

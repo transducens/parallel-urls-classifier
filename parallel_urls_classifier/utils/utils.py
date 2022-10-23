@@ -6,7 +6,6 @@ import logging
 import gzip
 import lzma
 from contextlib import contextmanager
-
 import argparse
 
 def wc_l(fd, do_not_count_empty=True):
@@ -95,6 +94,11 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
         else:
             src_url = url[0]
             trg_url = url[1]
+
+        if tokenizer.sep_token in src_url or tokenizer.sep_token in trg_url:
+            logging.warning("URLs skipped since they contain the separator token: ('%s', '%s')", src_url, trg_url)
+
+            continue
 
         urls.append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
                                                                 #  (or other special tokens) since they are automatically added
@@ -377,3 +381,43 @@ def get_idx_resource(url, url_has_protocol=True):
         return len(url) # There is no resource (likely is just the authority, i.e., main resource of the website)
 
     return idx + 1
+
+def get_data_from_batch(batch, tokenizer, device, max_length_tokens):
+    batch_urls_str = batch["url_str"]
+    batch_src_urls_str = [url.split(tokenizer.sep_token)[0] for url in batch_urls_str]
+    batch_trg_urls_str = [url.split(tokenizer.sep_token)[1] for url in batch_urls_str]
+    # URLs merged
+    tokens_urls = encode(tokenizer, batch_urls_str, max_length_tokens)
+    urls = tokens_urls["input_ids"].to(device)
+    attention_mask = tokens_urls["attention_mask"].to(device)
+    # Src and trg URLs splitted
+    src_tokens_urls = encode(tokenizer, batch_src_urls_str, max_length_tokens)
+    src_urls = src_tokens_urls["input_ids"].to(device)
+    src_attention_mask = src_tokens_urls["attention_mask"].to(device)
+    trg_tokens_urls = encode(tokenizer, batch_trg_urls_str, max_length_tokens)
+    trg_urls = trg_tokens_urls["input_ids"].to(device)
+    trg_attention_mask = trg_tokens_urls["attention_mask"].to(device)
+    # Labels
+    labels = batch["label"].to(device)
+
+    # Create dictionary with inputs and outputs
+    inputs_and_outputs = {
+        "labels": labels,
+        "urls": urls,
+        "attention_mask": attention_mask,
+        "src_urls": src_urls,
+        "src_attention_mask": src_attention_mask,
+        "trg_urls": trg_urls,
+        "trg_attention_mask": trg_attention_mask,
+    }
+
+    return inputs_and_outputs
+
+def get_pytorch_version():
+    import torch
+
+    torch_version_major = int(torch.__version__.split('+')[0].split('.')[0])
+    torch_version_minor = int(torch.__version__.split('+')[0].split('.')[1])
+    torch_version_patch = int(torch.__version__.split('+')[0].split('.')[2])
+
+    return torch_version_major, torch_version_minor, torch_version_patch
