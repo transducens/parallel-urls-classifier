@@ -335,8 +335,6 @@ def get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01):
 
     return opt_parameters
 
-# TODO check old code in nevis and verify that this updated version is different from
-#  that code, since we might have lose some code there (check diff)
 def get_tuple_if_is_not_tuple(obj, check_not_list=True):
     if not isinstance(obj, tuple):
         if check_not_list:

@@ -305,6 +305,7 @@ def main(args):
     lock_file = args.lock_file
     stringify_instead_of_tokenization = args.stringify_instead_of_tokenization
     lower = not args.do_not_lower
+    auxiliary_tasks = utils.get_tuple_if_is_not_tuple(args.auxiliary_tasks)
 
     if lock_file and utils.exists(lock_file):
         logger.warning("Lock file ('%s') exists: finishing training", lock_file)
@@ -403,9 +404,27 @@ def main(args):
         logger.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
-    heads = [AutoModelForSequenceClassification, AutoModelForMaskedLM]
-    heads_tasks = ["urls_classification", "mlm"]
-    heads_kwargs = [{"num_labels": num_labels}, {}]
+    heads = [AutoModelForSequenceClassification]
+    heads_tasks = ["urls_classification"]
+    heads_kwargs = [{"num_labels": num_labels}]
+    total_auxiliary_tasks = 0
+
+    if "mlm" in auxiliary_tasks:
+        heads.append(AutoModelForMaskedLM)
+        heads_tasks.append("mlm")
+        heads_kwargs.append({})
+
+        logger.info("Using auxiliary task: mlm")
+
+        total_auxiliary_tasks += 1
+
+    if total_auxiliary_tasks == 0:
+        logger.info("Not using any auxiliary task")
+
+    if total_auxiliary_tasks != len(auxiliary_tasks):
+        # We forgot something (e.g. update the code according a new auxiliary tasks)
+        raise Exception("The specified auxiliary tasks could not be loaded (bug)")
+
     model, all_heads = load_model(base=AutoModel, heads=heads, heads_tasks=heads_tasks, model_input=model_input,
                                   pretrained_model=pretrained_model, device=device, heads_kwargs=heads_kwargs,)
     tokenizer = load_tokenizer(pretrained_model)
@@ -1013,6 +1032,7 @@ def initialization():
     parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")
     parser.add_argument('--stringify-instead-of-tokenization', action="store_true", help="Preprocess URLs applying custom stringify instead of tokenization")
     parser.add_argument('--do-not-lower', action="store_true", help="Do not lower URLs while preprocessing")
+    parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm"], help="Tasks which will try to help to the main task (multitasking)")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")

@@ -13,6 +13,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+# TODO remove all "logger" parameters from functions since we can define this global variable
+#  and it works with the set configuration from the main file
 logger = logging.getLogger("parallel_urls_classifier")
 
 def inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outputs, regression,
