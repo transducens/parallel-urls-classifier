@@ -305,7 +305,7 @@ def main(args):
     lock_file = args.lock_file
     stringify_instead_of_tokenization = args.stringify_instead_of_tokenization
     lower = not args.do_not_lower
-    auxiliary_tasks = utils.get_tuple_if_is_not_tuple(args.auxiliary_tasks)
+    auxiliary_tasks = sorted(list(set(utils.get_tuple_if_is_not_tuple(args.auxiliary_tasks)))) if args.auxiliary_tasks else []
 
     if lock_file and utils.exists(lock_file):
         logger.warning("Lock file ('%s') exists: finishing training", lock_file)
@@ -405,7 +405,7 @@ def main(args):
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
     heads = [AutoModelForSequenceClassification]
-    heads_tasks = ["urls_classification"]
+    heads_tasks = ["urls_classification"] # Main task enabled by default
     heads_kwargs = [{"num_labels": num_labels}]
     total_auxiliary_tasks = 0
 
@@ -423,7 +423,8 @@ def main(args):
 
     if total_auxiliary_tasks != len(auxiliary_tasks):
         # We forgot something (e.g. update the code according a new auxiliary tasks)
-        raise Exception("The specified auxiliary tasks could not be loaded (bug)")
+        raise Exception("The specified auxiliary tasks could not be loaded (bug): "
+                        f"{' '.join(auxiliary_tasks)} ({len(auxiliary_tasks)})")
 
     model, all_heads = load_model(base=AutoModel, heads=heads, heads_tasks=heads_tasks, model_input=model_input,
                                   pretrained_model=pretrained_model, device=device, heads_kwargs=heads_kwargs,)
@@ -589,7 +590,7 @@ def main(args):
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     training_steps_per_epoch = len(dataloader_train)
     training_steps = training_steps_per_epoch * epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
-    criteria = []
+    criteria = {}
 
     # Get criterion for each head task
     for head in all_heads:
@@ -603,15 +604,13 @@ def main(args):
                 # Binary classification
                 criterion = nn.CrossEntropyLoss(weight=loss_weight) # Raw input, not normalized (i.e. don't apply softmax)
         elif head_task == "mlm":
-            # TODO
-            #criterion = nn.MSELoss()
-            raise Exception("TODO")
+            criterion = nn.CrossEntropyLoss()
         else:
             raise Exception(f"Unknown head task: {head_task}")
 
         criterion = criterion.to(device)
 
-        criteria.append(criterion)
+        criteria[head_task] = criterion
 
     # TODO enable again the support (we should test if it works with the new multi tasking environment)
     if llrd:
@@ -724,12 +723,21 @@ def main(args):
 
             # Inference
             results = inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
-            # TODO fix for fit different results (i.e. more than 1 head)
-            outputs, outputs_argmax, loss = results[0] # URLs classification
+
+            # Main task
+            outputs, outputs_argmax, loss = results["urls_classification"]
 
             # Results
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
+
+            # Auxiliary tasks
+            if "mlm" in results:
+                outputs_mlm, loss_mlm = results["mlm"]
+                loss_mlm_value = loss_mlm.cpu().detach().numpy()
+
+                # Update loss
+                loss = loss + loss_mlm
 
             if regression:
                 labels = torch.round(labels).type(torch.LongTensor)
@@ -743,6 +751,9 @@ def main(args):
 
             if log:
                 logger.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
+
+                if "mlm" in results:
+                    logger.debug("[train:batch#%d] Loss MLM: %f", idx + 1, loss_mlm_value)
 
             epoch_loss += loss_value
             epoch_acc += metrics["acc"]

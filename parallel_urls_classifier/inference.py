@@ -1,5 +1,6 @@
 
 import sys
+import copy
 import random
 import logging
 
@@ -22,7 +23,7 @@ def inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outpu
     if len(all_heads) != len(criteria):
         raise Exception(f"Different length in the provided heads and criteria: {len(all_heads)} vs {len(criteria)}")
 
-    results = []
+    results = {}
 
     # Inputs and outputs
     labels = inputs_and_outputs["labels"]
@@ -33,27 +34,37 @@ def inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outpu
         model_outputs = None
 
         for idx in range(len(all_heads)):
-            # TODO fix for fit different heads
             head = all_heads[idx]
             head_task = head.head_task
-            criterion = criteria[idx]
+            criterion = criteria[head_task]
             head_wrapper_name = head.head_model_variable_name
 
-            if head_task == "mlm":
+            if head_task == "urls_classification":
+                # Main task (common behavior)
+
+                if not model_outputs:
+                    model_outputs = model(urls, attention_mask)
+
+                _urls = urls
+                _model_outputs = model_outputs
+                _labels = labels
+            elif head_task == "mlm":
                 # We need to execute again because the input is not the whole sentence but masked :(
 
                 # TODO easy way to execute on both sides? By the moment, 50% src or trg side
                 if random.random() < 0.5:
                     _urls = inputs_and_outputs["src_urls"]
                     _attention_mask = inputs_and_outputs["src_attention_mask"]
-                    _model_outputs = model(_urls, _attention_mask)
                 else:
                     _urls = inputs_and_outputs["trg_urls"]
                     _attention_mask = inputs_and_outputs["trg_attention_mask"]
-                    _model_outputs = model(_urls, _attention_mask)
+
+                # Our labels are the original tokens
+                _labels = copy.deepcopy(_urls)
 
                 # Mask tokens
-                for idx1, batch in enumerate(_model_outputs):
+                # TODO is there some better way to do it? Perhaps DataCollatorForLanguageModeling from HF?
+                for idx1, batch in enumerate(_urls):
                     for idx2, v in enumerate(batch):
                         if v == tokenizer.pad_token_id:
                             break
@@ -64,21 +75,23 @@ def inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outpu
 
                         # Mask with 15% (i.e. BERT)
                         if random.random() < 0.15:
-                            _model_outputs[idx1][idx2] = tokenizer.mask_token_id
+                            _urls[idx1][idx2] = tokenizer.mask_token_id
+
+                # Execute again the model (URLs now are masked)
+                _model_outputs = model(_urls, _attention_mask)
+
+                # "Mask" labels (https://discuss.huggingface.co/t/bertformaskedlm-s-loss-and-scores-how-the-loss-is-computed/607/2)
+                _labels[_labels != tokenizer.mask_token_id] = -100 # -100 is the default value of "ignore_index" of CrossEntropyLoss
             else:
-                # Common behavior
-
-                if not model_outputs:
-                    model_outputs = model(urls, attention_mask)
-
-                _urls = urls
-                _model_outputs = model_outputs
+                raise Exception(f"Unknown head task: {head_task}")
 
             getattr(head, head_wrapper_name).set_tensor_for_returning(_model_outputs) # Set the output of the model -> don't execute again the model
 
             outputs = head(None).logits # Get head result
 
             if head_task == "urls_classification":
+                # Main task
+
                 if regression:
                     # Regression
                     outputs = torch.sigmoid(outputs).squeeze(1)
@@ -87,21 +100,20 @@ def inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outpu
                     # Binary classification
                     outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
 
-                loss = criterion(outputs, labels)
+                loss = criterion(outputs, _labels)
 
-                results.append((outputs, outputs_argmax, loss))
+                results["urls_classification"] = (outputs, outputs_argmax, loss)
             elif head_task == "mlm":
-                # TODO
-                logger.error("outputs.shape: %s", str(outputs.shape))
-                logger.error("outputs: %s", str(outputs))
-                raise Exception("TODO")
+                loss = criterion(outputs.view(-1, tokenizer.vocab_size), _labels.view(-1))
+
+                results["mlm"] = (outputs, loss)
             else:
                 raise Exception(f"Unknown head task: {head_task}")
 
     return results
 
 @torch.no_grad()
-def inference(model, all_heads, tokenizer, criterion, dataloader, max_length_tokens, device, regression,
+def inference(model, all_heads, tokenizer, criteria, dataloader, max_length_tokens, device, regression,
               amp_context_manager, logger, classes=2):
     model.eval()
 
@@ -123,10 +135,14 @@ def inference(model, all_heads, tokenizer, criterion, dataloader, max_length_tok
         labels = inputs_and_outputs["labels"]
 
         # Inference
-        results = inference_with_heads(model, all_heads, tokenizer, [criterion], inputs_and_outputs, regression, amp_context_manager)
+        results = inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
 
-        # TODO fix
-        outputs, outputs_argmax, loss = results[0]
+        # Tasks
+        outputs, outputs_argmax, loss = results["urls_classification"]
+
+        if "mlm" in results:
+            # TODO propagate somehow? Statistics?
+            outputs_mlm, loss_mlm = results["mlm"]
 
         loss = loss.cpu()
         labels = labels.cpu()
