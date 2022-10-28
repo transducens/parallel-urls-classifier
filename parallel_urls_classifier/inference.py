@@ -1,6 +1,5 @@
 
 import sys
-import copy
 import random
 import logging
 
@@ -13,81 +12,37 @@ import parallel_urls_classifier.preprocess as preprocess
 import numpy as np
 import torch
 import torch.nn.functional as F
+import transformers
 
 # TODO remove all "logger" parameters from functions since we can define this global variable
 #  and it works with the set configuration from the main file
 logger = logging.getLogger("parallel_urls_classifier")
 
-def inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outputs, regression,
-                         amp_context_manager):
-    if len(all_heads) != len(criteria):
-        raise Exception(f"Different length in the provided heads and criteria: {len(all_heads)} vs {len(criteria)}")
-
-    results = {}
+def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager):
+    results = {"_internal": {"total_loss": None}}
 
     # Inputs and outputs
-    labels = inputs_and_outputs["labels"]
+    labels = {"urls_classification": inputs_and_outputs["labels"]}
     urls = inputs_and_outputs["urls"]
+    device = urls.device
     attention_mask = inputs_and_outputs["attention_mask"]
 
     with amp_context_manager:
         model_outputs = None
 
-        for idx in range(len(all_heads)):
-            head = all_heads[idx]
-            head_task = head.head_task
+        if "mlm" in tasks:
+            # "Mask" labels and mask URLs
+            #  https://discuss.huggingface.co/t/bertformaskedlm-s-loss-and-scores-how-the-loss-is-computed/607/2
+            _urls, _labels = transformers.DataCollatorForLanguageModeling(tokenizer, mlm_probability=0.15)\
+                                .torch_mask_tokens(urls.clone().cpu().detach())
+            labels["mlm"] = _labels.to(device)
+            _urls = _urls.to(device)
+            urls = _urls
+
+        for head_task in tasks:
+            model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
+            outputs = model_outputs.logits # Get head result
             criterion = criteria[head_task]
-            head_wrapper_name = head.head_model_variable_name
-
-            if head_task == "urls_classification":
-                # Main task (common behavior)
-
-                if not model_outputs:
-                    model_outputs = model(urls, attention_mask)
-
-                _urls = urls
-                _model_outputs = model_outputs
-                _labels = labels
-            elif head_task == "mlm":
-                # We need to execute again because the input is not the whole sentence but masked :(
-
-                # TODO easy way to execute on both sides? By the moment, 50% src or trg side
-                if random.random() < 0.5:
-                    _urls = inputs_and_outputs["src_urls"]
-                    _attention_mask = inputs_and_outputs["src_attention_mask"]
-                else:
-                    _urls = inputs_and_outputs["trg_urls"]
-                    _attention_mask = inputs_and_outputs["trg_attention_mask"]
-
-                # Our labels are the original tokens
-                _labels = copy.deepcopy(_urls)
-
-                # Mask tokens
-                # TODO is there some better way to do it? Perhaps DataCollatorForLanguageModeling from HF?
-                for idx1, batch in enumerate(_urls):
-                    for idx2, v in enumerate(batch):
-                        if v == tokenizer.pad_token_id:
-                            break
-
-                        # We don't want to mask special tokens
-                        if v in tokenizer.all_special_ids:
-                            continue
-
-                        # Mask with 15% (i.e. BERT)
-                        if random.random() < 0.15:
-                            _urls[idx1][idx2] = tokenizer.mask_token_id
-
-                # Execute again the model (URLs now are masked)
-                _model_outputs = model(_urls, _attention_mask)
-
-                # "Mask" labels (https://discuss.huggingface.co/t/bertformaskedlm-s-loss-and-scores-how-the-loss-is-computed/607/2)
-                _labels[_labels != tokenizer.mask_token_id] = -100 # -100 is the default value of "ignore_index" of CrossEntropyLoss
-            else:
-                raise Exception(f"Unknown head task: {head_task}")
-
-            getattr(head, head_wrapper_name).set_tensor_for_returning(_model_outputs) # Set the output of the model -> don't execute again the model
-
-            outputs = head(None).logits # Get head result
 
             if head_task == "urls_classification":
                 # Main task
@@ -100,25 +55,28 @@ def inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outpu
                     # Binary classification
                     outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
 
-                loss = criterion(outputs, _labels)
+                loss = criterion(outputs, labels[head_task])
 
-                results["urls_classification"] = (outputs, outputs_argmax, loss)
+                results["urls_classification"] = {"outputs": outputs, "outputs_argmax": outputs_argmax, "loss_detach": loss.cpu().detach()}
             elif head_task == "mlm":
-                loss = criterion(outputs.view(-1, tokenizer.vocab_size), _labels.view(-1))
+                loss = criterion(outputs.view(-1, tokenizer.vocab_size), labels[head_task].view(-1))
 
-                results["mlm"] = (outputs, loss)
+                results["mlm"] = {"outputs": outputs, "loss_detach": loss.cpu().detach()}
             else:
                 raise Exception(f"Unknown head task: {head_task}")
+
+            # Sum loss (we don't want to define multiple losses at the same time in order to avoid high memory allocation)
+            # TODO use weight for loss per task?
+            if not results["_internal"]["total_loss"]:
+                results["_internal"]["total_loss"] = loss
+            else:
+                results["_internal"]["total_loss"] += loss
 
     return results
 
 @torch.no_grad()
-def inference(model, all_heads, tokenizer, criteria, dataloader, max_length_tokens, device, regression,
-              amp_context_manager, logger, classes=2):
+def inference(model, tasks, tokenizer, criteria, dataloader, max_length_tokens, device, regression, amp_context_manager, logger, classes=2):
     model.eval()
-
-    for head in all_heads:
-        head.eval()
 
     total_loss = 0.0
     total_acc = 0.0
@@ -135,15 +93,19 @@ def inference(model, all_heads, tokenizer, criteria, dataloader, max_length_toke
         labels = inputs_and_outputs["labels"]
 
         # Inference
-        results = inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
+        results = inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
 
         # Tasks
-        outputs, outputs_argmax, loss = results["urls_classification"]
+        loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?
+        outputs = results["urls_classification"]["outputs"]
+        outputs_argmax = results["urls_classification"]["outputs_argmax"]
 
         if "mlm" in results:
             # TODO propagate somehow? Statistics?
-            outputs_mlm, loss_mlm = results["mlm"]
+            loss_mlm = results["mlm"]["loss_detach"]
+            outputs_mlm = results["mlm"]["outputs"]
 
+        loss = results["_internal"]["total_loss"].cpu()
         loss = loss.cpu()
         labels = labels.cpu()
 

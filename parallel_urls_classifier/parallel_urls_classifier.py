@@ -34,6 +34,7 @@ from torch.utils.data import (
     WeightedRandomSampler,
     SequentialSampler
 )
+import transformers
 from transformers import (
     AutoModel,
     AutoTokenizer,
@@ -120,110 +121,155 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
 
     return scheduler_instance
 
-# This variable contains, for a pretrained model, the name of the variable
-#  which contains the model in the instance for a specific task
-_load_model_variable_name_map = {
-    "xlm-roberta-base": {
-        "ForSequenceClassification": "roberta",
-        "ForMaskedLM": "roberta",
-    },
-}
+# Adapted from https://colab.research.google.com/github/zphang/zphang.github.io/blob/master/files/notebooks/Multi_task_Training_with_Transformers_NLP.ipynb#scrollTo=aVX5hFlzmLka
+class MultitaskModel(transformers.PreTrainedModel):
+    config_class = None
+    #is_parallelizable = True # TODO ?
+    base_model_prefix = ""
+    main_input_name = "input_ids"
 
-class ModelWrapper(torch.nn.Module):
-    def __init__(self, tensor=None, *args, **kwargs):
-        super(ModelWrapper, self).__init__()
-        self.tensor_for_returning = tensor
+    def __init__(self, config, created_from_create=False):
+        """
+        Setting MultitaskModel up as a PretrainedModel allows us
+        to take better advantage of Trainer features
+        """
+        cls = self.__class__
+        cls.config_class = config.__class__
+        super().__init__(config)
 
-    def __call__(self, *args, **kwargs):
-        return self.tensor_for_returning
+        correctly_initializated = not (not cls.base_model_prefix or not cls.config_class)
 
-    def set_tensor_for_returning(self, tensor):
-        self.tensor_for_returning = tensor
+        if not correctly_initializated:
+            raise Exception("Model has been initializated correctly: you may use create()")
 
-def load_model(base=AutoModel, heads=[AutoModelForSequenceClassification], heads_tasks=["urls_classification"], model_input="",
-               pretrained_model="", device="", base_kwargs={}, heads_kwargs=[{}]):
-    if pretrained_model not in _load_model_variable_name_map:
-        raise Exception(f"Model '{pretrained_model}' not supported: complete '_load_model_variable_name_map' variable "
-                        "in order to provide support")
-    if len(heads) == 0:
+        if not created_from_create:
+            c = config.to_dict()
+            pretrained_model = c["_name_or_path"]
+            self.tasks_names = c["puc_tasks"]
+            self.tasks_kwargs = c["puc_tasks_kwargs"]
+
+    @classmethod
+    def get_task_heads(cls, tasks, tasks_kwargs, model_source):
+        heads = {}
+        heads_config = {}
+
+        for task in tasks:
+            if task == "urls_classification":
+                heads["urls_classification"] = transformers.AutoModelForSequenceClassification
+                #heads_config["urls_classification"] = transformers.AutoConfig.from_pretrained(model_source, num_labels=num_labels)
+                task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
+                heads_config["urls_classification"] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
+            elif task == "mlm":
+                heads["mlm"] = transformers.AutoModelForMaskedLM
+                #heads_config["mlm"] = transformers.AutoConfig.from_pretrained(model_source, num_labels=num_labels)
+                task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
+                heads_config["mlm"] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
+
+        return heads, heads_config
+
+    def get_base_model(self):
+        return self.encoder
+
+    def get_head(self, task):
+        return self.task_models_dict_modules[task]
+
+    def get_tasks_names(self):
+        return self.tasks_names
+
+    @classmethod
+    def create(cls, model_name, tasks, tasks_kwargs):
+        """
+        This creates a MultitaskModel using the model class and config objects
+        from single-task models.
+
+        We do this by creating each single-task model, and having them share
+        the same encoder transformer.
+        """
+        shared_encoder = None
+        task_models_dict = {}
+
+        model_type_dict, model_config_dict = cls.get_task_heads(tasks, tasks_kwargs, model_name)
+        config = transformers.AutoConfig.from_pretrained(model_name)
+
+        for task_name, model_type in model_type_dict.items():
+            model = model_type.from_pretrained(
+                model_name,
+                config=model_config_dict[task_name],
+            )
+
+            encoder_attr_name = cls.get_encoder_attr_name(model)
+
+            if not cls.base_model_prefix:
+                cls.base_model_prefix = encoder_attr_name
+            elif cls.base_model_prefix != encoder_attr_name:
+                # This shouldn't happen (at least by design, but different heads might have
+                #  different names for the base model attr... So it's possible :/)
+                raise Exception("Different base model prefix")
+
+            if shared_encoder is None:
+                shared_encoder = getattr(model, encoder_attr_name)
+            else:
+                setattr(model, encoder_attr_name, shared_encoder)
+
+            task_models_dict[task_name] = model
+
+        c = config.to_dict()
+        c["puc_tasks"] = tasks
+        c["puc_tasks_kwargs"] = tasks_kwargs
+        config.update(c)
+
+        instance = cls(config, created_from_create=True)
+        instance.encoder = shared_encoder
+        instance.task_models_dict = task_models_dict
+        instance.task_models_dict_modules = nn.ModuleDict(task_models_dict)
+        instance.tasks_names = tasks
+        instance.tasks_kwargs = tasks_kwargs
+
+        return instance
+
+    @classmethod
+    def get_encoder_attr_name(cls, model):
+        """
+        The encoder transformer is named differently in each model "architecture".
+        This method lets us get the name of the encoder attribute
+        """
+        model_class_name = model.__class__.__name__
+
+        if model_class_name.startswith("Bert"):
+            return "bert"
+        elif model_class_name.startswith("Roberta"):
+            return "roberta"
+        elif model_class_name.startswith("Albert"):
+            return "albert"
+        elif model_class_name.startswith("XLMRoberta"):
+            return "roberta"
+        else:
+            raise KeyError(f"Add support for new model {model_class_name}")
+
+    def forward(self, task_name, *args, **kwargs):
+        return self.task_models_dict_modules[task_name](*args, **kwargs)
+
+def load_model(tasks, tasks_kwargs, model_input="", pretrained_model="", device=""):
+    if len(tasks) == 0:
         raise Exception("At least 1 head is mandatory")
-    if len(heads) != len(heads_kwargs):
-        raise Exception("Same quantity of elements have to be provided to 'heads' and 'heads_kwargs': "
-                        "you can provide empty dictionaries if you don't want to provide anything: "
-                        f"{len(heads)} vs {len(heads_kwargs)}")
-    if len(heads) != len(heads_tasks):
-        raise Exception("Same quantity of elements have to be provided to 'heads' and 'heads_tasks'"
-                        f"{len(heads)} vs {len(heads_tasks)}")
-
-    # Load main model
-    model = base
-    model_loaded_from_file = False
+    if set(tasks) != set(tasks_kwargs):
+        raise Exception("Different tasks provided to 'tasks' and 'tasks_kwargs': "
+                        f"{set(tasks)} vs {set(tasks_kwargs)}")
 
     if model_input:
         logger.info("Loading model: '%s'", model_input)
 
-        model = model.from_pretrained(model_input)
-        model_loaded_from_file = True
-    elif pretrained_model:
-        model = model.from_pretrained(pretrained_model, **base_kwargs)
-    else:
-        raise Exception("You need to provide either 'model_input' or 'pretrained_model'")
+    multitask_model = MultitaskModel.create(
+        model_input if model_input else pretrained_model,
+        tasks,
+        tasks_kwargs,
+    )
 
+    # Move model to device
     if device:
-        model = model.to(device)
+        multitask_model = multitask_model.to(device)
 
-    # Load heads
-    all_heads = []
-
-    for idx in range(len(heads)):
-        h = heads[idx]
-        head_kwargs = heads_kwargs[idx]
-        head_task = heads_tasks[idx]
-        head_name_full = h.__name__
-        head_name = ""
-
-        for _head_name in _load_model_variable_name_map[pretrained_model].keys():
-            if head_name_full.endswith(_head_name):
-                head_name = _head_name
-                break
-
-        if not head_name:
-            raise Exception(f"Head '{head_name_full}' not supported: complete '_load_model_variable_name_map' variable in order to provide support")
-
-        head = h
-        model_input_head = f"{model_input}.{head_name}" if model_input else ""
-
-        if model_input_head:
-            logger.info("Loading head: '%s'", model_input_head)
-
-            head = head.from_pretrained(model_input_head)
-        elif pretrained_model:
-            if model_loaded_from_file:
-                logger.warning("Model was loaded from local checkpoint, but the head '%s' has not: this is expected if you want to train a new head", head_name)
-
-            head = head.from_pretrained(pretrained_model, **head_kwargs)
-
-        # Replace model of the header with wrapper
-        model_variable_name = _load_model_variable_name_map[pretrained_model][head_name]
-
-        try:
-            # Check that we can actually get the model from the head
-            getattr(head, model_variable_name)
-        except AttributeError as e:
-            raise Exception(f"It seems that the model variable name is not correct: '{model_variable_name}' not found in '{head_name_full}' in '{pretrained_model}'") from e
-
-        setattr(head, model_variable_name, ModelWrapper())
-        setattr(head, "head_model_variable_name", model_variable_name)
-        setattr(head, "head_name", head_name)
-        setattr(head, "head_task", head_task)
-
-        # Move head to device
-        if device:
-            head = head.to(device)
-
-        all_heads.append(head)
-
-    return model, all_heads
+    return multitask_model
 
 def load_tokenizer(pretrained_model):
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
@@ -306,6 +352,8 @@ def main(args):
     stringify_instead_of_tokenization = args.stringify_instead_of_tokenization
     lower = not args.do_not_lower
     auxiliary_tasks = sorted(list(set(utils.get_tuple_if_is_not_tuple(args.auxiliary_tasks)))) if args.auxiliary_tasks else []
+    all_tasks = ["urls_classification"] + auxiliary_tasks
+    freeze_embeddings_layer = args.freeze_embeddings_layer
 
     if lock_file and utils.exists(lock_file):
         logger.warning("Lock file ('%s') exists: finishing training", lock_file)
@@ -404,15 +452,13 @@ def main(args):
         logger.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
-    heads = [AutoModelForSequenceClassification]
-    heads_tasks = ["urls_classification"] # Main task enabled by default
-    heads_kwargs = [{"num_labels": num_labels}]
+    model_source = model_input if model_input else pretrained_model
+    all_tasks_kwargs = {}
+    all_tasks_kwargs["urls_classification"] = {"num_labels": num_labels}
     total_auxiliary_tasks = 0
 
     if "mlm" in auxiliary_tasks:
-        heads.append(AutoModelForMaskedLM)
-        heads_tasks.append("mlm")
-        heads_kwargs.append({})
+        all_tasks_kwargs["mlm"] = {"num_labels": num_labels} # TODO is this doing something even wrong? Why are we doing this?
 
         logger.info("Using auxiliary task: mlm")
 
@@ -426,11 +472,10 @@ def main(args):
         raise Exception("The specified auxiliary tasks could not be loaded (bug): "
                         f"{' '.join(auxiliary_tasks)} ({len(auxiliary_tasks)})")
 
-    model, all_heads = load_model(base=AutoModel, heads=heads, heads_tasks=heads_tasks, model_input=model_input,
-                                  pretrained_model=pretrained_model, device=device, heads_kwargs=heads_kwargs,)
+    model = load_model(all_tasks, all_tasks_kwargs, model_input=model_input, pretrained_model=pretrained_model, device=device)
     tokenizer = load_tokenizer(pretrained_model)
     fine_tuning = not args.do_not_fine_tune
-    model_embeddings_size = model.base_model.embeddings.word_embeddings.weight.shape[0]
+    model_embeddings_size = model.get_base_model().base_model.embeddings.word_embeddings.weight.shape[0]
 
     if url_separator_new_token:
         # Add new special token (URL separator)
@@ -439,13 +484,13 @@ def main(args):
         logger.debug("New tokens added to tokenizer: %d", num_added_toks)
 
         if not model_input:
-            model.resize_token_embeddings(len(tokenizer))
+            model.get_base_model().resize_token_embeddings(len(tokenizer))
         elif model_embeddings_size + 1 == len(tokenizer):
             logger.warning("You've loaded a model which does not have the new token, so the results might be unexpected")
 
-            model.resize_token_embeddings(len(tokenizer))
+            model.get_base_model().resize_token_embeddings(len(tokenizer))
 
-    model_embeddings_size = model.base_model.embeddings.word_embeddings.weight.shape[0]
+    model_embeddings_size = model.get_base_model().base_model.embeddings.word_embeddings.weight.shape[0]
 
     if model_embeddings_size != len(tokenizer):
         logger.error("Embedding layer size does not match with the tokenizer size: %d vs %d", model_embeddings_size, len(tokenizer))
@@ -465,19 +510,25 @@ def main(args):
                            "it will not be applied", imbalanced_strategy)
 
     # Unfreeze heads layers
-    for head in all_heads:
+    for task in all_tasks:
+        head = model.get_head(task)
+
         for param in head.parameters():
             param.requires_grad = True
 
     # Freeze layers of the model, if needed
-    for param in model.parameters():
+    for param in model.get_base_model().parameters():
         param.requires_grad = fine_tuning
 
-    last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
+    # Freeze embeddings layer, if needed
+    for param in model.get_base_model().base_model.embeddings.parameters():
+        param.requires_grad = not freeze_embeddings_layer
+
+    last_layer_output = utils.get_layer_from_model(model.get_base_model().base_model.encoder.layer[-1], name="output.dense.weight")
 
     # Re-initilize last N layers from the pre-trained model
     if fine_tuning and re_initialize_last_n_layers > 0:
-        utils.do_reinit(model.base_model, re_initialize_last_n_layers)
+        utils.do_reinit(model.get_base_model().base_model, re_initialize_last_n_layers)
 
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
@@ -593,9 +644,7 @@ def main(args):
     criteria = {}
 
     # Get criterion for each head task
-    for head in all_heads:
-        head_task = head.head_task
-
+    for head_task in all_tasks:
         if head_task == "urls_classification":
             if regression:
                 # Regression
@@ -622,12 +671,7 @@ def main(args):
     #else:
     #    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
 
-    all_parameters = list(model.parameters())
-
-    for head_parameters in [list(head.parameters()) for head in all_heads]:
-        all_parameters += head_parameters # Merge head parameters with model parameters
-
-    model_parameters = filter(lambda p: p.requires_grad, all_parameters)
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     #optimizer = Adam(model_parameters, lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
     optimizer = AdamW(model_parameters, lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
 
@@ -707,9 +751,6 @@ def main(args):
 
         model.train()
 
-        for head in all_heads:
-            head.train()
-
         for idx, batch in enumerate(dataloader_train):
             inputs_and_outputs = utils.get_data_from_batch(batch, tokenizer, device, max_length_tokens)
             labels = inputs_and_outputs["labels"]
@@ -718,26 +759,17 @@ def main(args):
             #optimizer.zero_grad() # https://discuss.pytorch.org/t/model-zero-grad-or-optimizer-zero-grad/28426/6
             model.zero_grad()
 
-            for head in all_heads:
-                head.zero_grad()
-
             # Inference
-            results = inference_with_heads(model, all_heads, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
+            results = inference_with_heads(model, all_tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
 
             # Main task
-            outputs, outputs_argmax, loss = results["urls_classification"]
+            outputs = results["urls_classification"]["outputs"]
+            outputs_argmax = results["urls_classification"]["outputs_argmax"]
 
             # Results
+            loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
             loss_value = loss.cpu().detach().numpy()
             labels = labels.cpu()
-
-            # Auxiliary tasks
-            if "mlm" in results:
-                outputs_mlm, loss_mlm = results["mlm"]
-                loss_mlm_value = loss_mlm.cpu().detach().numpy()
-
-                # Update loss
-                loss = loss + loss_mlm
 
             if regression:
                 labels = torch.round(labels).type(torch.LongTensor)
@@ -752,8 +784,14 @@ def main(args):
             if log:
                 logger.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
 
-                if "mlm" in results:
-                    logger.debug("[train:batch#%d] Loss MLM: %f", idx + 1, loss_mlm_value)
+                if len(all_tasks) > 1:
+                    if "urls_classification" in results:
+                        logger.debug("[train:batch#%d] Loss URLs classification (main task): %f", idx + 1, results["urls_classification"]["loss_detach"].numpy())
+                    else:
+                        raise Exception("Why main task is not being executed?")
+
+                    if "mlm" in results:
+                        logger.debug("[train:batch#%d] Loss MLM: %f", idx + 1, results["mlm"]["loss_detach"].numpy())
 
             epoch_loss += loss_value
             epoch_acc += metrics["acc"]
@@ -798,7 +836,7 @@ def main(args):
             optimizer.step()
             scheduler.step()
 
-        current_last_layer_output = utils.get_layer_from_model(model.base_model.encoder.layer[-1], name="output.dense.weight")
+        current_last_layer_output = utils.get_layer_from_model(model.get_base_model().base_model.encoder.layer[-1], name="output.dense.weight")
         layer_updated = (current_last_layer_output != last_layer_output).any().cpu().detach().numpy()
 
         logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
@@ -825,7 +863,7 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, all_heads, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
+        dev_inference_metrics = inference(model, all_tasks, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
                                           amp_context_manager, logger, classes=classes)
 
         # Dev metrics
@@ -863,12 +901,6 @@ def main(args):
             # Store model
             if model_output:
                 model.save_pretrained(model_output)
-
-                # Store the heads
-                for head in all_heads:
-                    head_name = head.head_name
-
-                    head.save_pretrained(f"{model_output}.{head_name}")
 
             current_patience = 0
         else:
@@ -928,9 +960,11 @@ def main(args):
 
         logger.info("Loading best model: '%s' (best dev: %s)", model_output, str(best_dev))
 
-        model = model.from_pretrained(model_output).to(device)
+        # TODO fix...... weights are not being loaded properly for some reason.... https://discuss.huggingface.co/t/how-to-load-a-custom-multitask-model-from-checkpoint/10649
+        #model = model.from_pretrained(model_output).to(device)
+        model = load_model(all_tasks, all_tasks_kwargs, model_input=model_output, pretrained_model=pretrained_model, device=device)
 
-    dev_inference_metrics = inference(model, all_heads, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
+    dev_inference_metrics = inference(model, all_tasks, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
                                       amp_context_manager, logger, classes=classes)
 
     # Dev metrics
@@ -950,7 +984,7 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, all_heads, tokenizer, criteria, dataloader_test, max_length_tokens, device, regression,
+    test_inference_metrics = inference(model, all_tasks, tokenizer, criteria, dataloader_test, max_length_tokens, device, regression,
                                        amp_context_manager, logger, classes=classes)
 
     # Test metrics
@@ -1044,6 +1078,7 @@ def initialization():
     parser.add_argument('--stringify-instead-of-tokenization', action="store_true", help="Preprocess URLs applying custom stringify instead of tokenization")
     parser.add_argument('--do-not-lower', action="store_true", help="Do not lower URLs while preprocessing")
     parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm"], help="Tasks which will try to help to the main task (multitasking)")
+    parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")

@@ -48,6 +48,7 @@ def get_layer_from_model(layer, name=None, deepcopy=True):
 def encode(tokenizer, text, max_length=512, add_special_tokens=True):
     encoder = tokenizer.batch_encode_plus if isinstance(text, list) else tokenizer.encode_plus
 
+    # TODO remove automatically padding, sort by length and manually pad in order to improve GPU usage
     return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding="max_length",
                    return_attention_mask=True, return_tensors="pt", max_length=max_length)
 
@@ -389,12 +390,12 @@ def get_data_from_batch(batch, tokenizer, device, max_length_tokens):
     urls = tokens_urls["input_ids"].to(device)
     attention_mask = tokens_urls["attention_mask"].to(device)
     # Src and trg URLs splitted
-    src_tokens_urls = encode(tokenizer, batch_src_urls_str, max_length_tokens)
-    src_urls = src_tokens_urls["input_ids"].to(device)
-    src_attention_mask = src_tokens_urls["attention_mask"].to(device)
-    trg_tokens_urls = encode(tokenizer, batch_trg_urls_str, max_length_tokens)
-    trg_urls = trg_tokens_urls["input_ids"].to(device)
-    trg_attention_mask = trg_tokens_urls["attention_mask"].to(device)
+    #src_tokens_urls = encode(tokenizer, batch_src_urls_str, max_length_tokens)
+    #src_urls = src_tokens_urls["input_ids"].to(device)
+    #src_attention_mask = src_tokens_urls["attention_mask"].to(device)
+    #trg_tokens_urls = encode(tokenizer, batch_trg_urls_str, max_length_tokens)
+    #trg_urls = trg_tokens_urls["input_ids"].to(device)
+    #trg_attention_mask = trg_tokens_urls["attention_mask"].to(device)
     # Labels
     labels = batch["label"].to(device)
 
@@ -403,10 +404,10 @@ def get_data_from_batch(batch, tokenizer, device, max_length_tokens):
         "labels": labels,
         "urls": urls,
         "attention_mask": attention_mask,
-        "src_urls": src_urls,
-        "src_attention_mask": src_attention_mask,
-        "trg_urls": trg_urls,
-        "trg_attention_mask": trg_attention_mask,
+        #"src_urls": src_urls,
+        #"src_attention_mask": src_attention_mask,
+        #"trg_urls": trg_urls,
+        #"trg_attention_mask": trg_attention_mask,
     }
 
     return inputs_and_outputs
