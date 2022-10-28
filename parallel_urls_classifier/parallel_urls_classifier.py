@@ -125,28 +125,104 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
 class MultitaskModel(transformers.PreTrainedModel):
     config_class = None
     #is_parallelizable = True # TODO ?
-    base_model_prefix = ""
+    base_model_prefix = "encoder"
     main_input_name = "input_ids"
 
-    def __init__(self, config, created_from_create=False):
+    def __init__(self, config):
         """
         Setting MultitaskModel up as a PretrainedModel allows us
         to take better advantage of Trainer features
         """
         cls = self.__class__
         cls.config_class = config.__class__
+
         super().__init__(config)
 
-        correctly_initializated = not (not cls.base_model_prefix or not cls.config_class)
+        self.config = config
 
-        if not correctly_initializated:
-            raise Exception("Model has been initializated correctly: you may use create()")
+        # Load values from the configuration
+        c = config.to_dict()
+        pretrained_model = c["_name_or_path"]
+        self.tasks_names = c["puc_tasks"]
+        self.tasks_kwargs = c["puc_tasks_kwargs"]
 
-        if not created_from_create:
-            c = config.to_dict()
-            pretrained_model = c["_name_or_path"]
-            self.tasks_names = c["puc_tasks"]
-            self.tasks_kwargs = c["puc_tasks_kwargs"]
+        # Load base model and tasks
+        heads, heads_config = cls.get_task_heads(self.tasks_names, self.tasks_kwargs, pretrained_model)
+        shared_encoder, task_models_dict = cls.get_base_and_heads(heads, heads_config, config, pretrained_model)
+        self.encoder = shared_encoder
+
+        self.update_task_models(task_models_dict)
+
+    def update_task_models(self, task_models_dict):
+        self.task_models_dict = task_models_dict
+        self.task_models_dict_modules = nn.ModuleDict(task_models_dict)
+
+    @classmethod
+    def get_base_model_path(cls, d):
+        return f"{d}.base_model"
+
+    @classmethod
+    def get_task_model_path(cls, d, task):
+        return f"{d}.heads.{task}"
+
+    def from_pretrained_wrapper(self, model_input, device=None):
+        cls = self.__class__
+        base_model_path = cls.get_base_model_path(model_input)
+
+        if not utils.exists(base_model_path, f=os.path.isdir):
+            raise Exception(f"Provided input model does not exist (base model): '{base_model_path}'")
+
+        # TODO Why (?): "You are using a model of type xlm-roberta to instantiate a model of type roberta. This is not supported for all configurations of models and can yield errors."
+        self.encoder = self.encoder.from_pretrained(base_model_path).to(device)
+
+        for task, task_head in self.task_models_dict.items():
+            task_path = cls.get_task_model_path(model_input, task)
+
+            if not utils.exists(task_path, f=os.path.isdir):
+                raise Exception(f"Provided input model does not exist (task: {task}): '{task_path}'")
+
+            self.task_models_dict[task] = self.task_models_dict[task].from_pretrained(task_path)
+            encoder_attr_name = cls.get_encoder_attr_name(self.task_models_dict[task])
+
+            """
+            # Replace base model in the head
+            encoder = getattr(self.task_models_dict[task], encoder_attr_name)
+
+            if encoder is not None:
+                logger.warning("The encoder is not None: is the model being stored unnecessary multiple times?")
+            """
+
+            setattr(self.task_models_dict[task], encoder_attr_name, self.encoder)
+
+            self.task_models_dict[task].to(device)
+
+        self.update_task_models(self.task_models_dict)
+
+        logger.info("Model(s) loaded: %s.{base_model,heads.{%s}}", model_input, ','.join(self.get_tasks_names()))
+
+    def save_pretrained_wrapper(self, model_output):
+        cls = self.__class__
+        base_model_path = cls.get_base_model_path(model_output)
+        self.encoder.save_pretrained(base_model_path)
+
+        for task, task_head in self.task_models_dict.items():
+            task_path = cls.get_task_model_path(model_output, task)
+            """
+            encoder_attr_name = cls.get_encoder_attr_name(self.task_models_dict[task])
+            encoder = getattr(self.task_models_dict[task], encoder_attr_name)
+
+            # Remove encoder (we don't want to store the base model as many times as tasks we have)
+            setattr(self.task_models_dict[task], encoder_attr_name, None)
+            """
+
+            self.task_models_dict[task].save_pretrained(task_path)
+
+            """
+            # Restore encoder
+            setattr(self.task_models_dict[task], encoder_attr_name, encoder)
+            """
+
+        logger.info("Model(s) saved: %s.{base_model,heads.{%s}}", model_output, ','.join(self.get_tasks_names()))
 
     @classmethod
     def get_task_heads(cls, tasks, tasks_kwargs, model_source):
@@ -156,12 +232,10 @@ class MultitaskModel(transformers.PreTrainedModel):
         for task in tasks:
             if task == "urls_classification":
                 heads["urls_classification"] = transformers.AutoModelForSequenceClassification
-                #heads_config["urls_classification"] = transformers.AutoConfig.from_pretrained(model_source, num_labels=num_labels)
                 task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
                 heads_config["urls_classification"] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
             elif task == "mlm":
                 heads["mlm"] = transformers.AutoModelForMaskedLM
-                #heads_config["mlm"] = transformers.AutoConfig.from_pretrained(model_source, num_labels=num_labels)
                 task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
                 heads_config["mlm"] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
 
@@ -177,6 +251,29 @@ class MultitaskModel(transformers.PreTrainedModel):
         return self.tasks_names
 
     @classmethod
+    def get_base_and_heads(cls, heads, heads_config, config, model_name):
+        shared_encoder = None
+        task_models_dict = {}
+
+        for task_name, model_type in heads.items():
+            model = model_type.from_pretrained(
+                model_name,
+                config=heads_config[task_name],
+            )
+
+            encoder_attr_name = cls.get_encoder_attr_name(model)
+
+            if shared_encoder is None:
+                shared_encoder = getattr(model, encoder_attr_name)
+            else:
+                # Replace base model in the head
+                setattr(model, encoder_attr_name, shared_encoder)
+
+            task_models_dict[task_name] = model
+
+        return shared_encoder, task_models_dict
+
+    @classmethod
     def create(cls, model_name, tasks, tasks_kwargs):
         """
         This creates a MultitaskModel using the model class and config objects
@@ -185,45 +282,14 @@ class MultitaskModel(transformers.PreTrainedModel):
         We do this by creating each single-task model, and having them share
         the same encoder transformer.
         """
-        shared_encoder = None
-        task_models_dict = {}
-
-        model_type_dict, model_config_dict = cls.get_task_heads(tasks, tasks_kwargs, model_name)
         config = transformers.AutoConfig.from_pretrained(model_name)
-
-        for task_name, model_type in model_type_dict.items():
-            model = model_type.from_pretrained(
-                model_name,
-                config=model_config_dict[task_name],
-            )
-
-            encoder_attr_name = cls.get_encoder_attr_name(model)
-
-            if not cls.base_model_prefix:
-                cls.base_model_prefix = encoder_attr_name
-            elif cls.base_model_prefix != encoder_attr_name:
-                # This shouldn't happen (at least by design, but different heads might have
-                #  different names for the base model attr... So it's possible :/)
-                raise Exception("Different base model prefix")
-
-            if shared_encoder is None:
-                shared_encoder = getattr(model, encoder_attr_name)
-            else:
-                setattr(model, encoder_attr_name, shared_encoder)
-
-            task_models_dict[task_name] = model
-
         c = config.to_dict()
         c["puc_tasks"] = tasks
         c["puc_tasks_kwargs"] = tasks_kwargs
+
         config.update(c)
 
-        instance = cls(config, created_from_create=True)
-        instance.encoder = shared_encoder
-        instance.task_models_dict = task_models_dict
-        instance.task_models_dict_modules = nn.ModuleDict(task_models_dict)
-        instance.tasks_names = tasks
-        instance.tasks_kwargs = tasks_kwargs
+        instance = cls(config)
 
         return instance
 
@@ -233,6 +299,11 @@ class MultitaskModel(transformers.PreTrainedModel):
         The encoder transformer is named differently in each model "architecture".
         This method lets us get the name of the encoder attribute
         """
+        # General case
+        if model.base_model_prefix:
+            return model.base_model_prefix
+
+        # Specific case
         model_class_name = model.__class__.__name__
 
         if model_class_name.startswith("Bert"):
@@ -256,18 +327,16 @@ def load_model(tasks, tasks_kwargs, model_input="", pretrained_model="", device=
         raise Exception("Different tasks provided to 'tasks' and 'tasks_kwargs': "
                         f"{set(tasks)} vs {set(tasks_kwargs)}")
 
+    multitask_model = MultitaskModel.create(pretrained_model, tasks, tasks_kwargs)
+
     if model_input:
         logger.info("Loading model: '%s'", model_input)
 
-    multitask_model = MultitaskModel.create(
-        model_input if model_input else pretrained_model,
-        tasks,
-        tasks_kwargs,
-    )
-
-    # Move model to device
-    if device:
-        multitask_model = multitask_model.to(device)
+        multitask_model.from_pretrained_wrapper(model_input, device=device)
+    else:
+        # Move model to device
+        if device:
+            multitask_model = multitask_model.to(device)
 
     return multitask_model
 
@@ -410,20 +479,6 @@ def main(args):
 
     logger.debug("Pretrained model architecture: %s", pretrained_model)
 
-    if model_input and not utils.exists(model_input, f=os.path.isdir):
-        raise Exception(f"Provided input model does not exist: '{model_input}'")
-    if model_output:
-        logger.info("Model will be stored: '%s'", model_output)
-
-        if utils.exists(model_output, f=os.path.isdir):
-            if args.overwrite_output_model:
-                logger.warning("Provided output model does exist (file: '%s'): it will be updated: waiting %d seconds before proceed",
-                                model_output, waiting_time)
-
-                time.sleep(waiting_time)
-            else:
-                raise Exception(f"Provided output model does exist: '{model_output}'")
-
     if (do_not_load_best_model or not model_output) and not apply_inference:
         logger.warning("Final dev and test evaluation will not be carried out with the best model")
 
@@ -452,7 +507,6 @@ def main(args):
         logger.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
-    model_source = model_input if model_input else pretrained_model
     all_tasks_kwargs = {}
     all_tasks_kwargs["urls_classification"] = {"num_labels": num_labels}
     total_auxiliary_tasks = 0
@@ -473,6 +527,26 @@ def main(args):
                         f"{' '.join(auxiliary_tasks)} ({len(auxiliary_tasks)})")
 
     model = load_model(all_tasks, all_tasks_kwargs, model_input=model_input, pretrained_model=pretrained_model, device=device)
+
+    if model_output:
+        logger.info("Model will be stored: '%s'", model_output)
+
+        all_output_paths = [model.__class__.get_base_model_path(model_output)] + [model.__class__.get_task_model_path(model_output, t) for t in model.get_tasks_names()]
+        _wait = False
+
+        for output_path in all_output_paths:
+            if utils.exists(output_path, f=os.path.isdir):
+                if args.overwrite_output_model:
+                    logger.warning("Provided output model does exist (file: '%s'): it will be updated: waiting %d seconds before proceed",
+                                    output_path, waiting_time)
+
+                    _wait = True
+                else:
+                    raise Exception(f"Provided output model does exist: '{output_path}'")
+
+        if _wait:
+            time.sleep(waiting_time)
+
     tokenizer = load_tokenizer(pretrained_model)
     fine_tuning = not args.do_not_fine_tune
     model_embeddings_size = model.get_base_model().base_model.embeddings.word_embeddings.weight.shape[0]
@@ -900,7 +974,7 @@ def main(args):
 
             # Store model
             if model_output:
-                model.save_pretrained(model_output)
+                model.save_pretrained_wrapper(model_output)
 
             current_patience = 0
         else:
@@ -958,11 +1032,9 @@ def main(args):
     else:
         # Evaluate dev and test with best model
 
-        logger.info("Loading best model: '%s' (best dev: %s)", model_output, str(best_dev))
+        logger.info("Loading best model (dev score): %s", str(best_dev))
 
-        # TODO fix...... weights are not being loaded properly for some reason.... https://discuss.huggingface.co/t/how-to-load-a-custom-multitask-model-from-checkpoint/10649
-        #model = model.from_pretrained(model_output).to(device)
-        model = load_model(all_tasks, all_tasks_kwargs, model_input=model_output, pretrained_model=pretrained_model, device=device)
+        model.from_pretrained_wrapper(model_output, device=device)
 
     dev_inference_metrics = inference(model, all_tasks, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
                                       amp_context_manager, logger, classes=classes)
