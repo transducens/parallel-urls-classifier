@@ -185,7 +185,7 @@ def main(args):
     non_parallel_urls_test = []
 
     batch_size = args.batch_size
-    block_size = args.block_size # TODO finish
+    block_size = args.block_size
     epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
@@ -247,8 +247,8 @@ def main(args):
     auxiliary_tasks = sorted(list(set(utils.get_tuple_if_is_not_tuple(auxiliary_tasks))))
     all_tasks = ["urls_classification"] + auxiliary_tasks
 
-    if batch_size > block_size:
-        logger.warning("Block size has to be greater or equal to batch size: updating block size to batch size: %d", batch_size)
+    if batch_size < block_size:
+        logger.warning("Block size has to be less than or equal to batch size: updating block size to batch size: %d", batch_size)
 
         block_size = batch_size
 
@@ -654,54 +654,79 @@ def main(args):
         model.train()
 
         for idx, batch in enumerate(dataloader_train):
-            inputs_and_outputs = utils.get_data_from_batch(batch, tokenizer, device, max_length_tokens)
-            labels = inputs_and_outputs["labels"]
-            current_batch_size = labels.reshape(-1).shape[0]
+            batch_outputs = []
+            batch_labels = []
+            loss = None
+            tasks_loss_value = {t: 0.0 for t in all_tasks}
+            total_blocks_executed = 0
 
             #optimizer.zero_grad() # https://discuss.pytorch.org/t/model-zero-grad-or-optimizer-zero-grad/28426/6
             model.zero_grad()
 
-            # Inference
-            results = inference_with_heads(model, all_tasks, tokenizer, criteria, inputs_and_outputs, regression,
-                                           amp_context_manager, tasks_weights=auxiliary_tasks_weights)
+            # Process in block_size blocks in order to avoid OOM errors, but use batch_size for update the model
+            for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens):
+                labels = inputs_and_outputs["labels"]
 
-            # Main task
-            outputs = results["urls_classification"]["outputs"]
-            outputs_argmax = results["urls_classification"]["outputs_argmax"]
+                # Inference
+                results = inference_with_heads(model, all_tasks, tokenizer, criteria, inputs_and_outputs, regression,
+                                               amp_context_manager, tasks_weights=auxiliary_tasks_weights)
 
-            # Results
-            loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
-            loss_value = loss.cpu().detach().numpy()
-            labels = labels.cpu()
+                # Main task
+                outputs_argmax = results["urls_classification"]["outputs_argmax"]
 
-            if regression:
-                labels = torch.round(labels).type(torch.LongTensor)
+                # Results
+                if loss is None:
+                    loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
+                else:
+                    loss += results["_internal"]["total_loss"]
 
-            all_outputs.extend(outputs_argmax.tolist())
-            all_labels.extend(labels.tolist())
+                labels = labels.cpu()
+
+                if regression:
+                    labels = torch.round(labels).type(torch.LongTensor)
+
+                batch_outputs.extend(outputs_argmax.tolist())
+                batch_labels.extend(labels.tolist())
+
+                if len(all_tasks) > 1:
+                    for t in results.keys():
+                        if t.startswith("_"):
+                            # It is not a task, but some internal value
+                            continue
+
+                        # Losses per task of a whole batch (cumulate loss of blocks per task)
+                        tasks_loss_value[t] += results[t]["loss_detach"].numpy()
+
+                total_blocks_executed += 1
+
+            loss /= total_blocks_executed # TODO is this correct?
+            loss_value = loss.cpu().detach().numpy() # Cumulate loss of all tasks
+            batch_labels_tensor = torch.tensor(batch_labels)
+            current_batch_size = batch_labels_tensor.reshape(-1).shape[0]
+
+            all_outputs.extend(batch_outputs)
+            all_labels.extend(batch_labels)
 
             # Get metrics
             log = (idx + 1) % show_statistics_every_batches == 0
-            metrics = get_metrics(outputs_argmax, labels, current_batch_size, logger, classes=classes, idx=idx, log=log)
+            #metrics = get_metrics(outputs_argmax, labels, current_batch_size, logger, classes=classes, idx=idx, log=log)
+            metrics = get_metrics(torch.tensor(batch_outputs), batch_labels_tensor, current_batch_size, logger,
+                                  classes=classes, idx=idx, log=log)
 
             if log:
                 logger.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
 
                 if len(all_tasks) > 1:
-                    if "urls_classification" in results:
-                        logger.debug("[train:batch#%d] Loss URLs classification (main task): %f", idx + 1, results["urls_classification"]["loss_detach"].numpy())
-                    else:
-                        raise Exception("Why main task is not being executed?")
+                    for t, v in tasks_loss_value.items():
+                        # Log loss of all tasks
+                        logger.debug("[train:batch#%d] Loss task '%s': %f", idx + 1, t, v)
 
-                    if "mlm" in results:
-                        logger.debug("[train:batch#%d] Loss MLM: %f", idx + 1, results["mlm"]["loss_detach"].numpy())
-
+            show_statistics = (epoch == 0 and idx == 0) or (idx + 1) % show_statistics_every_batches == 0
             epoch_loss += loss_value
             epoch_acc += metrics["acc"]
             epoch_acc_per_class += metrics["acc_per_class"]
             epoch_acc_per_class_abs += metrics["f1"]
             epoch_macro_f1 += metrics["macro_f1"]
-            show_statistics = (epoch == 0 and idx == 0) or (idx + 1) % show_statistics_every_batches == 0
 
             if plot and show_statistics:
                 utils.append_from_tuple((batch_loss, epoch_loss / (idx + 1)),
@@ -712,12 +737,12 @@ def main(args):
 
                 if epoch != 0 or idx != 0:
                     plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
-                                 "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
-                                 "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
-                                 "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
-                                 "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
-                                 "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
-                                 "final_test_acc": None, "final_test_macro_f1": None,}
+                                "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
+                                "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
+                                "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
+                                "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
+                                "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
+                                "final_test_acc": None, "final_test_macro_f1": None,}
 
                     plot_statistics(plot_args, path=args.plot_path)
 
@@ -766,8 +791,9 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, all_tasks, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
-                                          amp_context_manager, logger, classes=classes)
+        dev_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_dev,
+                                          max_length_tokens, device, regression, amp_context_manager, logger,
+                                          classes=classes)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -865,8 +891,9 @@ def main(args):
 
         model.from_pretrained_wrapper(model_output, device=device)
 
-    dev_inference_metrics = inference(model, all_tasks, tokenizer, criteria, dataloader_dev, max_length_tokens, device, regression,
-                                      amp_context_manager, logger, classes=classes)
+    dev_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_dev,
+                                      max_length_tokens, device, regression, amp_context_manager, logger,
+                                      classes=classes)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -885,8 +912,9 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, all_tasks, tokenizer, criteria, dataloader_test, max_length_tokens, device, regression,
-                                       amp_context_manager, logger, classes=classes)
+    test_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_test,
+                                       max_length_tokens, device, regression, amp_context_manager, logger,
+                                       classes=classes)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
@@ -938,8 +966,8 @@ def initialization():
         parser.add_argument('non_parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
         parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
 
-    parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be provided to the model at once")
-    parser.add_argument('--block-size', type=int, default=16, help="Block size. Elements which will be processed before proceed to train, but the whole block will be processed in batches in order to avoid OOM errors")
+    parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be processed before proceed to train, but the whole batch will be processed in blocks in order to avoid OOM errors")
+    parser.add_argument('--block-size', type=int, default=16, help="Block size. Elements which will be provided to the model at once")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
     parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
     parser.add_argument('--dataset-workers', type=int, default=8, help="No. workers when loading the data in the dataset")

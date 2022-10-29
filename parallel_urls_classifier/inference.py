@@ -85,7 +85,8 @@ def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, 
     return results
 
 @torch.no_grad()
-def inference(model, tasks, tokenizer, criteria, dataloader, max_length_tokens, device, regression, amp_context_manager, logger, classes=2):
+def inference(model, block_size, tasks, tokenizer, criteria, dataloader, max_length_tokens, device, regression,
+              amp_context_manager, logger, classes=2):
     model.eval()
 
     total_loss = 0.0
@@ -99,38 +100,42 @@ def inference(model, tasks, tokenizer, criteria, dataloader, max_length_tokens, 
     all_labels = []
 
     for idx, batch in enumerate(dataloader):
-        inputs_and_outputs = utils.get_data_from_batch(batch, tokenizer, device, max_length_tokens)
-        labels = inputs_and_outputs["labels"]
+        total_blocks_executed = 0
 
-        # Inference
-        results = inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
+        for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens):
+            labels = inputs_and_outputs["labels"]
 
-        # Tasks
-        loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?
-        outputs = results["urls_classification"]["outputs"]
-        outputs_argmax = results["urls_classification"]["outputs_argmax"]
+            # Inference
+            results = inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
 
-        if "mlm" in results:
-            # TODO propagate somehow? Statistics?
-            loss_mlm = results["mlm"]["loss_detach"]
-            outputs_mlm = results["mlm"]["outputs"]
+            # Tasks
+            loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?
+            outputs_argmax = results["urls_classification"]["outputs_argmax"]
 
-        loss = results["_internal"]["total_loss"].cpu()
-        loss = loss.cpu()
-        labels = labels.cpu()
+            if "mlm" in results:
+                # TODO propagate somehow? Statistics?
+                loss_mlm = results["mlm"]["loss_detach"]
+                outputs_mlm = results["mlm"]["outputs"]
 
-        if regression:
-            labels = torch.round(labels).type(torch.LongTensor)
+            loss = results["_internal"]["total_loss"].cpu()
+            loss = loss.cpu()
+            labels = labels.cpu()
 
-        total_loss += loss
+            if regression:
+                labels = torch.round(labels).type(torch.LongTensor)
 
-        all_outputs.extend(outputs_argmax.tolist())
-        all_labels.extend(labels.tolist())
+            total_loss += loss
+
+            all_outputs.extend(outputs_argmax.tolist())
+            all_labels.extend(labels.tolist())
+
+            total_blocks_executed += 1
 
     all_outputs = torch.tensor(all_outputs)
     all_labels = torch.tensor(all_labels)
     metrics = get_metrics(all_outputs, all_labels, len(all_labels), logger, classes=classes)
 
+    total_loss /= total_blocks_executed # TODO is this correct?
     total_loss /= idx + 1
     total_acc += metrics["acc"]
     total_acc_per_class += metrics["acc_per_class"]

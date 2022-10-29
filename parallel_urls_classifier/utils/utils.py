@@ -381,36 +381,41 @@ def get_idx_resource(url, url_has_protocol=True):
 
     return idx + 1
 
-def get_data_from_batch(batch, tokenizer, device, max_length_tokens):
+def get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens):
     batch_urls_str = batch["url_str"]
     batch_src_urls_str = [url.split(tokenizer.sep_token)[0] for url in batch_urls_str]
     batch_trg_urls_str = [url.split(tokenizer.sep_token)[1] for url in batch_urls_str]
     # URLs merged
     tokens_urls = encode(tokenizer, batch_urls_str, max_length_tokens)
-    urls = tokens_urls["input_ids"].to(device)
-    attention_mask = tokens_urls["attention_mask"].to(device)
-    # Src and trg URLs splitted
-    #src_tokens_urls = encode(tokenizer, batch_src_urls_str, max_length_tokens)
-    #src_urls = src_tokens_urls["input_ids"].to(device)
-    #src_attention_mask = src_tokens_urls["attention_mask"].to(device)
-    #trg_tokens_urls = encode(tokenizer, batch_trg_urls_str, max_length_tokens)
-    #trg_urls = trg_tokens_urls["input_ids"].to(device)
-    #trg_attention_mask = trg_tokens_urls["attention_mask"].to(device)
+    urls = tokens_urls["input_ids"]
+    attention_mask = tokens_urls["attention_mask"]
     # Labels
-    labels = batch["label"].to(device)
+    labels = batch["label"]
 
-    # Create dictionary with inputs and outputs
-    inputs_and_outputs = {
-        "labels": labels,
-        "urls": urls,
-        "attention_mask": attention_mask,
-        #"src_urls": src_urls,
-        #"src_attention_mask": src_attention_mask,
-        #"trg_urls": trg_urls,
-        #"trg_attention_mask": trg_attention_mask,
-    }
+    # Split in batch_size batches
+    start = 0
+    end = block_size
+    current_batch_size = labels.reshape(-1).shape[0]
 
-    return inputs_and_outputs
+    while end <= current_batch_size:
+        if start < end:
+            _urls = urls[start:end].to(device)
+            _attention_mask = attention_mask[start:end].to(device)
+            _labels = labels[start:end].to(device)
+
+            # Create dictionary with inputs and outputs
+            inputs_and_outputs = {
+                "labels": _labels,
+                "urls": _urls,
+                "attention_mask": _attention_mask,
+            }
+
+            yield inputs_and_outputs
+
+            start = end
+            end = min(start + block_size, current_batch_size)
+        else:
+            break
 
 def get_pytorch_version():
     import torch
