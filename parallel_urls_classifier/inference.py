@@ -18,7 +18,8 @@ import transformers
 #  and it works with the set configuration from the main file
 logger = logging.getLogger("parallel_urls_classifier")
 
-def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager):
+def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager,
+                         tasks_weights=None):
     results = {"_internal": {"total_loss": None}}
 
     # Inputs and outputs
@@ -43,6 +44,7 @@ def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, 
             model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
             outputs = model_outputs.logits # Get head result
             criterion = criteria[head_task]
+            loss_weight = tasks_weights[head_task] if tasks_weights else 1.0
 
             if head_task == "urls_classification":
                 # Main task
@@ -56,17 +58,25 @@ def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, 
                     outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
 
                 loss = criterion(outputs, labels[head_task])
+                loss *= loss_weight
 
-                results["urls_classification"] = {"outputs": outputs, "outputs_argmax": outputs_argmax, "loss_detach": loss.cpu().detach()}
+                results["urls_classification"] = {
+                    "outputs": outputs,
+                    "outputs_argmax": outputs_argmax,
+                    "loss_detach": loss.cpu().detach()
+                }
             elif head_task == "mlm":
                 loss = criterion(outputs.view(-1, tokenizer.vocab_size), labels[head_task].view(-1))
+                loss *= loss_weight
 
-                results["mlm"] = {"outputs": outputs, "loss_detach": loss.cpu().detach()}
+                results["mlm"] = {
+                    "outputs": outputs,
+                    "loss_detach": loss.cpu().detach()
+                }
             else:
                 raise Exception(f"Unknown head task: {head_task}")
 
             # Sum loss (we don't want to define multiple losses at the same time in order to avoid high memory allocation)
-            # TODO use weight for loss per task?
             if not results["_internal"]["total_loss"]:
                 results["_internal"]["total_loss"] = loss
             else:

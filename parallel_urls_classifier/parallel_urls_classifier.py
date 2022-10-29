@@ -20,6 +20,7 @@ from parallel_urls_classifier.metrics import (
     plot_statistics,
 )
 import parallel_urls_classifier.preprocess as preprocess
+from parallel_urls_classifier.multitask_model import MultitaskModel
 
 import numpy as np
 import torch
@@ -121,205 +122,6 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
 
     return scheduler_instance
 
-# Adapted from https://colab.research.google.com/github/zphang/zphang.github.io/blob/master/files/notebooks/Multi_task_Training_with_Transformers_NLP.ipynb#scrollTo=aVX5hFlzmLka
-class MultitaskModel(transformers.PreTrainedModel):
-    config_class = None
-    #is_parallelizable = True # TODO ?
-    base_model_prefix = "encoder"
-    main_input_name = "input_ids"
-
-    def __init__(self, config):
-        """
-        Setting MultitaskModel up as a PretrainedModel allows us
-        to take better advantage of Trainer features
-        """
-        cls = self.__class__
-        cls.config_class = config.__class__
-
-        super().__init__(config)
-
-        self.config = config
-
-        # Load values from the configuration
-        c = config.to_dict()
-        pretrained_model = c["_name_or_path"]
-        self.tasks_names = c["puc_tasks"]
-        self.tasks_kwargs = c["puc_tasks_kwargs"]
-
-        # Load base model and tasks
-        heads, heads_config = cls.get_task_heads(self.tasks_names, self.tasks_kwargs, pretrained_model)
-        shared_encoder, task_models_dict = cls.get_base_and_heads(heads, heads_config, config, pretrained_model)
-        self.encoder = shared_encoder
-
-        self.update_task_models(task_models_dict)
-
-    def update_task_models(self, task_models_dict):
-        self.task_models_dict = task_models_dict
-        self.task_models_dict_modules = nn.ModuleDict(task_models_dict)
-
-    @classmethod
-    def get_base_model_path(cls, d):
-        return f"{d}.base_model"
-
-    @classmethod
-    def get_task_model_path(cls, d, task):
-        return f"{d}.heads.{task}"
-
-    def from_pretrained_wrapper(self, model_input, device=None):
-        cls = self.__class__
-        base_model_path = cls.get_base_model_path(model_input)
-
-        if not utils.exists(base_model_path, f=os.path.isdir):
-            raise Exception(f"Provided input model does not exist (base model): '{base_model_path}'")
-
-        # TODO Why (?): "You are using a model of type xlm-roberta to instantiate a model of type roberta. This is not supported for all configurations of models and can yield errors."
-        self.encoder = self.encoder.from_pretrained(base_model_path).to(device)
-
-        for task, task_head in self.task_models_dict.items():
-            task_path = cls.get_task_model_path(model_input, task)
-
-            if not utils.exists(task_path, f=os.path.isdir):
-                raise Exception(f"Provided input model does not exist (task: {task}): '{task_path}'")
-
-            self.task_models_dict[task] = self.task_models_dict[task].from_pretrained(task_path)
-            encoder_attr_name = cls.get_encoder_attr_name(self.task_models_dict[task])
-
-            """
-            # Replace base model in the head
-            encoder = getattr(self.task_models_dict[task], encoder_attr_name)
-
-            if encoder is not None:
-                logger.warning("The encoder is not None: is the model being stored unnecessary multiple times?")
-            """
-
-            setattr(self.task_models_dict[task], encoder_attr_name, self.encoder)
-
-            self.task_models_dict[task].to(device)
-
-        self.update_task_models(self.task_models_dict)
-
-        logger.info("Model(s) loaded: %s.{base_model,heads.{%s}}", model_input, ','.join(self.get_tasks_names()))
-
-    def save_pretrained_wrapper(self, model_output):
-        cls = self.__class__
-        base_model_path = cls.get_base_model_path(model_output)
-        self.encoder.save_pretrained(base_model_path)
-
-        for task, task_head in self.task_models_dict.items():
-            task_path = cls.get_task_model_path(model_output, task)
-            """
-            encoder_attr_name = cls.get_encoder_attr_name(self.task_models_dict[task])
-            encoder = getattr(self.task_models_dict[task], encoder_attr_name)
-
-            # Remove encoder (we don't want to store the base model as many times as tasks we have)
-            setattr(self.task_models_dict[task], encoder_attr_name, None)
-            """
-
-            self.task_models_dict[task].save_pretrained(task_path)
-
-            """
-            # Restore encoder
-            setattr(self.task_models_dict[task], encoder_attr_name, encoder)
-            """
-
-        logger.info("Model(s) saved: %s.{base_model,heads.{%s}}", model_output, ','.join(self.get_tasks_names()))
-
-    @classmethod
-    def get_task_heads(cls, tasks, tasks_kwargs, model_source):
-        heads = {}
-        heads_config = {}
-
-        for task in tasks:
-            if task == "urls_classification":
-                heads["urls_classification"] = transformers.AutoModelForSequenceClassification
-                task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
-                heads_config["urls_classification"] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
-            elif task == "mlm":
-                heads["mlm"] = transformers.AutoModelForMaskedLM
-                task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
-                heads_config["mlm"] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
-
-        return heads, heads_config
-
-    def get_base_model(self):
-        return self.encoder
-
-    def get_head(self, task):
-        return self.task_models_dict_modules[task]
-
-    def get_tasks_names(self):
-        return self.tasks_names
-
-    @classmethod
-    def get_base_and_heads(cls, heads, heads_config, config, model_name):
-        shared_encoder = None
-        task_models_dict = {}
-
-        for task_name, model_type in heads.items():
-            model = model_type.from_pretrained(
-                model_name,
-                config=heads_config[task_name],
-            )
-
-            encoder_attr_name = cls.get_encoder_attr_name(model)
-
-            if shared_encoder is None:
-                shared_encoder = getattr(model, encoder_attr_name)
-            else:
-                # Replace base model in the head
-                setattr(model, encoder_attr_name, shared_encoder)
-
-            task_models_dict[task_name] = model
-
-        return shared_encoder, task_models_dict
-
-    @classmethod
-    def create(cls, model_name, tasks, tasks_kwargs):
-        """
-        This creates a MultitaskModel using the model class and config objects
-        from single-task models.
-
-        We do this by creating each single-task model, and having them share
-        the same encoder transformer.
-        """
-        config = transformers.AutoConfig.from_pretrained(model_name)
-        c = config.to_dict()
-        c["puc_tasks"] = tasks
-        c["puc_tasks_kwargs"] = tasks_kwargs
-
-        config.update(c)
-
-        instance = cls(config)
-
-        return instance
-
-    @classmethod
-    def get_encoder_attr_name(cls, model):
-        """
-        The encoder transformer is named differently in each model "architecture".
-        This method lets us get the name of the encoder attribute
-        """
-        # General case
-        if model.base_model_prefix:
-            return model.base_model_prefix
-
-        # Specific case
-        model_class_name = model.__class__.__name__
-
-        if model_class_name.startswith("Bert"):
-            return "bert"
-        elif model_class_name.startswith("Roberta"):
-            return "roberta"
-        elif model_class_name.startswith("Albert"):
-            return "albert"
-        elif model_class_name.startswith("XLMRoberta"):
-            return "roberta"
-        else:
-            raise KeyError(f"Add support for new model {model_class_name}")
-
-    def forward(self, task_name, *args, **kwargs):
-        return self.task_models_dict_modules[task_name](*args, **kwargs)
-
 def load_model(tasks, tasks_kwargs, model_input="", pretrained_model="", device=""):
     if len(tasks) == 0:
         raise Exception("At least 1 head is mandatory")
@@ -383,6 +185,7 @@ def main(args):
     non_parallel_urls_test = []
 
     batch_size = args.batch_size
+    block_size = args.block_size # TODO finish
     epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
@@ -420,9 +223,34 @@ def main(args):
     lock_file = args.lock_file
     stringify_instead_of_tokenization = args.stringify_instead_of_tokenization
     lower = not args.do_not_lower
-    auxiliary_tasks = sorted(list(set(utils.get_tuple_if_is_not_tuple(args.auxiliary_tasks)))) if args.auxiliary_tasks else []
-    all_tasks = ["urls_classification"] + auxiliary_tasks
+    auxiliary_tasks = args.auxiliary_tasks if args.auxiliary_tasks else []
+    auxiliary_tasks_weights = args.auxiliary_tasks_weights
     freeze_embeddings_layer = args.freeze_embeddings_layer
+
+    if auxiliary_tasks:
+        _auxiliary_tasks_weights = {}
+
+        if not auxiliary_tasks_weights:
+            for task in auxiliary_tasks:
+                _auxiliary_tasks_weights[task] = 1.0
+        elif len(auxiliary_tasks) != len(auxiliary_tasks_weights):
+            raise Exception("You need to provide weights either for all the auxiliary tasks or for none of them")
+        else:
+            for task, weight in zip(auxiliary_tasks, auxiliary_tasks_weights):
+                _auxiliary_tasks_weights[task] = weight
+
+        auxiliary_tasks_weights = _auxiliary_tasks_weights
+        auxiliary_tasks_weights["urls_classification"] = 1.0
+
+        logger.debug("Auxiliary tasks weights: %s", str(auxiliary_tasks_weights))
+
+    auxiliary_tasks = sorted(list(set(utils.get_tuple_if_is_not_tuple(auxiliary_tasks))))
+    all_tasks = ["urls_classification"] + auxiliary_tasks
+
+    if batch_size > block_size:
+        logger.warning("Block size has to be greater or equal to batch size: updating block size to batch size: %d", batch_size)
+
+        block_size = batch_size
 
     if lock_file and utils.exists(lock_file):
         logger.warning("Lock file ('%s') exists: finishing training", lock_file)
@@ -531,7 +359,7 @@ def main(args):
     if model_output:
         logger.info("Model will be stored: '%s'", model_output)
 
-        all_output_paths = [model.__class__.get_base_model_path(model_output)] + [model.__class__.get_task_model_path(model_output, t) for t in model.get_tasks_names()]
+        all_output_paths = [model.__class__.get_task_model_path(model_output, t) for t in model.get_tasks_names()]
         _wait = False
 
         for output_path in all_output_paths:
@@ -834,7 +662,8 @@ def main(args):
             model.zero_grad()
 
             # Inference
-            results = inference_with_heads(model, all_tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
+            results = inference_with_heads(model, all_tasks, tokenizer, criteria, inputs_and_outputs, regression,
+                                           amp_context_manager, tasks_weights=auxiliary_tasks_weights)
 
             # Main task
             outputs = results["urls_classification"]["outputs"]
@@ -1109,7 +938,8 @@ def initialization():
         parser.add_argument('non_parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
         parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
 
-    parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
+    parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be provided to the model at once")
+    parser.add_argument('--block-size', type=int, default=16, help="Block size. Elements which will be processed before proceed to train, but the whole block will be processed in batches in order to avoid OOM errors")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
     parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
     parser.add_argument('--dataset-workers', type=int, default=8, help="No. workers when loading the data in the dataset")
@@ -1150,6 +980,7 @@ def initialization():
     parser.add_argument('--stringify-instead-of-tokenization', action="store_true", help="Preprocess URLs applying custom stringify instead of tokenization")
     parser.add_argument('--do-not-lower', action="store_true", help="Do not lower URLs while preprocessing")
     parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm"], help="Tasks which will try to help to the main task (multitasking)")
+    parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
