@@ -157,7 +157,7 @@ def get_amp_context_manager(cuda_amp, force_cpu):
 
         logger.debug("AMP enabled for CUDA")
     elif cuda_amp:
-        logger.warning("AMP could not been enabled")
+        logger.warning("AMP could not be enabled")
 
     return amp_context_manager
 
@@ -568,17 +568,12 @@ def main(args):
 
         criteria[head_task] = criterion
 
-    # TODO enable again the support (we should test if it works with the new multi tasking environment)
     if llrd:
-        raise Exception("Support disabled by the moment")
+        #model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.0) # Adam
+        model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01) # AdamW
+    else:
+        model_parameters = filter(lambda p: p.requires_grad, model.parameters())
 
-    #if llrd:
-    #    #model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.0) # Adam
-    #    model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01) # AdamW
-    #else:
-    #    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-
-    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     #optimizer = Adam(model_parameters, lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
     optimizer = AdamW(model_parameters, lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
 

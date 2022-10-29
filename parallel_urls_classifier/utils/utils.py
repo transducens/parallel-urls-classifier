@@ -283,7 +283,12 @@ def get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01):
 
     # Based on https://gist.github.com/peggy1502/5775b0b246ef5a64a9cf7b58cd722baf#file-readability_llrd-py from https://towardsdatascience.com/advanced-techniques-for-fine-tuning-transformers-82e4e61e16e#6196
     opt_parameters = []    # To be passed to the optimizer (only parameters of the layers you want to update).
-    named_parameters = list(model.named_parameters())
+    # Obtain parameters of heads and base model separately in order to don't update the base model multiple times
+    named_parameters_base_model = list(model.get_base_model().named_parameters())
+    named_parameters_heads = []
+
+    for task in model.get_tasks_names():
+        named_parameters_heads += list(model.get_head(task).named_parameters())
 
     # According to AAAMLP book by A. Thakur, we generally do not use any decay
     # for bias and LayerNorm.weight layers.
@@ -292,9 +297,9 @@ def get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01):
 
     # === Pooler and regressor ======================================================
 
-    params_0 = [p for n,p in named_parameters if ("pooler" in n or "regressor" in n or "classifier" in n)
+    params_0 = [p for n,p in named_parameters_heads if ("pooler" in n or "regressor" in n or "classifier" in n)
                 and any(nd in n for nd in no_decay)]
-    params_1 = [p for n,p in named_parameters if ("pooler" in n or "regressor" in n or "classifier" in n)
+    params_1 = [p for n,p in named_parameters_heads if ("pooler" in n or "regressor" in n or "classifier" in n)
                 and not any(nd in n for nd in no_decay)]
 
     head_params = {"params": params_0, "lr": lr, "weight_decay": 0.0}
@@ -308,9 +313,9 @@ def get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01):
     # === 12 Hidden layers ==========================================================
 
     for layer in range(11,-1,-1):
-        params_0 = [p for n,p in named_parameters if f"encoder.layer.{layer}." in n
+        params_0 = [p for n,p in named_parameters_base_model if f"encoder.layer.{layer}." in n
                     and any(nd in n for nd in no_decay)]
-        params_1 = [p for n,p in named_parameters if f"encoder.layer.{layer}." in n
+        params_1 = [p for n,p in named_parameters_base_model if f"encoder.layer.{layer}." in n
                     and not any(nd in n for nd in no_decay)]
 
         layer_params = {"params": params_0, "lr": lr, "weight_decay": 0.0}
@@ -323,9 +328,9 @@ def get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01):
 
     # === Embeddings layer ==========================================================
 
-    params_0 = [p for n,p in named_parameters if "embeddings" in n
+    params_0 = [p for n,p in named_parameters_base_model if "embeddings" in n
                 and any(nd in n for nd in no_decay)]
-    params_1 = [p for n,p in named_parameters if "embeddings" in n
+    params_1 = [p for n,p in named_parameters_base_model if "embeddings" in n
                 and not any(nd in n for nd in no_decay)]
 
     embed_params = {"params": params_0, "lr": lr, "weight_decay": 0.0}
