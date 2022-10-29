@@ -247,6 +247,8 @@ def main(args):
     auxiliary_tasks = sorted(list(set(utils.get_tuple_if_is_not_tuple(auxiliary_tasks))))
     all_tasks = ["urls_classification"] + auxiliary_tasks
 
+    if not block_size:
+        block_size = batch_size
     if batch_size < block_size:
         logger.warning("Block size has to be less than or equal to batch size: updating block size to batch size: %d", batch_size)
 
@@ -357,9 +359,12 @@ def main(args):
     model = load_model(all_tasks, all_tasks_kwargs, model_input=model_input, pretrained_model=pretrained_model, device=device)
 
     if model_output:
-        logger.info("Model will be stored: '%s'", model_output)
+        model_tasks = model.get_tasks_names()
+        two_or_more_tasks = len(model_tasks) > 1
+        logger.info("Model will be stored: '%s.heads.%s%s%s'", model_output, '{' if two_or_more_tasks else '',
+                                                               ','.join(model_tasks), '}' if two_or_more_tasks else '')
 
-        all_output_paths = [model.__class__.get_task_model_path(model_output, t) for t in model.get_tasks_names()]
+        all_output_paths = [model.__class__.get_task_model_path(model_output, t) for t in model_tasks]
         _wait = False
 
         for output_path in all_output_paths:
@@ -481,7 +486,7 @@ def main(args):
 
     logger.debug("Classes weights: %s", str(classes_weights))
 
-    classes_weights = torch.tensor(classes_weights, dtype=torch.float)
+    classes_weights = torch.as_tensor(classes_weights, dtype=torch.float)
 
     # Datasets
     dataset_train = URLsDataset(parallel_urls_train, non_parallel_urls_train, regression=regression)
@@ -499,7 +504,7 @@ def main(args):
 
             target_list.append(l)
 
-        target_list = torch.tensor(target_list)
+        target_list = torch.as_tensor(target_list)
         classes_weights_all = classes_weights[target_list]
 
         # Over-sampling
@@ -629,6 +634,7 @@ def main(args):
     stop_training = False
     epoch = 0
     current_patience = 0
+    total_blocks_per_batch = max(int(np.ceil(batch_size / block_size)), 1)
 
     # Statistics
     batch_loss = []
@@ -656,9 +662,8 @@ def main(args):
         for idx, batch in enumerate(dataloader_train):
             batch_outputs = []
             batch_labels = []
-            loss = None
+            loss_value = None
             tasks_loss_value = {t: 0.0 for t in all_tasks}
-            total_blocks_executed = 0
 
             #optimizer.zero_grad() # https://discuss.pytorch.org/t/model-zero-grad-or-optimizer-zero-grad/28426/6
             model.zero_grad()
@@ -673,12 +678,14 @@ def main(args):
 
                 # Main task
                 outputs_argmax = results["urls_classification"]["outputs_argmax"]
+                loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
+                loss /= total_blocks_per_batch # Gradient accumulation
 
                 # Results
-                if loss is None:
-                    loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
+                if loss_value is None:
+                    loss_value = loss.cpu().detach().numpy() # Accumulated loss of all tasks
                 else:
-                    loss += results["_internal"]["total_loss"]
+                    loss_value += loss.cpu().detach().numpy()
 
                 labels = labels.cpu()
 
@@ -688,20 +695,22 @@ def main(args):
                 batch_outputs.extend(outputs_argmax.tolist())
                 batch_labels.extend(labels.tolist())
 
-                if len(all_tasks) > 1:
-                    for t in results.keys():
-                        if t.startswith("_"):
-                            # It is not a task, but some internal value
-                            continue
+                loss.backward()
 
-                        # Losses per task of a whole batch (cumulate loss of blocks per task)
-                        tasks_loss_value[t] += results[t]["loss_detach"].numpy()
+                for t in results.keys():
+                    if t.startswith("_"):
+                        # It is not a task, but some internal value
+                        continue
 
-                total_blocks_executed += 1
+                    # Losses per task of a whole batch (cumulate loss of blocks per task)
+                    tasks_loss_value[t] += results[t]["loss_detach"].numpy()
 
-            loss /= total_blocks_executed # TODO is this correct?
-            loss_value = loss.cpu().detach().numpy() # Cumulate loss of all tasks
-            batch_labels_tensor = torch.tensor(batch_labels)
+                    # Drop immediate buffers (https://gist.github.com/thomwolf/ac7a7da6b1888c2eeac8ac8b9b05d3d3)
+                    loss.detach_()
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            batch_labels_tensor = torch.as_tensor(batch_labels)
             current_batch_size = batch_labels_tensor.reshape(-1).shape[0]
 
             all_outputs.extend(batch_outputs)
@@ -709,8 +718,7 @@ def main(args):
 
             # Get metrics
             log = (idx + 1) % show_statistics_every_batches == 0
-            #metrics = get_metrics(outputs_argmax, labels, current_batch_size, logger, classes=classes, idx=idx, log=log)
-            metrics = get_metrics(torch.tensor(batch_outputs), batch_labels_tensor, current_batch_size, logger,
+            metrics = get_metrics(torch.as_tensor(batch_outputs), batch_labels_tensor, current_batch_size, logger,
                                   classes=classes, idx=idx, log=log)
 
             if log:
@@ -746,10 +754,6 @@ def main(args):
 
                     plot_statistics(plot_args, path=args.plot_path)
 
-            loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
             if show_statistics:
                 # LRs statistics
                 all_lrs = scheduler.get_last_lr()
@@ -769,8 +773,8 @@ def main(args):
 
         logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
 
-        all_outputs = torch.tensor(all_outputs)
-        all_labels = torch.tensor(all_labels)
+        all_outputs = torch.as_tensor(all_outputs)
+        all_labels = torch.as_tensor(all_labels)
         metrics = get_metrics(all_outputs, all_labels, len(all_labels), logger, classes=classes)
 
         epoch_loss /= idx + 1
@@ -967,7 +971,7 @@ def initialization():
         parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be processed before proceed to train, but the whole batch will be processed in blocks in order to avoid OOM errors")
-    parser.add_argument('--block-size', type=int, default=16, help="Block size. Elements which will be provided to the model at once")
+    parser.add_argument('--block-size', type=int, help="Block size. Elements which will be provided to the model at once")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
     parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
     parser.add_argument('--dataset-workers', type=int, default=8, help="No. workers when loading the data in the dataset")

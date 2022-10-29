@@ -63,7 +63,7 @@ def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, 
                 results["urls_classification"] = {
                     "outputs": outputs,
                     "outputs_argmax": outputs_argmax,
-                    "loss_detach": loss.cpu().detach()
+                    "loss_detach": loss.cpu().detach(),
                 }
             elif head_task == "mlm":
                 loss = criterion(outputs.view(-1, tokenizer.vocab_size), labels[head_task].view(-1))
@@ -71,7 +71,7 @@ def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, 
 
                 results["mlm"] = {
                     "outputs": outputs,
-                    "loss_detach": loss.cpu().detach()
+                    "loss_detach": loss.cpu().detach(),
                 }
             else:
                 raise Exception(f"Unknown head task: {head_task}")
@@ -100,8 +100,6 @@ def inference(model, block_size, tasks, tokenizer, criteria, dataloader, max_len
     all_labels = []
 
     for idx, batch in enumerate(dataloader):
-        total_blocks_executed = 0
-
         for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens):
             labels = inputs_and_outputs["labels"]
 
@@ -129,13 +127,10 @@ def inference(model, block_size, tasks, tokenizer, criteria, dataloader, max_len
             all_outputs.extend(outputs_argmax.tolist())
             all_labels.extend(labels.tolist())
 
-            total_blocks_executed += 1
-
-    all_outputs = torch.tensor(all_outputs)
-    all_labels = torch.tensor(all_labels)
+    all_outputs = torch.as_tensor(all_outputs)
+    all_labels = torch.as_tensor(all_labels)
     metrics = get_metrics(all_outputs, all_labels, len(all_labels), logger, classes=classes)
 
-    total_loss /= total_blocks_executed # TODO is this correct?
     total_loss /= idx + 1
     total_acc += metrics["acc"]
     total_acc_per_class += metrics["acc_per_class"]

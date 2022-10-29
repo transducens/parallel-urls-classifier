@@ -397,7 +397,7 @@ def get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens)
     end = block_size
     current_batch_size = labels.reshape(-1).shape[0]
 
-    while end <= current_batch_size:
+    while True:
         if start < end:
             _urls = urls[start:end].to(device)
             _attention_mask = attention_mask[start:end].to(device)
