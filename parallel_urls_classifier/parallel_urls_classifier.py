@@ -150,16 +150,21 @@ def load_tokenizer(pretrained_model):
 def get_amp_context_manager(cuda_amp, force_cpu):
     use_cuda = torch.cuda.is_available()
     amp_context_manager = contextlib.nullcontext()
+    amp_grad_scaler = None
+    _cuda_amp = cuda_amp
 
     # Configure AMP context manager
     if cuda_amp and not force_cpu and use_cuda:
         amp_context_manager = torch.cuda.amp.autocast()
+        amp_grad_scaler = torch.cuda.amp.GradScaler()
+        _cuda_amp = True
 
         logger.debug("AMP enabled for CUDA")
     elif cuda_amp:
+        _cuda_amp = False
         logger.warning("AMP could not be enabled")
 
-    return amp_context_manager
+    return amp_context_manager, amp_grad_scaler, _cuda_amp
 
 # TODO TBD use https://pypi.org/project/imbalanced-learn/ for unbalanced data instead of custom implementation
 
@@ -264,7 +269,7 @@ def main(args):
     waiting_time = 20
     num_labels = 1 if regression else 2
     classes = 2
-    amp_context_manager = get_amp_context_manager(cuda_amp, force_cpu)
+    amp_context_manager, amp_grad_scaler, cuda_amp = get_amp_context_manager(cuda_amp, force_cpu)
     pytorch_major, pytorch_minor, pytorch_patch = utils.get_pytorch_version()
 
     if scheduler_str in ("linear",) and train_until_patience:
@@ -690,7 +695,10 @@ def main(args):
                 batch_outputs.extend(outputs_argmax.tolist())
                 batch_labels.extend(labels.tolist())
 
-                loss.backward()
+                if cuda_amp:
+                    amp_grad_scaler.scale(loss).backward()
+                else:
+                    loss.backward()
 
                 for t in results.keys():
                     if t.startswith("_"):
@@ -702,6 +710,11 @@ def main(args):
 
                     # Drop immediate buffers (https://gist.github.com/thomwolf/ac7a7da6b1888c2eeac8ac8b9b05d3d3)
                     loss.detach_()
+
+            if cuda_amp:
+                # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-clipping
+
+                amp_grad_scaler.unscale_(optimizer)
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
@@ -760,7 +773,12 @@ def main(args):
                 else:
                     logger.debug("[batch#%d] LR scheduler: Current LR: %.8f", idx + 1, current_lr)
 
-            optimizer.step()
+            if cuda_amp:
+                amp_grad_scaler.step(optimizer)
+                amp_grad_scaler.update()
+            else:
+                optimizer.step()
+
             scheduler.step()
 
         current_last_layer_output = utils.get_layer_from_model(model.get_base_model().base_model.encoder.layer[-1], name="output.dense.weight")
