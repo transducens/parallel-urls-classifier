@@ -35,6 +35,8 @@ from torch.utils.data import (
     WeightedRandomSampler,
     SequentialSampler
 )
+import torch.distributed as dist
+import torch.multiprocessing as mp
 import transformers
 from transformers import (
     AutoModel,
@@ -147,14 +149,13 @@ def load_tokenizer(pretrained_model):
 
     return tokenizer
 
-def get_amp_context_manager(cuda_amp, force_cpu):
-    use_cuda = torch.cuda.is_available()
+def get_amp_context_manager(cuda_amp, use_cuda):
     amp_context_manager = contextlib.nullcontext()
     amp_grad_scaler = None
     _cuda_amp = cuda_amp
 
     # Configure AMP context manager
-    if cuda_amp and not force_cpu and use_cuda:
+    if cuda_amp and use_cuda:
         amp_context_manager = torch.cuda.amp.autocast()
         amp_grad_scaler = torch.cuda.amp.GradScaler()
         _cuda_amp = True
@@ -168,7 +169,7 @@ def get_amp_context_manager(cuda_amp, force_cpu):
 
 # TODO TBD use https://pypi.org/project/imbalanced-learn/ for unbalanced data instead of custom implementation
 
-def main(args):
+def main(args, ddp_rank, ddp_size):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
 
@@ -192,9 +193,9 @@ def main(args):
     batch_size = args.batch_size
     block_size = args.block_size
     epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
-    use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
-    device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
+    use_cuda = utils.use_cuda(force_cpu=force_cpu) # Will be True if possible and False otherwise
+    device = torch.device("cuda:0" if use_cuda else "cpu")
     is_device_gpu = device.type.startswith("cuda")
     pretrained_model = args.pretrained_model
     max_length_tokens = args.max_length_tokens
@@ -269,7 +270,7 @@ def main(args):
     waiting_time = 20
     num_labels = 1 if regression else 2
     classes = 2
-    amp_context_manager, amp_grad_scaler, cuda_amp = get_amp_context_manager(cuda_amp, force_cpu)
+    amp_context_manager, amp_grad_scaler, cuda_amp = get_amp_context_manager(cuda_amp, use_cuda)
     pytorch_major, pytorch_minor, pytorch_patch = utils.get_pytorch_version()
 
     if scheduler_str in ("linear",) and train_until_patience:
@@ -277,7 +278,7 @@ def main(args):
         logger.warning("You set a LR scheduler ('%s' scheduler) which conflicts with --train-until-patince: you might want to check this out and change the configuration", scheduler_str)
 
     # Enable cuDNN benchmark
-    if use_cuda and not force_cpu:
+    if use_cuda:
         torch.backends.cudnn.benchmark = True
 
     # Disable parallelism since throws warnings
@@ -1028,6 +1029,8 @@ def initialization():
     parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
 
+    parser.add_argument('--ddp-nodes', type=int, default=1, help="DDP nodes")
+
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
     parser.add_argument('--plot-path', help="If set, the plot will be stored instead of displayed")
@@ -1039,6 +1042,58 @@ def initialization():
 
     return args
 
+def distributed_main(args):
+    def init_process(rank, size, fn):
+        """ Initialize the distributed environment. """
+        if "MASTER_ADDR" not in os.environ or "MASTER_PORT" not in os.environ:
+
+            addr = "127.0.0.1"
+            port = 29500
+            max_retries = 20
+            port_ok = False
+
+            for i in range(max_retries):
+                if not utils.is_port_in_use(addr, port):
+                    port_ok = True
+
+                    break
+
+                port += 1
+
+            if not port_ok:
+                raise Exception("Wrong DDP configuration (check out 'torch.distributed.launch' utility): could not get a port")
+
+            port = str(port)
+
+            logger.warning("Wrong DDP configuration (check out 'torch.distributed.launch' utility): using %s:%s",
+                           addr, port)
+
+            os.environ["MASTER_ADDR"] = addr
+            os.environ["MASTER_PORT"] = port
+
+        backend = "gloo" # Recommended CPU backend
+        use_cuda = utils.use_cuda(force_cpu=args.force_cpu)
+
+        if use_cuda:
+            backend = "nccl" # Recommended GPU backend
+
+        logger.info("DDP backend: %s", backend)
+
+        dist.init_process_group(backend, rank=rank, world_size=size)
+        fn(args, rank, size)
+
+    size = args.ddp_nodes
+    processes = []
+    mp.set_start_method("spawn")
+
+    for rank in range(size):
+        p = mp.Process(target=init_process, args=(rank, size, run))
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
 def cli():
     global logger
 
@@ -1047,7 +1102,9 @@ def cli():
 
     logger.debug("Arguments processed: {}".format(str(args)))
 
-    main(args)
+    distributed_main(args)
+
+    #main(args)
 
 if __name__ == "__main__":
     cli()

@@ -430,3 +430,15 @@ def get_pytorch_version():
     torch_version_patch = int(torch.__version__.split('+')[0].split('.')[2])
 
     return torch_version_major, torch_version_minor, torch_version_patch
+
+def use_cuda(force_cpu=False):
+    use_cuda = torch.cuda.is_available()
+    force_cpu = args.force_cpu
+
+    return True if use_cuda and not force_cpu else False
+
+def is_port_in_use(addr, port):
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex((addr, port)) == 0
