@@ -7,7 +7,7 @@ import logging
 import argparse
 import tempfile
 import contextlib
-from datetime import datetime
+import datetime
 
 import parallel_urls_classifier.utils.utils as utils
 from parallel_urls_classifier.inference import (
@@ -173,6 +173,8 @@ def main(args, ddp_rank, ddp_size):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
 
+    logger.info("DDP: rank %d of %d", ddp_rank, ddp_size)
+
     apply_inference = args.inference
 
     if not apply_inference:
@@ -195,7 +197,9 @@ def main(args, ddp_rank, ddp_size):
     epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     force_cpu = args.force_cpu
     use_cuda = utils.use_cuda(force_cpu=force_cpu) # Will be True if possible and False otherwise
-    device = torch.device("cuda:0" if use_cuda else "cpu")
+    cuda_device = 0 if use_cuda else '' # TODO handle GPU id properly taking into account DDP
+    device_str = f"cuda:{cuda_device}" if use_cuda else "cpu"
+    device = torch.device(device_str)
     is_device_gpu = device.type.startswith("cuda")
     pretrained_model = args.pretrained_model
     max_length_tokens = args.max_length_tokens
@@ -285,7 +289,7 @@ def main(args, ddp_rank, ddp_size):
     os.environ["TOKENIZERS_PARALLELISM"] = "False"
 
     if not log_directory:
-        log_directory = tempfile.mkdtemp(prefix=f"puc_{datetime.now().strftime('%Y%m%d%H%M%S')}_")
+        log_directory = tempfile.mkdtemp(prefix=f"puc_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_")
 
     if not utils.exists(log_directory, f=os.path.isdir):
         raise Exception(f"Provided log directory does not exist: '{log_directory}'")
@@ -524,9 +528,12 @@ def main(args, ddp_rank, ddp_size):
 
     no_workers = 0 if is_device_gpu else args.dataset_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
                                                               #  when GPU is being used
-    dataloader_kwargs = {"pin_memory": True,
-                         "pin_memory_device": device.type,
-                         "num_workers": no_workers}
+    dataloader_kwargs = {
+        "pin_memory": True,
+        "pin_memory_device": device.type,
+        "num_workers": no_workers,
+        "multiprocessing_context": "spawn", # We need this because of DDP in order to avoid deadlocks
+    }
 
     if pytorch_major > 1 or (pytorch_major == 1 and pytorch_minor >= 12):
         # Ok
@@ -809,7 +816,7 @@ def main(args, ddp_rank, ddp_size):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_dev,
+        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
                                           max_length_tokens, device, regression, amp_context_manager, logger,
                                           classes=classes)
 
@@ -909,7 +916,7 @@ def main(args, ddp_rank, ddp_size):
 
         model.from_pretrained_wrapper(model_output, device=device)
 
-    dev_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_dev,
+    dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
                                       max_length_tokens, device, regression, amp_context_manager, logger,
                                       classes=classes)
 
@@ -930,7 +937,7 @@ def main(args, ddp_rank, ddp_size):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_test,
+    test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_test,
                                        max_length_tokens, device, regression, amp_context_manager, logger,
                                        classes=classes)
 
@@ -1079,8 +1086,12 @@ def distributed_main(args):
 
         logger.info("DDP backend: %s", backend)
 
-        dist.init_process_group(backend, rank=rank, world_size=size)
+        dist.init_process_group(backend, rank=rank, world_size=size,
+                                timeout=datetime.timedelta(seconds=1800), # 30 min timeout for connection among nodes
+                                )
         fn(args, rank, size)
+        dist.destroy_process_group() # Function still not documented (https://github.com/pytorch/pytorch/issues/48203)
+                                     #  but used in tutorial (https://pytorch.org/tutorials/intermediate/ddp_tutorial.html)
 
     size = args.ddp_nodes
     processes = []
