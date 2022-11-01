@@ -169,10 +169,13 @@ def get_amp_context_manager(cuda_amp, use_cuda):
 
 # TODO TBD use https://pypi.org/project/imbalanced-learn/ for unbalanced data instead of custom implementation
 
-def main(args, ddp_rank, ddp_size):
+def main(ddp_rank, ddp_size):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
 
+    args = initialization()
+
+    logger.debug("Arguments processed: {}".format(str(args)))
     logger.info("DDP: rank %d of %d", ddp_rank, ddp_size)
 
     apply_inference = args.inference
@@ -197,7 +200,7 @@ def main(args, ddp_rank, ddp_size):
     epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     force_cpu = args.force_cpu
     use_cuda = utils.use_cuda(force_cpu=force_cpu) # Will be True if possible and False otherwise
-    cuda_device = 0 if use_cuda else '' # TODO handle GPU id properly taking into account DDP
+    cuda_device = ddp_rank % torch.cuda.device_count() if use_cuda else '' # TODO handle GPU id properly taking into account DDP. Is it correctly handled?
     device_str = f"cuda:{cuda_device}" if use_cuda else "cpu"
     device = torch.device(device_str)
     is_device_gpu = device.type.startswith("cuda")
@@ -654,6 +657,10 @@ def main(args, ddp_rank, ddp_size):
     epoch_train_acc_classes, epoch_dev_acc_classes = {0: [], 1: []}, {0: [], 1: []}
     epoch_train_macro_f1, epoch_dev_macro_f1 = [], []
 
+    # Load DDP model
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=device if is_device_gpu and ddp_size > 1 else None)
+
+    # Start training!
     while not stop_training:
         logger.info("Epoch %d", epoch + 1)
 
@@ -789,7 +796,7 @@ def main(args, ddp_rank, ddp_size):
 
             scheduler.step()
 
-        current_last_layer_output = utils.get_layer_from_model(model.get_base_model().base_model.encoder.layer[-1], name="output.dense.weight")
+        current_last_layer_output = utils.get_layer_from_model(model.module.get_base_model().base_model.encoder.layer[-1], name="output.dense.weight")
         layer_updated = (current_last_layer_output != last_layer_output).any().cpu().detach().numpy()
 
         logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
@@ -854,7 +861,7 @@ def main(args, ddp_rank, ddp_size):
 
             # Store model
             if model_output:
-                model.save_pretrained_wrapper(model_output)
+                model.module.save_pretrained_wrapper(model_output)
 
             current_patience = 0
         else:
@@ -914,7 +921,7 @@ def main(args, ddp_rank, ddp_size):
 
         logger.info("Loading best model (dev score): %s", str(best_dev))
 
-        model.from_pretrained_wrapper(model_output, device=device)
+        model.module.from_pretrained_wrapper(model_output, device=device)
 
     dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
                                       max_length_tokens, device, regression, amp_context_manager, logger,
@@ -1036,8 +1043,6 @@ def initialization():
     parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
 
-    parser.add_argument('--ddp-nodes', type=int, default=1, help="DDP nodes")
-
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
     parser.add_argument('--plot-path', help="If set, the plot will be stored instead of displayed")
@@ -1049,56 +1054,65 @@ def initialization():
 
     return args
 
-def distributed_main(args):
-    def init_process(rank, size, fn):
-        """ Initialize the distributed environment. """
-        if "MASTER_ADDR" not in os.environ or "MASTER_PORT" not in os.environ:
+def init_process(rank, world_size):
+    """ Initialize the distributed environment. """
+    # Logging configuration
+    global logger
 
-            addr = "127.0.0.1"
-            port = 29500
-            max_retries = 20
-            port_ok = False
+    logger = utils.set_up_logging_logger(torch.multiprocessing.get_logger(), level=logging.DEBUG if "--verbose" in sys.argv else logging.INFO)
+    logger.name = "parallel_urls_classifier"
 
-            for i in range(max_retries):
-                if not utils.is_port_in_use(addr, port):
-                    port_ok = True
+    # DDP initial configuration
+    if "MASTER_ADDR" not in os.environ or "MASTER_PORT" not in os.environ:
 
-                    break
+        addr = "127.0.0.1"
+        port = 29500
+        max_retries = 20
+        port_ok = False
 
-                port += 1
+        for i in range(max_retries):
+            if not utils.is_port_in_use(addr, port):
+                port_ok = True
 
-            if not port_ok:
-                raise Exception("Wrong DDP configuration (check out 'torch.distributed.launch' utility): could not get a port")
+                break
 
-            port = str(port)
+            port += 1
 
-            logger.warning("Wrong DDP configuration (check out 'torch.distributed.launch' utility): using %s:%s",
-                           addr, port)
+        if not port_ok:
+            raise Exception("Wrong DDP configuration (check out 'torch.distributed.launch' utility): could not get a port")
 
-            os.environ["MASTER_ADDR"] = addr
-            os.environ["MASTER_PORT"] = port
+        port = str(port)
 
-        backend = "gloo" # Recommended CPU backend
-        use_cuda = utils.use_cuda(force_cpu=args.force_cpu)
+        logger.warning("Wrong DDP configuration (check out 'torch.distributed.launch' utility): using %s:%s",
+                        addr, port)
 
-        if use_cuda:
-            backend = "nccl" # Recommended GPU backend
+        os.environ["MASTER_ADDR"] = addr
+        os.environ["MASTER_PORT"] = port
 
-        logger.info("DDP backend: %s", backend)
+    use_cuda = utils.use_cuda(force_cpu=True if "--force-cpu" in sys.argv else False)
+    backend = "nccl" if use_cuda else "gloo" # Recommended backends for GPU and CPU, respectively
 
-        dist.init_process_group(backend, rank=rank, world_size=size,
-                                timeout=datetime.timedelta(seconds=1800), # 30 min timeout for connection among nodes
-                                )
-        fn(args, rank, size)
-        dist.destroy_process_group() # Function still not documented (https://github.com/pytorch/pytorch/issues/48203)
-                                     #  but used in tutorial (https://pytorch.org/tutorials/intermediate/ddp_tutorial.html)
+    logger.info("DDP backend: %s", backend)
 
-    size = args.ddp_nodes
+    # Init
+    dist.init_process_group(
+        backend, rank=rank, world_size=world_size,
+        timeout=datetime.timedelta(seconds=1800), # 30 min timeout for connection among nodes
+    )
+    main(rank, world_size)
+    dist.destroy_process_group() # Function still not documented (https://github.com/pytorch/pytorch/issues/48203)
+                                 #  but used in tutorial (https://pytorch.org/tutorials/intermediate/ddp_tutorial.html)
+
+def ddp_main():
+    world_size = torch.cuda.device_count() if utils.use_cuda(force_cpu=True if "--force-cpu" in sys.argv else False) else 1
+
+    #mp.spawn(init_process, args=(world_size,), nprocs=world_size, join=True)
+
     processes = []
     mp.set_start_method("spawn")
 
-    for rank in range(size):
-        p = mp.Process(target=init_process, args=(rank, size, run))
+    for rank in range(world_size):
+        p = mp.Process(target=init_process, args=(rank, world_size))
         p.start()
         processes.append(p)
 
@@ -1106,16 +1120,7 @@ def distributed_main(args):
         p.join()
 
 def cli():
-    global logger
-
-    args = initialization()
-    logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=logging.DEBUG if args.verbose else logging.INFO)
-
-    logger.debug("Arguments processed: {}".format(str(args)))
-
-    distributed_main(args)
-
-    #main(args)
+    ddp_main()
 
 if __name__ == "__main__":
     cli()

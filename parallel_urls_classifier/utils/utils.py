@@ -134,7 +134,8 @@ def get_current_allocated_memory_size():
 
     return size_in_bytes
 
-def set_up_logging_logger(logger, filename=None, level=logging.INFO, format="[%(asctime)s] [%(name)s] [%(levelname)s] [%(module)s:%(lineno)d] %(message)s",
+def set_up_logging_logger(logger, filename=None, level=logging.INFO,
+                          format="[%(asctime)s] [%(name)s] [%(levelname)s] [%(module)s:%(lineno)d] %(message)s",
                           display_when_file=False):
     handlers = [
         logging.StreamHandler()
@@ -432,8 +433,9 @@ def get_pytorch_version():
     return torch_version_major, torch_version_minor, torch_version_patch
 
 def use_cuda(force_cpu=False):
+    import torch
+
     use_cuda = torch.cuda.is_available()
-    force_cpu = args.force_cpu
 
     return True if use_cuda and not force_cpu else False
 
