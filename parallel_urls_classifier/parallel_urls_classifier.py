@@ -1076,10 +1076,6 @@ def init_process(rank, world_size):
     logger = utils.set_up_logging_logger(torch.multiprocessing.get_logger(), level=logging.DEBUG if "--verbose" in sys.argv else logging.INFO)
     logger.name = "parallel_urls_classifier"
 
-    if rank != 0:
-        logger = utils.set_up_logging_logger(logger, level=100)
-        logger.name = "null_parallel_urls_classifier"
-
     # DDP initial configuration
     if "MASTER_ADDR" not in os.environ or "MASTER_PORT" not in os.environ:
 
@@ -1111,6 +1107,7 @@ def init_process(rank, world_size):
     backend = "nccl" if use_cuda else "gloo" # Recommended backends for GPU and CPU, respectively
 
     logger.info("DDP backend: %s", backend)
+    logger.debug("DDP: rank %d of %d", rank, world_size)
 
     # Init
     dist.init_process_group(
