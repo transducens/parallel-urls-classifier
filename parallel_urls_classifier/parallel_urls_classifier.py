@@ -658,7 +658,7 @@ def main(ddp_rank, ddp_size):
     epoch_train_macro_f1, epoch_dev_macro_f1 = [], []
 
     # Load DDP model
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=device if is_device_gpu and ddp_size > 1 else None)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device] if is_device_gpu and ddp_size > 1 else None)
 
     # Start training!
     while not stop_training:
@@ -675,6 +675,7 @@ def main(ddp_rank, ddp_size):
         model.train()
 
         for idx, batch in enumerate(dataloader_train):
+            batch = utils.get_window_batch_ddp(batch, ddp_rank, ddp_size)
             batch_outputs = []
             batch_labels = []
             loss_value = None
@@ -860,7 +861,7 @@ def main(ddp_rank, ddp_size):
                 best_train = train_target
 
             # Store model
-            if model_output:
+            if model_output and ddp_rank == 0:
                 model.module.save_pretrained_wrapper(model_output)
 
             current_patience = 0

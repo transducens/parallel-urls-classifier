@@ -8,6 +8,11 @@ import lzma
 from contextlib import contextmanager
 import argparse
 
+import torch
+import numpy as np
+
+logger = logging.getLogger("parallel_urls_classifier")
+
 def wc_l(fd, do_not_count_empty=True):
     no_lines = 0
     tell = fd.tell()
@@ -135,7 +140,7 @@ def get_current_allocated_memory_size():
     return size_in_bytes
 
 def set_up_logging_logger(logger, filename=None, level=logging.INFO,
-                          format="[%(asctime)s] [%(name)s] [%(levelname)s] [%(module)s:%(lineno)d] %(message)s",
+                          format="[%(asctime)s] [%(process)d:%(name)s] [%(levelname)s] [%(module)s:%(lineno)d] %(message)s",
                           display_when_file=False):
     handlers = [
         logging.StreamHandler()
@@ -225,15 +230,13 @@ def update_defined_variables_from_dict(d, provided_locals, smash=False):
     provided_locals.update(d)
 
 def init_weight_and_bias(model, module):
-    import torch.nn as nn
-
-    if isinstance(module, nn.Linear):
+    if isinstance(module, torch.nn.Linear):
         module.weight.data.normal_(mean=0.0, std=model.config.initializer_range)
 
         if module.bias is not None:
             module.bias.data.zero_()
 
-    elif isinstance(module, nn.LayerNorm):
+    elif isinstance(module, torch.nn.LayerNorm):
         module.bias.data.zero_()
         module.weight.data.fill_(1.0)
 
@@ -398,34 +401,71 @@ def get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens)
     # Labels
     labels = batch["label"]
 
-    # Split in batch_size batches
-    start = 0
-    end = block_size
+    if len(labels) == 0:
+        logger.warning("Labels length is 0: this is expected if the provided data, taking into account"
+                       " the batch size, block size and DDP configuration, could lead to this setup")
+    else:
+        # Split in batch_size batches
+        start = 0
+        end = block_size
+        current_batch_size = labels.reshape(-1).shape[0]
+
+        while True:
+            if start < end:
+                _urls = urls[start:end].to(device)
+                _attention_mask = attention_mask[start:end].to(device)
+                _labels = labels[start:end].to(device)
+
+                # Create dictionary with inputs and outputs
+                inputs_and_outputs = {
+                    "labels": _labels,
+                    "urls": _urls,
+                    "attention_mask": _attention_mask,
+                }
+
+                yield inputs_and_outputs
+
+                start = end
+                end = min(start + block_size, current_batch_size)
+            else:
+                break
+
+def get_window_batch_ddp(batch, ddp_rank, ddp_size):
+    # 0 <= ddp_rank < ddp_size
+    # max_possible_value(ddp_rank) = ddp_size - 1
+
+    if ddp_size <= 1:
+        return batch
+
+    # We need to split batch in 'ddp_size' parts and return the 'ddp_rank' index
+    batch_urls_str = batch["url_str"]
+    labels = batch["label"]
     current_batch_size = labels.reshape(-1).shape[0]
+    split_size = int(current_batch_size / ddp_size)
 
-    while True:
-        if start < end:
-            _urls = urls[start:end].to(device)
-            _attention_mask = attention_mask[start:end].to(device)
-            _labels = labels[start:end].to(device)
+    if split_size < 1:
+        split_size = 1
 
-            # Create dictionary with inputs and outputs
-            inputs_and_outputs = {
-                "labels": _labels,
-                "urls": _urls,
-                "attention_mask": _attention_mask,
-            }
+    start = 0
+    end = split_size
 
-            yield inputs_and_outputs
+    for rank in range(ddp_size):
+        if rank == ddp_rank:
+            labels = labels[start:end]
+            batch_urls_str = batch_urls_str[start:end]
 
-            start = end
-            end = min(start + block_size, current_batch_size)
-        else:
-            break
+            return {"url_str": batch_urls_str, "labels": labels}
+
+        start = end
+        end = min(start + split_size, current_batch_size)
+
+        if start == end:
+            start = 0
+            end = 0
+
+    raise Exception(f"Couldn't get a window of the batch data: {ddp_rank} / {ddp_size}")
 
 def get_pytorch_version():
-    import torch
-
     torch_version_major = int(torch.__version__.split('+')[0].split('.')[0])
     torch_version_minor = int(torch.__version__.split('+')[0].split('.')[1])
     torch_version_patch = int(torch.__version__.split('+')[0].split('.')[2])
@@ -433,8 +473,6 @@ def get_pytorch_version():
     return torch_version_major, torch_version_minor, torch_version_patch
 
 def use_cuda(force_cpu=False):
-    import torch
-
     use_cuda = torch.cuda.is_available()
 
     return True if use_cuda and not force_cpu else False
