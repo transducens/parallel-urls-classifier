@@ -481,9 +481,3 @@ def use_cuda(force_cpu=False):
     use_cuda = torch.cuda.is_available()
 
     return True if use_cuda and not force_cpu else False
-
-def is_port_in_use(addr, port):
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex((addr, port)) == 0

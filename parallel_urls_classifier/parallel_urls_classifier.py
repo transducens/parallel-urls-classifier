@@ -1068,8 +1068,9 @@ def initialization():
 
     return args
 
-def init_process(rank, world_size):
-    """ Initialize the distributed environment. """
+def ddp_main():
+    world_size = torch.cuda.device_count() if utils.use_cuda(force_cpu=True if "--force-cpu" in sys.argv else False) else 1
+
     # Logging configuration
     global logger
 
@@ -1078,63 +1079,27 @@ def init_process(rank, world_size):
 
     # DDP initial configuration
     if "MASTER_ADDR" not in os.environ or "MASTER_PORT" not in os.environ:
+        logger.error("Wrong DDP configuration: check out 'torch.distributed.launch'/'torchrun' utility: some examples will be displayed before exit")
 
-        addr = "127.0.0.1"
-        port = 29500
-        max_retries = 20
-        port_ok = False
+        logger.info("Example using single-node multi-devices: torchrun /path/to/parallel_urls_classifier.py "
+                    "--standalone --nnodes=1 --nproc_per_node=$NUMBER_OF_GPUS list_of_parameters")
 
-        for i in range(max_retries):
-            if not utils.is_port_in_use(addr, port):
-                port_ok = True
-
-                break
-
-            port += 1
-
-        if not port_ok:
-            raise Exception("Wrong DDP configuration (check out 'torch.distributed.launch'/'torchrun' utility): could not get a port")
-
-        port = str(port)
-
-        logger.warning("Wrong DDP configuration (check out 'torch.distributed.launch'/'torchrun' utility): using %s:%s",
-                        addr, port)
-
-        os.environ["MASTER_ADDR"] = addr
-        os.environ["MASTER_PORT"] = port
+        raise Exception("Wrong DDP configuration")
 
     use_cuda = utils.use_cuda(force_cpu=True if "--force-cpu" in sys.argv else False)
     backend = "nccl" if use_cuda else "gloo" # Recommended backends for GPU and CPU, respectively
 
     logger.info("DDP backend: %s", backend)
-    logger.debug("DDP: rank %d of %d", rank, world_size)
 
     # Init
     dist.init_process_group(
-        backend, rank=rank, world_size=world_size,
+        backend,
+        #rank=rank, world_size=world_size,
         timeout=datetime.timedelta(seconds=1800), # 30 min timeout for connection among nodes
     )
-    main(rank, world_size)
+    main(dist.get_rank(), world_size)
     dist.destroy_process_group() # Function still not documented (https://github.com/pytorch/pytorch/issues/48203)
                                  #  but used in tutorial (https://pytorch.org/tutorials/intermediate/ddp_tutorial.html)
-
-def ddp_main():
-    world_size = torch.cuda.device_count() if utils.use_cuda(force_cpu=True if "--force-cpu" in sys.argv else False) else 1
-
-    mp.spawn(init_process, args=(world_size,), nprocs=world_size, join=True)
-
-    """
-    processes = []
-    mp.set_start_method("spawn")
-
-    for rank in range(world_size):
-        p = mp.Process(target=init_process, args=(rank, world_size))
-        p.start()
-        processes.append(p)
-
-    for p in processes:
-        p.join()
-    """
 
 def cli():
     ddp_main()
