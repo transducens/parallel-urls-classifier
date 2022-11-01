@@ -407,7 +407,7 @@ def get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens)
     else:
         # Split in batch_size batches
         start = 0
-        end = block_size
+        end = start + block_size
         current_batch_size = labels.reshape(-1).shape[0]
 
         while True:
@@ -441,13 +441,13 @@ def get_window_batch_ddp(batch, ddp_rank, ddp_size):
     batch_urls_str = batch["url_str"]
     labels = batch["label"]
     current_batch_size = labels.reshape(-1).shape[0]
-    split_size = int(current_batch_size / ddp_size)
+    split_size = current_batch_size / ddp_size
 
     if split_size < 1:
         split_size = 1
 
     start = 0
-    end = split_size
+    end = int(((start + split_size) * 2) // 2)
 
     for rank in range(ddp_size):
         if rank == ddp_rank:
@@ -457,11 +457,16 @@ def get_window_batch_ddp(batch, ddp_rank, ddp_size):
             return {"url_str": batch_urls_str, "label": labels}
 
         start = end
-        end = min(start + split_size, current_batch_size)
+        end = min(int(((start + split_size) * 2) // 2), current_batch_size)
 
         if start == end:
             start = 0
             end = 0
+        elif rank == ddp_size - 1:
+            if end != current_batch_size:
+                logger.warning("Incorrect index? It is %d and should be %d", end, current_batch_size)
+
+                end = current_batch_size
 
     raise Exception(f"Couldn't get a window of the batch data: {ddp_rank} / {ddp_size}")
 

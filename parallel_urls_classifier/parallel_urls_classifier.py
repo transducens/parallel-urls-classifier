@@ -675,7 +675,7 @@ def main(ddp_rank, ddp_size):
         model.train()
 
         for idx, batch in enumerate(dataloader_train):
-            batch = utils.get_window_batch_ddp(batch, ddp_rank, ddp_size)
+            batch = utils.get_window_batch_ddp(batch, ddp_rank, ddp_size) # We need to split our own data (DDP): https://discuss.pytorch.org/t/does-distributeddataparallel-split-data-at-the-batch-dimension/78440/4
             batch_outputs = []
             batch_labels = []
             loss_value = None
@@ -776,7 +776,8 @@ def main(ddp_rank, ddp_size):
                                 "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
                                 "final_test_acc": None, "final_test_macro_f1": None,}
 
-                    plot_statistics(plot_args, path=args.plot_path)
+                    if ddp_rank == 0:
+                        plot_statistics(plot_args, path=args.plot_path)
 
             if show_statistics:
                 # LRs statistics
@@ -890,7 +891,8 @@ def main(ddp_rank, ddp_size):
                          "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
                          "final_test_acc": None, "final_test_macro_f1": None,}
 
-            plot_statistics(plot_args, path=args.plot_path)
+            if ddp_rank == 0:
+                plot_statistics(plot_args, path=args.plot_path)
 
         epoch += 1
 
@@ -976,7 +978,8 @@ def main(ddp_rank, ddp_size):
                      "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": dev_acc, "final_dev_macro_f1": dev_macro_f1,
                      "final_test_acc": test_acc, "final_test_macro_f1": test_macro_f1,}
 
-        plot_statistics(plot_args, path=args.plot_path, freeze=True) # Let the user finish the execution if necessary
+        if ddp_rank == 0:
+            plot_statistics(plot_args, path=args.plot_path, freeze=True) # Let the user finish the execution if necessary
 
     if lock_file:
         # Create lock file since the training finished
