@@ -1083,11 +1083,11 @@ def init_process(rank, world_size):
             port += 1
 
         if not port_ok:
-            raise Exception("Wrong DDP configuration (check out 'torch.distributed.launch' utility): could not get a port")
+            raise Exception("Wrong DDP configuration (check out 'torch.distributed.launch'/'torchrun' utility): could not get a port")
 
         port = str(port)
 
-        logger.warning("Wrong DDP configuration (check out 'torch.distributed.launch' utility): using %s:%s",
+        logger.warning("Wrong DDP configuration (check out 'torch.distributed.launch'/'torchrun' utility): using %s:%s",
                         addr, port)
 
         os.environ["MASTER_ADDR"] = addr
@@ -1110,8 +1110,9 @@ def init_process(rank, world_size):
 def ddp_main():
     world_size = torch.cuda.device_count() if utils.use_cuda(force_cpu=True if "--force-cpu" in sys.argv else False) else 1
 
-    #mp.spawn(init_process, args=(world_size,), nprocs=world_size, join=True)
+    mp.spawn(init_process, args=(world_size,), nprocs=world_size, join=True)
 
+    """
     processes = []
     mp.set_start_method("spawn")
 
@@ -1122,6 +1123,7 @@ def ddp_main():
 
     for p in processes:
         p.join()
+    """
 
 def cli():
     ddp_main()
