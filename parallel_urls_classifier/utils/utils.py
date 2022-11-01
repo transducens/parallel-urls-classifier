@@ -454,7 +454,7 @@ def get_window_batch_ddp(batch, ddp_rank, ddp_size):
             labels = labels[start:end]
             batch_urls_str = batch_urls_str[start:end]
 
-            return {"url_str": batch_urls_str, "labels": labels}
+            return {"url_str": batch_urls_str, "label": labels}
 
         start = end
         end = min(start + split_size, current_batch_size)
