@@ -9,7 +9,17 @@ import tempfile
 import contextlib
 import datetime
 
-import parallel_urls_classifier.utils.utils as utils
+try:
+    import parallel_urls_classifier.utils.utils as utils
+except:
+    # Needed for 'torchrun'
+
+    cdir = os.path.dirname(os.path.realpath(__file__))
+
+    sys.path.insert(0, f"{cdir}/..")
+
+    import parallel_urls_classifier.utils.utils as utils
+
 from parallel_urls_classifier.inference import (
     inference,
     interactive_inference,
@@ -1065,6 +1075,10 @@ def init_process(rank, world_size):
 
     logger = utils.set_up_logging_logger(torch.multiprocessing.get_logger(), level=logging.DEBUG if "--verbose" in sys.argv else logging.INFO)
     logger.name = "parallel_urls_classifier"
+
+    if rank != 0:
+        logger = utils.set_up_logging_logger(logger, level=100)
+        logger.name = "null_parallel_urls_classifier"
 
     # DDP initial configuration
     if "MASTER_ADDR" not in os.environ or "MASTER_PORT" not in os.environ:
