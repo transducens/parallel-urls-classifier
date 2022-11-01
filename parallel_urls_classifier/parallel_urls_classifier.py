@@ -535,7 +535,7 @@ def main(ddp_rank, ddp_size):
         "pin_memory": True,
         "pin_memory_device": device.type,
         "num_workers": no_workers,
-        "multiprocessing_context": "spawn", # We need this because of DDP in order to avoid deadlocks
+        "multiprocessing_context": "spawn" if no_workers else None, # We need this because of DDP in order to avoid deadlocks
     }
 
     if pytorch_major > 1 or (pytorch_major == 1 and pytorch_minor >= 12):
