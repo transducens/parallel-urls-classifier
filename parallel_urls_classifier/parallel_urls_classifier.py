@@ -250,6 +250,9 @@ def main(ddp_rank, ddp_size):
     auxiliary_tasks_weights = args.auxiliary_tasks_weights
     freeze_embeddings_layer = args.freeze_embeddings_layer
 
+    if use_cuda:
+        logger.debug("Available CUDA devices: %d", torch.cuda.device_count())
+
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
 
@@ -655,7 +658,6 @@ def main(ddp_rank, ddp_size):
     stop_training = False
     epoch = 0
     current_patience = 0
-    total_blocks_per_batch = max(int(np.ceil(batch_size / block_size)), 1)
 
     # Statistics
     batch_loss = []
@@ -705,7 +707,6 @@ def main(ddp_rank, ddp_size):
                 # Main task
                 outputs_argmax = results["urls_classification"]["outputs_argmax"]
                 loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
-                loss /= total_blocks_per_batch # Gradient accumulation
 
                 # Results
                 if loss_value is None:
@@ -786,8 +787,7 @@ def main(ddp_rank, ddp_size):
                                 "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
                                 "final_test_acc": None, "final_test_macro_f1": None,}
 
-                    if ddp_rank == 0:
-                        plot_statistics(plot_args, path=args.plot_path)
+                    plot_statistics(plot_args, path=f"{args.plot_path}_rank-{ddp_rank}")
 
             if show_statistics:
                 # LRs statistics
@@ -901,8 +901,7 @@ def main(ddp_rank, ddp_size):
                          "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
                          "final_test_acc": None, "final_test_macro_f1": None,}
 
-            if ddp_rank == 0:
-                plot_statistics(plot_args, path=args.plot_path)
+            plot_statistics(plot_args, path=f"{args.plot_path}_rank-{ddp_rank}")
 
         epoch += 1
 
@@ -988,8 +987,7 @@ def main(ddp_rank, ddp_size):
                      "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": dev_acc, "final_dev_macro_f1": dev_macro_f1,
                      "final_test_acc": test_acc, "final_test_macro_f1": test_macro_f1,}
 
-        if ddp_rank == 0:
-            plot_statistics(plot_args, path=args.plot_path, freeze=True) # Let the user finish the execution if necessary
+        plot_statistics(plot_args, path=f"{args.plot_path}_rank-{ddp_rank}", freeze=True) # Let the user finish the execution if necessary
 
     if lock_file:
         # Create lock file since the training finished
