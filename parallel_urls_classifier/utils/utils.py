@@ -443,30 +443,39 @@ def get_window_batch_ddp(batch, ddp_rank, ddp_size):
     current_batch_size = labels.reshape(-1).shape[0]
     split_size = current_batch_size / ddp_size
 
-    if split_size < 1:
-        split_size = 1
+    if split_size < 1.0:
+        logger.warning("The whole batch will be returned for all instances since current batch size is greater than DDP world size: "
+                       "this might be expected for the last batch of data")
+        return batch
 
     start = 0
-    end = int(((start + split_size) * 2) // 2)
+    end = int(((split_size * (0 + 1)) * 2 + 1) // 2)
 
     for rank in range(ddp_size):
+        if rank == ddp_size - 1:
+            # Fix possible precision errors
+
+            if end != current_batch_size:
+                logger.error("Incorrect index? It is %d and should be %d: fixed", end, current_batch_size)
+
+                end = current_batch_size
         if rank == ddp_rank:
+            #logger.debug("Rank %d: took batch from %d to %d (max value would be %d)", ddp_rank, start, end, current_batch_size) # Too much verbose, but
+                                                                                                                                 #  might be useful for debugging
             labels = labels[start:end]
             batch_urls_str = batch_urls_str[start:end]
 
             return {"url_str": batch_urls_str, "label": labels}
 
         start = end
-        end = min(int(((start + split_size) * 2) // 2), current_batch_size)
+        end = min(int((((split_size * (rank + 2))) * 2 + 1) // 2), current_batch_size) # +2 because we are looking 2 iterations in the future
+                                                                                       #  (the initialization is 1 iteration in the future)
 
         if start == end:
+            logger.error("First and last indexes are the same for loop rank %d (provided rank is %d): %d", rank, ddp_rank, start)
+
             start = 0
             end = 0
-        elif rank == ddp_size - 1:
-            if end != current_batch_size:
-                logger.warning("Incorrect index? It is %d and should be %d", end, current_batch_size)
-
-                end = current_batch_size
 
     raise Exception(f"Couldn't get a window of the batch data: {ddp_rank} / {ddp_size}")
 

@@ -20,17 +20,13 @@ except:
 
     import parallel_urls_classifier.utils.utils as utils
 
-from parallel_urls_classifier.inference import (
-    inference,
-    interactive_inference,
-    inference_with_heads,
-)
+import parallel_urls_classifier.inference as inference
 from parallel_urls_classifier.metrics import (
     get_metrics,
     plot_statistics,
 )
 import parallel_urls_classifier.preprocess as preprocess
-from parallel_urls_classifier.multitask_model import MultitaskModel
+import parallel_urls_classifier.multitask_model as multitask_model
 
 import numpy as np
 import torch
@@ -141,18 +137,18 @@ def load_model(tasks, tasks_kwargs, model_input="", pretrained_model="", device=
         raise Exception("Different tasks provided to 'tasks' and 'tasks_kwargs': "
                         f"{set(tasks)} vs {set(tasks_kwargs)}")
 
-    multitask_model = MultitaskModel.create(pretrained_model, tasks, tasks_kwargs)
+    _multitask_model = multitask_model.MultitaskModel.create(pretrained_model, tasks, tasks_kwargs)
 
     if model_input:
         logger.info("Loading model: '%s'", model_input)
 
-        multitask_model.from_pretrained_wrapper(model_input, device=device)
+        _multitask_model.from_pretrained_wrapper(model_input, device=device)
     else:
         # Move model to device
         if device:
-            multitask_model = multitask_model.to(device)
+            _multitask_model = _multitask_model.to(device)
 
-    return multitask_model
+    return _multitask_model
 
 def load_tokenizer(pretrained_model):
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
@@ -252,6 +248,10 @@ def main(ddp_rank, ddp_size):
 
     if use_cuda:
         logger.debug("Available CUDA devices: %d", torch.cuda.device_count())
+
+    if batch_size < ddp_size:
+        raise Exception("Provided batch size is lesser than the DDP world size: "
+                        "increase the batch size or decrease the DDP world size")
 
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
@@ -429,10 +429,10 @@ def main(ddp_rank, ddp_size):
         logger.error("Embedding layer size does not match with the tokenizer size: %d vs %d", model_embeddings_size, len(tokenizer))
 
     if apply_inference:
-        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, logger,
-                              logger_verbose, inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
-                              parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
-                              remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower)
+        inference.interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, logger,
+                                        logger_verbose, inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
+                                        parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
+                                        remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower)
 
         # Stop execution
         return
@@ -701,8 +701,8 @@ def main(ddp_rank, ddp_size):
                 labels = inputs_and_outputs["labels"]
 
                 # Inference
-                results = inference_with_heads(model, all_tasks, tokenizer, criteria, inputs_and_outputs, regression,
-                                               amp_context_manager, tasks_weights=auxiliary_tasks_weights)
+                results = inference.inference_with_heads(model, all_tasks, tokenizer, criteria, inputs_and_outputs, regression,
+                                                         amp_context_manager, tasks_weights=auxiliary_tasks_weights)
 
                 # Main task
                 outputs_argmax = results["urls_classification"]["outputs_argmax"]
@@ -835,9 +835,9 @@ def main(ddp_rank, ddp_size):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                          max_length_tokens, device, regression, amp_context_manager, logger,
-                                          classes=classes)
+        dev_inference_metrics = inference.inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
+                                                    max_length_tokens, device, regression, amp_context_manager, logger,
+                                                    classes=classes)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -935,9 +935,9 @@ def main(ddp_rank, ddp_size):
 
         model.module.from_pretrained_wrapper(model_output, device=device)
 
-    dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                      max_length_tokens, device, regression, amp_context_manager, logger,
-                                      classes=classes)
+    dev_inference_metrics = inference.inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
+                                                max_length_tokens, device, regression, amp_context_manager, logger,
+                                                classes=classes)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -956,9 +956,9 @@ def main(ddp_rank, ddp_size):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_test,
-                                       max_length_tokens, device, regression, amp_context_manager, logger,
-                                       classes=classes)
+    test_inference_metrics = inference.inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_test,
+                                                 max_length_tokens, device, regression, amp_context_manager, logger,
+                                                 classes=classes)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
@@ -1074,6 +1074,10 @@ def ddp_main():
 
     logger = utils.set_up_logging_logger(torch.multiprocessing.get_logger(), level=logging.DEBUG if "--verbose" in sys.argv else logging.INFO)
     logger.name = "parallel_urls_classifier"
+    # Setup modules logger
+    utils.logger = logger
+    inference.logger = logger
+    multitask_model.logger = logger
 
     # DDP initial configuration
     if "MASTER_ADDR" not in os.environ or "MASTER_PORT" not in os.environ:
