@@ -658,6 +658,7 @@ def main(ddp_rank, ddp_size):
     stop_training = False
     epoch = 0
     current_patience = 0
+    total_blocks_per_batch = max(int(np.ceil(batch_size / block_size)), 1)
 
     # Statistics
     batch_loss = []
@@ -707,6 +708,7 @@ def main(ddp_rank, ddp_size):
                 # Main task
                 outputs_argmax = results["urls_classification"]["outputs_argmax"]
                 loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
+                loss /= total_blocks_per_batch # Gradient accumulation
 
                 # Results
                 if loss_value is None:
