@@ -10,6 +10,8 @@ import argparse
 
 import torch
 
+logger = logging.getLogger("parallel_urls_classifier")
+
 def wc_l(fd, do_not_count_empty=True):
     no_lines = 0
     tell = fd.tell()
@@ -99,7 +101,7 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
             trg_url = url[1]
 
         if tokenizer.sep_token in src_url or tokenizer.sep_token in trg_url:
-            logging.warning("URLs skipped since they contain the separator token: ('%s', '%s')", src_url, trg_url)
+            logger.warning("URLs skipped since they contain the separator token: ('%s', '%s')", src_url, trg_url)
 
             continue
 
@@ -367,7 +369,7 @@ def get_idx_after_protocol(url):
 
         if idx == -1:
             # No "after" protocol found
-            logging.warning("Protocol not found for the provided URL: %s", url)
+            logger.warning("Protocol not found for the provided URL: %s", url)
 
             return 0
 

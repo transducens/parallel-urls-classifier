@@ -17,16 +17,20 @@ import transformers
 # TODO remove all "logger" parameters from functions since we can define this global variable
 #  and it works with the set configuration from the main file
 logger = logging.getLogger("parallel_urls_classifier")
+logger_tokens = logging.getLogger("parallel_urls_classifier.tokens")
 
-def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager,
-                         tasks_weights=None):
+def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, regression, amp_context_manager,
+                         tasks_weights=None, criteria=None):
     results = {"_internal": {"total_loss": None}}
 
     # Inputs and outputs
-    labels = {"urls_classification": inputs_and_outputs["labels"]}
+    labels = {}
     urls = inputs_and_outputs["urls"]
     device = urls.device
     attention_mask = inputs_and_outputs["attention_mask"]
+
+    if criteria:
+        labels["urls_classification"] = inputs_and_outputs["labels"]
 
     with amp_context_manager:
         model_outputs = None
@@ -36,14 +40,16 @@ def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, 
             #  https://discuss.huggingface.co/t/bertformaskedlm-s-loss-and-scores-how-the-loss-is-computed/607/2
             _urls, _labels = transformers.DataCollatorForLanguageModeling(tokenizer, mlm_probability=0.15)\
                                 .torch_mask_tokens(urls.clone().cpu().detach())
-            labels["mlm"] = _labels.to(device)
             _urls = _urls.to(device)
             urls = _urls
+
+            if criteria:
+                labels["mlm"] = _labels.to(device)
 
         for head_task in tasks:
             model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
             outputs = model_outputs.logits # Get head result
-            criterion = criteria[head_task]
+            criterion = criteria[head_task] if criteria else None
             loss_weight = tasks_weights[head_task] if tasks_weights else 1.0
 
             if head_task == "urls_classification":
@@ -57,30 +63,35 @@ def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, 
                     # Binary classification
                     outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
 
-                loss = criterion(outputs, labels[head_task])
-                loss *= loss_weight
+                if criterion:
+                    loss = criterion(outputs, labels[head_task])
+                    loss *= loss_weight
 
                 results["urls_classification"] = {
                     "outputs": outputs,
                     "outputs_argmax": outputs_argmax,
-                    "loss_detach": loss.cpu().detach(),
+                    "loss_detach": loss.cpu().detach() if criterion else None,
                 }
             elif head_task == "mlm":
-                loss = criterion(outputs.view(-1, tokenizer.vocab_size), labels[head_task].view(-1))
-                loss *= loss_weight
+                if criterion:
+                    loss = criterion(outputs.view(-1, tokenizer.vocab_size), labels[head_task].view(-1))
+                    loss *= loss_weight
 
                 results["mlm"] = {
                     "outputs": outputs,
-                    "loss_detach": loss.cpu().detach(),
+                    "loss_detach": loss.cpu().detach() if criterion else None,
                 }
             else:
                 raise Exception(f"Unknown head task: {head_task}")
 
             # Sum loss (we don't want to define multiple losses at the same time in order to avoid high memory allocation)
-            if not results["_internal"]["total_loss"]:
-                results["_internal"]["total_loss"] = loss
+            if criterion:
+                if not results["_internal"]["total_loss"]:
+                    results["_internal"]["total_loss"] = loss
+                else:
+                    results["_internal"]["total_loss"] += loss
             else:
-                results["_internal"]["total_loss"] += loss
+                results["_internal"]["total_loss"] = None
 
     return results
 
@@ -105,7 +116,8 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
             labels = inputs_and_outputs["labels"]
 
             # Inference
-            results = inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, regression, amp_context_manager)
+            results = inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, regression, amp_context_manager,
+                                           criteria=criteria)
 
             # Tasks
             loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?
@@ -114,7 +126,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
             if "mlm" in results:
                 # TODO propagate somehow? Statistics?
                 loss_mlm = results["mlm"]["loss_detach"]
-                outputs_mlm = results["mlm"]["outputs"]
+                outputs_mlm = results["mlm"]["outputs"].cpu()
 
             loss = results["_internal"]["total_loss"].cpu()
             loss = loss.cpu() / total_blocks_per_batch
@@ -149,7 +161,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
             "macro_f1": total_macro_f1,}
 
 @torch.no_grad()
-def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, logger, logger_verbose,
+def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, regression,
                           inference_from_stdin=False, remove_authority=False, remove_positional_data_from_resource=False,
                           parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True):
     logger.info("Inference mode enabled")
@@ -157,8 +169,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     if not inference_from_stdin:
         logger.info("Insert 2 blank lines in order to end")
 
-    logger_verbose["tokens"].debug("preprocessed_urls\tmodel_input\ttokens\ttokens2str\tunk_chars\t" \
-                                   "initial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
+    logger_tokens.debug("preprocessed_urls\tmodel_input\ttokens\ttokens2str\tunk_chars\t"
+                        "initial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
 
     model.eval()
 
@@ -212,23 +224,16 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             sp_unk_vs_one_len_tokens = f"{sum(map(lambda u: 1 if len(u) == 1 else 0, original_str_from_tokens.split(url_separator)))} vs " \
                                        f"{sum(map(lambda u: 1 if len(u) == 1 else 0, str_from_tokens.split(url_separator)))}"
 
-            logger_verbose["tokens"].debug("%s\t%s\t%s\t%s\t%d\t%s\t%s", target_urls[idx], original_str_from_tokens, str(url_tokens).replace('\n', ' '), str_from_tokens, unk, sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
+            logger_tokens.debug("%s\t%s\t%s\t%s\t%d\t%s\t%s", target_urls[idx], original_str_from_tokens,
+                                                              str(url_tokens).replace('\n', ' '), str_from_tokens, unk,
+                                                              sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
-        with amp_context_manager:
-            outputs = model(urls, attention_mask).logits
+        # Inference
+        results = inference_with_heads(model, ["urls_classification"], tokenizer, {"urls": urls, "attention_mask": attention_mask}, regression, amp_context_manager)
 
-        regression = outputs.cpu().detach().numpy().shape[1] == 1
-
-        if regression:
-            # Regression
-            outputs = torch.sigmoid(outputs).detach()
-            outputs_argmax = torch.round(outputs).squeeze(1).cpu().numpy().astype(np.int64)
-        else:
-            # Binary classification
-            outputs = outputs.detach()
-            outputs_argmax = torch.argmax(F.softmax(outputs, dim=1), dim=1).cpu().numpy()
-
-        outputs = outputs.cpu()
+        # Get results only for main task
+        outputs = results["urls_classification"]["outputs"].cpu()
+        outputs_argmax = results["urls_classification"]["outputs_argmax"]
 
         # TODO TEST_BEFORE if we use outputs_argmax.squeeze(1) instead of outputs_argmax.squeeze(), the following condition should be safe to be removed
         if len(outputs_argmax.shape) == 0:
@@ -241,7 +246,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
         if parallel_likelihood:
             for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
-                likelihood = data[0] if regression else data[1] # parallel
+                likelihood = data if regression else data[1] # parallel
 
                 if likelihood >= threshold:
                     print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
@@ -296,7 +301,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                                                       f"({outputs.numpy().shape[0]} vs {len(trg_urls)})"
 
     if parallel_likelihood:
-        results = [data[0] if regression else data[1] for data in outputs.numpy()]
+        results = [data if regression else data[1] for data in outputs.numpy()]
         results = [likelihood for likelihood in results if likelihood >= threshold]
     else:
         results = ['parallel' if argmax == 1 else 'non-parallel' for argmax in outputs_argmax]

@@ -231,6 +231,7 @@ def main(args):
     auxiliary_tasks = args.auxiliary_tasks if args.auxiliary_tasks else []
     auxiliary_tasks_weights = args.auxiliary_tasks_weights
     freeze_embeddings_layer = args.freeze_embeddings_layer
+    waiting_time = args.waiting_time
 
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
@@ -266,7 +267,6 @@ def main(args):
     if lock_file:
         logger.debug("Lock file will be created if the training finishes: %s", lock_file)
 
-    waiting_time = 20
     num_labels = 1 if regression else 2
     classes = 2
     amp_context_manager, amp_grad_scaler, cuda_amp = get_amp_context_manager(cuda_amp, use_cuda)
@@ -282,27 +282,6 @@ def main(args):
 
     # Disable parallelism since throws warnings
     os.environ["TOKENIZERS_PARALLELISM"] = "False"
-
-    if not log_directory:
-        log_directory = tempfile.mkdtemp(prefix=f"puc_{datetime.now().strftime('%Y%m%d%H%M%S')}_")
-
-    if not utils.exists(log_directory, f=os.path.isdir):
-        raise Exception(f"Provided log directory does not exist: '{log_directory}'")
-    else:
-        logger.info("Log directory: %s", log_directory)
-
-        log_directory_files = os.listdir(utils.resolve_path(log_directory))
-
-        if len(log_directory_files) != 0:
-            logger.warning("Log directory contain %d files: waiting %d seconds before proceed", len(log_directory_files), waiting_time)
-
-            time.sleep(waiting_time)
-
-    # Loggers
-    logger_verbose["tokens"] = logging.getLogger("parallel_urls_classifier.tokens")
-    logger_verbose["tokens"].propagate = False # We don't want to see the messages multiple times
-    logger_verbose["tokens"] = utils.set_up_logging_logger(logger_verbose["tokens"], level=logging.DEBUG if args.verbose else logging.INFO,
-                                                           filename=f"{log_directory}/tokens", format="%(asctime)s\t%(levelname)s\t%(message)s")
 
     if not apply_inference and train_until_patience:
         logger.warning("Be aware that even training until patience is reached and not a fixed number of epochs, the selected number of epochs is relevant since it is a parameter which is used by the LR scheduler")
@@ -408,8 +387,8 @@ def main(args):
         logger.error("Embedding layer size does not match with the tokenizer size: %d vs %d", model_embeddings_size, len(tokenizer))
 
     if apply_inference:
-        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, logger,
-                              logger_verbose, inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
+        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, regression,
+                              inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
                               parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
                               remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower)
 
@@ -675,8 +654,8 @@ def main(args):
                 labels = inputs_and_outputs["labels"]
 
                 # Inference
-                results = inference_with_heads(model, all_tasks, tokenizer, criteria, inputs_and_outputs, regression,
-                                               amp_context_manager, tasks_weights=auxiliary_tasks_weights)
+                results = inference_with_heads(model, all_tasks, tokenizer, inputs_and_outputs, regression, amp_context_manager,
+                                               criteria=criteria, tasks_weights=auxiliary_tasks_weights)
 
                 # Main task
                 outputs_argmax = results["urls_classification"]["outputs_argmax"]
@@ -1034,6 +1013,8 @@ def initialization():
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
     parser.add_argument('--plot-path', help="If set, the plot will be stored instead of displayed")
     parser.add_argument('--lock-file', help="If set, and the file does not exist, it will be created once the training finishes. If does exist, the training will not be executed")
+    parser.add_argument('--waiting-time', type=int, default=20, help="Waiting time, if needed for letting the user react")
+
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 
@@ -1043,9 +1024,38 @@ def initialization():
 
 def cli():
     global logger
+    global logger_verbose
 
     args = initialization()
+
+    # Fix args.log_directory if needed
+    log_directory = args.log_directory
+    waiting_time = args.waiting_time
+
+    if not log_directory:
+        log_directory = tempfile.mkdtemp(prefix=f"puc_{datetime.now().strftime('%Y%m%d%H%M%S')}_")
+
+    if not utils.exists(log_directory, f=os.path.isdir):
+        raise Exception(f"Provided log directory does not exist: '{log_directory}'")
+    else:
+        logger.info("Log directory: %s", log_directory)
+
+        log_directory_files = os.listdir(utils.resolve_path(log_directory))
+
+        if len(log_directory_files) != 0:
+            logger.warning("Log directory contain %d files: waiting %d seconds before proceed", len(log_directory_files), waiting_time)
+
+            time.sleep(waiting_time)
+
+    args.log_directory = log_directory
+
+    # Logging
     logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=logging.DEBUG if args.verbose else logging.INFO)
+    logger.propagate = False # We don't want to see the messages multiple times
+    logger_verbose["tokens"] = logging.getLogger("parallel_urls_classifier.tokens")
+    logger_verbose["tokens"].propagate = False
+    logger_verbose["tokens"] = utils.set_up_logging_logger(logger_verbose["tokens"], level=logging.DEBUG if args.verbose else logging.INFO,
+                                                           filename=f"{log_directory}/tokens", format="%(asctime)s\t%(levelname)s\t%(message)s")
 
     logger.debug("Arguments processed: {}".format(str(args)))
 
