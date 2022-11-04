@@ -85,7 +85,7 @@ def inference_with_heads(model, tasks, tokenizer, criteria, inputs_and_outputs, 
     return results
 
 @torch.no_grad()
-def inference(model, block_size, tasks, tokenizer, criteria, dataloader, max_length_tokens, device, regression,
+def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloader, max_length_tokens, device, regression,
               amp_context_manager, logger, classes=2):
     model.eval()
 
@@ -98,6 +98,7 @@ def inference(model, block_size, tasks, tokenizer, criteria, dataloader, max_len
     total_macro_f1 = 0.0
     all_outputs = []
     all_labels = []
+    total_blocks_per_batch = max(int(np.ceil(batch_size / block_size)), 1)
 
     for idx, batch in enumerate(dataloader):
         for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens):
@@ -116,7 +117,7 @@ def inference(model, block_size, tasks, tokenizer, criteria, dataloader, max_len
                 outputs_mlm = results["mlm"]["outputs"]
 
             loss = results["_internal"]["total_loss"].cpu()
-            loss = loss.cpu()
+            loss = loss.cpu() / total_blocks_per_batch
             labels = labels.cpu()
 
             if regression:

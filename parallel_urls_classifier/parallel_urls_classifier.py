@@ -147,14 +147,14 @@ def load_tokenizer(pretrained_model):
 
     return tokenizer
 
-def get_amp_context_manager(cuda_amp, force_cpu):
+def get_amp_context_manager(cuda_amp, use_cuda):
     use_cuda = torch.cuda.is_available()
     amp_context_manager = contextlib.nullcontext()
     amp_grad_scaler = None
     _cuda_amp = cuda_amp
 
     # Configure AMP context manager
-    if cuda_amp and not force_cpu and use_cuda:
+    if cuda_amp and use_cuda:
         amp_context_manager = torch.cuda.amp.autocast()
         amp_grad_scaler = torch.cuda.amp.GradScaler()
         _cuda_amp = True
@@ -192,9 +192,9 @@ def main(args):
     batch_size = args.batch_size
     block_size = args.block_size
     epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
-    use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
-    device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
+    use_cuda = utils.use_cuda(force_cpu=force_cpu) # Will be True if possible and False otherwise
+    device = torch.device("cuda:0" if use_cuda else "cpu")
     is_device_gpu = device.type.startswith("cuda")
     pretrained_model = args.pretrained_model
     max_length_tokens = args.max_length_tokens
@@ -269,7 +269,7 @@ def main(args):
     waiting_time = 20
     num_labels = 1 if regression else 2
     classes = 2
-    amp_context_manager, amp_grad_scaler, cuda_amp = get_amp_context_manager(cuda_amp, force_cpu)
+    amp_context_manager, amp_grad_scaler, cuda_amp = get_amp_context_manager(cuda_amp, use_cuda)
     pytorch_major, pytorch_minor, pytorch_patch = utils.get_pytorch_version()
 
     if scheduler_str in ("linear",) and train_until_patience:
@@ -277,7 +277,7 @@ def main(args):
         logger.warning("You set a LR scheduler ('%s' scheduler) which conflicts with --train-until-patince: you might want to check this out and change the configuration", scheduler_str)
 
     # Enable cuDNN benchmark
-    if use_cuda and not force_cpu:
+    if use_cuda:
         torch.backends.cudnn.benchmark = True
 
     # Disable parallelism since throws warnings
@@ -523,9 +523,11 @@ def main(args):
 
     no_workers = 0 if is_device_gpu else args.dataset_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
                                                               #  when GPU is being used
-    dataloader_kwargs = {"pin_memory": True,
-                         "pin_memory_device": device.type,
-                         "num_workers": no_workers}
+    dataloader_kwargs = {
+        "pin_memory": True,
+        "pin_memory_device": device.type,
+        "num_workers": no_workers,
+    }
 
     if pytorch_major > 1 or (pytorch_major == 1 and pytorch_minor >= 12):
         # Ok
@@ -808,7 +810,7 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_dev,
+        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
                                           max_length_tokens, device, regression, amp_context_manager, logger,
                                           classes=classes)
 
@@ -908,7 +910,7 @@ def main(args):
 
         model.from_pretrained_wrapper(model_output, device=device)
 
-    dev_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_dev,
+    dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
                                       max_length_tokens, device, regression, amp_context_manager, logger,
                                       classes=classes)
 
@@ -929,7 +931,7 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, block_size, all_tasks, tokenizer, criteria, dataloader_test,
+    test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_test,
                                        max_length_tokens, device, regression, amp_context_manager, logger,
                                        classes=classes)
 

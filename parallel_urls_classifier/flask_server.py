@@ -165,9 +165,9 @@ def batch_prediction(urls):
 
 def main(args):
     model_input = args.model_input
-    use_cuda = torch.cuda.is_available()
     force_cpu = args.force_cpu
-    device = torch.device("cuda:0" if use_cuda and not force_cpu else "cpu")
+    use_cuda = utils.use_cuda(force_cpu=force_cpu)
+    device = torch.device("cuda:0" if use_cuda else "cpu")
     pretrained_model = args.pretrained_model
     flask_port = args.flask_port
     lower = args.do_not_lower
@@ -180,7 +180,7 @@ def main(args):
     global_conf["device"] = device
     global_conf["batch_size"] = args.batch_size
     global_conf["max_length_tokens"] = args.max_length_tokens
-    global_conf["amp_context_manager"] = puc.get_amp_context_manager(args.cuda_amp, force_cpu)
+    global_conf["amp_context_manager"] = puc.get_amp_context_manager(args.cuda_amp, use_cuda)
     global_conf["remove_authority"] = args.remove_authority
     global_conf["remove_positional_data_from_resource"] = not args.do_not_remove_positional_data_from_resource
     global_conf["parallel_likelihood"] = args.parallel_likelihood

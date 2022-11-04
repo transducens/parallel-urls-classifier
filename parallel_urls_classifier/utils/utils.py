@@ -8,6 +8,8 @@ import lzma
 from contextlib import contextmanager
 import argparse
 
+import torch
+
 def wc_l(fd, do_not_count_empty=True):
     no_lines = 0
     tell = fd.tell()
@@ -224,15 +226,13 @@ def update_defined_variables_from_dict(d, provided_locals, smash=False):
     provided_locals.update(d)
 
 def init_weight_and_bias(model, module):
-    import torch.nn as nn
-
-    if isinstance(module, nn.Linear):
+    if isinstance(module, torch.nn.Linear):
         module.weight.data.normal_(mean=0.0, std=model.config.initializer_range)
 
         if module.bias is not None:
             module.bias.data.zero_()
 
-    elif isinstance(module, nn.LayerNorm):
+    elif isinstance(module, torch.nn.LayerNorm):
         module.bias.data.zero_()
         module.weight.data.fill_(1.0)
 
@@ -399,7 +399,7 @@ def get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens)
 
     # Split in batch_size batches
     start = 0
-    end = block_size
+    end = start + block_size
     current_batch_size = labels.reshape(-1).shape[0]
 
     while True:
@@ -423,10 +423,13 @@ def get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens)
             break
 
 def get_pytorch_version():
-    import torch
-
     torch_version_major = int(torch.__version__.split('+')[0].split('.')[0])
     torch_version_minor = int(torch.__version__.split('+')[0].split('.')[1])
     torch_version_patch = int(torch.__version__.split('+')[0].split('.')[2])
 
     return torch_version_major, torch_version_minor, torch_version_patch
+
+def use_cuda(force_cpu=False):
+    use_cuda = torch.cuda.is_available()
+
+    return True if use_cuda and not force_cpu else False
