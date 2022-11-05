@@ -53,7 +53,7 @@ def encode(tokenizer, text, max_length=512, add_special_tokens=True):
     encoder = tokenizer.batch_encode_plus if isinstance(text, list) else tokenizer.encode_plus
 
     # TODO remove automatically padding, sort by length and manually pad in order to improve GPU usage
-    return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding="max_length",
+    return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding="longest",
                    return_attention_mask=True, return_tensors="pt", max_length=max_length)
 
 def apply_model(model, tokenizer, tokens, encode=False):
@@ -390,15 +390,9 @@ def get_idx_resource(url, url_has_protocol=True):
 
     return idx + 1
 
-def get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens):
-    batch_urls_str = batch["url_str"]
-    batch_src_urls_str = [url.split(tokenizer.sep_token)[0] for url in batch_urls_str]
-    batch_trg_urls_str = [url.split(tokenizer.sep_token)[1] for url in batch_urls_str]
-    # URLs merged
-    tokens_urls = encode(tokenizer, batch_urls_str, max_length_tokens)
-    urls = tokens_urls["input_ids"]
-    attention_mask = tokens_urls["attention_mask"]
-    # Labels
+def get_data_from_batch(batch, block_size, device):
+    urls = batch["url_tokens"]
+    attention_mask = batch["url_attention_mask"]
     labels = batch["label"]
 
     # Split in batch_size batches

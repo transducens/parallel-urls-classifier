@@ -97,7 +97,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
     return results
 
 @torch.no_grad()
-def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloader, max_length_tokens, device,
+def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloader, device,
               amp_context_manager, classes=2):
     model.eval()
 
@@ -113,7 +113,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
     total_blocks_per_batch = max(int(np.ceil(batch_size / block_size)), 1)
 
     for idx, batch in enumerate(dataloader):
-        for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens):
+        for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, device):
             labels = inputs_and_outputs["labels"]
 
             # Inference

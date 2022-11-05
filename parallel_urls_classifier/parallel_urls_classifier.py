@@ -8,6 +8,7 @@ import argparse
 import tempfile
 import contextlib
 from datetime import datetime
+import multiprocessing
 
 import parallel_urls_classifier.utils.utils as utils
 from parallel_urls_classifier.inference import (
@@ -29,6 +30,7 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import CyclicLR, LambdaLR
 from torch.optim import Adam, AdamW
 from torch.utils.data import (
+    Sampler,
     Dataset,
     DataLoader,
     RandomSampler,
@@ -52,28 +54,136 @@ logging.getLogger("PIL.PngImagePlugin").setLevel(logging.WARNING)
 logger = logging
 logger_verbose = {"tokens": logging}
 
-class URLsDataset(Dataset):
-    def __init__(self, parallel_urls, non_parallel_urls, regression=False):
+class SmartBatchingURLsDataset(Dataset):
+    def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False):
+        super(SmartBatchingURLsDataset, self).__init__()
+
+        self.max_legnth = max_length
+        self.pad_token_id = tokenizer.pad_token_id
+
         #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # TODO problem here when creating a new tmp array -> big arrays will lead to run out of memory...
-        self.data = non_parallel_urls + parallel_urls
-        self.labels = np.zeros(len(self.data))
+        #self.data = non_parallel_urls + parallel_urls
+        data = utils.encode(tokenizer, non_parallel_urls + parallel_urls, max_length=max_length) # Tokenize data
+        self.tokens = data["input_ids"]
+        self.attention_mask = data["attention_mask"]
+        self.labels = np.zeros(len(self.tokens))
         #self.size_gb = self.data.element_size() * self.data.nelement() / 1000 / 1000 / 1000
 
         #self.labels[:len(non_parallel_urls)] = 0
         # Set to 1 the parallel URLs
         self.labels[len(non_parallel_urls):] = 1
 
+        # Postprocess labels
         self.labels = torch.from_numpy(self.labels)
         self.labels = self.labels.type(torch.FloatTensor) if regression else self.labels.type(torch.LongTensor)
 
     def __len__(self):
-        return len(self.data)
+        return len(self.tokens)
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        return {"url_str": self.data[idx], "label": self.labels[idx]}
+        #return {"url_str": self.data[idx], "label": self.labels[idx]}
+        return {
+            "url_tokens": self.tokens[idx],
+            "url_attention_mask": self.attention_mask[idx],
+            "label": self.labels[idx],
+        }
+
+    def get_dataloader(self, batch_size, device):
+        self.sampler = SmartBatchingSampler(
+            data_source=self.tokens,
+            batch_size=batch_size,
+        )
+        collate_fn = SmartBatchingCollate(
+            targets=self.labels,
+            max_length=self.max_length,
+            pad_token_id=self.pad_token_id,
+        )
+        dataloader = DataLoader(
+            dataset=self,
+            batch_size=batch_size,
+            sampler=self.sampler,
+            collate_fn=collate_fn,
+            num_workers=multiprocessing.cpu_count() - 1,
+            pin_memory=True,
+            pin_memory_device=device.type,
+        )
+
+        return dataloader
+
+class SmartBatchingSampler(Sampler):
+    def __init__(self, data_source, batch_size):
+        super(SmartBatchingSampler, self).__init__(data_source)
+        self.len = len(data_source)
+        sample_lengths = [len(seq) for seq in data_source]
+        argsort_inds = np.argsort(sample_lengths)
+        self.batches = list(more_itertools.chunked(argsort_inds, n=batch_size))
+        self._backsort_inds = None
+    
+    def __iter__(self):
+        if self.batches:
+            last_batch = self.batches.pop(-1)
+            np.random.shuffle(self.batches)
+            self.batches.append(last_batch)
+        self._inds = list(more_itertools.flatten(self.batches))
+        yield from self._inds
+
+    def __len__(self):
+        return self.len
+    
+    @property
+    def backsort_inds(self):
+        if self._backsort_inds is None:
+            self._backsort_inds = np.argsort(self._inds)
+        return self._backsort_inds
+
+class SmartBatchingCollate:
+    def __init__(self, targets, max_length, pad_token_id):
+        self._targets = targets
+        self._max_length = max_length
+        self._pad_token_id = pad_token_id
+        
+    def __call__(self, batch):
+        if self._targets is not None:
+            sequences, targets = list(zip(*batch))
+        else:
+            sequences = list(batch)
+        
+        input_ids, attention_mask = self.pad_sequence(
+            sequences,
+            max_sequence_length=self._max_length,
+            pad_token_id=self._pad_token_id
+        )
+        
+        if self._targets is not None:
+            output = input_ids, attention_mask, torch.tensor(targets)
+        else:
+            output = input_ids, attention_mask
+        return output
+    
+    def pad_sequence(self, sequence_batch, max_sequence_length, pad_token_id):
+        max_batch_len = max(len(sequence) for sequence in sequence_batch)
+        max_len = min(max_batch_len, max_sequence_length)
+        padded_sequences, attention_masks = [[] for i in range(2)]
+        attend, no_attend = 1, 0
+        for sequence in sequence_batch:
+            # As discussed above, truncate if exceeds max_len
+            new_sequence = list(sequence[:max_len])
+            
+            attention_mask = [attend] * len(new_sequence)
+            pad_length = max_len - len(new_sequence)
+            
+            new_sequence.extend([pad_token_id] * pad_length)
+            attention_mask.extend([no_attend] * pad_length)
+            
+            padded_sequences.append(new_sequence)
+            attention_masks.append(attention_mask)
+        
+        padded_sequences = torch.tensor(padded_sequences)
+        attention_masks = torch.tensor(attention_masks)
+        return padded_sequences, attention_masks
 
 def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
     scheduler_instance = None
@@ -476,9 +586,9 @@ def main(args):
     classes_weights = torch.as_tensor(classes_weights, dtype=torch.float)
 
     # Datasets
-    dataset_train = URLsDataset(parallel_urls_train, non_parallel_urls_train, regression=regression)
-    dataset_dev = URLsDataset(parallel_urls_dev, non_parallel_urls_dev, regression=regression)
-    dataset_test = URLsDataset(parallel_urls_test, non_parallel_urls_test, regression=regression)
+    dataset_train = SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer, max_length_tokens, regression=regression)
+    dataset_dev = SmartBatchingURLsDataset(parallel_urls_dev, non_parallel_urls_dev, tokenizer, max_length_tokens, regression=regression)
+    dataset_test = SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer, max_length_tokens, regression=regression)
 
     if imbalanced_strategy == "over-sampling":
         target_list = []
@@ -653,7 +763,7 @@ def main(args):
             model.zero_grad()
 
             # Process in block_size blocks in order to avoid OOM errors, but use batch_size for update the model
-            for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, tokenizer, device, max_length_tokens):
+            for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, device):
                 labels = inputs_and_outputs["labels"]
 
                 # Inference
@@ -793,7 +903,7 @@ def main(args):
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
         dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                          max_length_tokens, device, amp_context_manager, classes=classes)
+                                          device, amp_context_manager, classes=classes)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -892,7 +1002,7 @@ def main(args):
         model.from_pretrained_wrapper(model_output, device=device)
 
     dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                      max_length_tokens, device, amp_context_manager, classes=classes)
+                                      device, amp_context_manager, classes=classes)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -912,7 +1022,7 @@ def main(args):
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
     test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_test,
-                                       max_length_tokens, device, amp_context_manager, classes=classes)
+                                       device, amp_context_manager, classes=classes)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
