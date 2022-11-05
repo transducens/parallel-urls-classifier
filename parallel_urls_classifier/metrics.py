@@ -1,7 +1,11 @@
 
+import logging
+
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+
+logger = logging.getLogger("parallel_urls_classifier")
 
 def get_confusion_matrix(outputs_argmax, labels, classes=2):
     tp, fp, fn, tn = np.zeros(classes), np.zeros(classes), np.zeros(classes), np.zeros(classes)
@@ -19,7 +23,7 @@ def get_confusion_matrix(outputs_argmax, labels, classes=2):
             "fn": fn,
             "tn": tn,}
 
-def get_metrics(outputs_argmax, labels, current_batch_size, logger, classes=2, idx=-1, log=False):
+def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, log=False):
     acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
 
     no_values_per_class = np.zeros(classes)

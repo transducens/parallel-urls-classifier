@@ -161,6 +161,8 @@ def set_up_logging_logger(logger, filename=None, level=logging.INFO, format="[%(
 
     logger.setLevel(level)
 
+    logger.propagate = False # We don't want to see the messages multiple times
+
     return logger
 
 def append_from_tuple(*tuples):

@@ -155,11 +155,11 @@ def batch_prediction(urls):
         trg_urls.append(trg_url)
 
     # Inference
-    results = \
-        puc_inference.non_interactive_inference(
-            model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, src_urls, trg_urls,
-            remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
-            parallel_likelihood=parallel_likelihood, url_separator=url_separator, lower=lower)
+    results = puc_inference.non_interactive_inference(
+        model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, src_urls, trg_urls,
+        remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
+        parallel_likelihood=parallel_likelihood, url_separator=url_separator, lower=lower
+    )
 
     return results
 
@@ -170,17 +170,22 @@ def main(args):
     device = torch.device("cuda:0" if use_cuda else "cpu")
     pretrained_model = args.pretrained_model
     flask_port = args.flask_port
-    lower = args.do_not_lower
+    lower = args.lowercase
 
     logger.debug("Device: %s", device)
 
-    # TODO adapt to new load_model() API
-    global_conf["model"] = puc.load_model(model_input=model_input, device=device) if not global_conf["model"] else global_conf["model"]
+    if not global_conf["model"]:
+        global_conf["model"] = puc.load_model(["urls_classification"], {"urls_classification": {}}, model_input=model_input,
+                                              pretrained_model=pretrained_model, device=device)
+    else:
+        # We apply this step in order to try to avoid to load the model multiple times due to flask debug mode
+        pass
+
     global_conf["tokenizer"] = puc.load_tokenizer(pretrained_model)
     global_conf["device"] = device
     global_conf["batch_size"] = args.batch_size
     global_conf["max_length_tokens"] = args.max_length_tokens
-    global_conf["amp_context_manager"] = puc.get_amp_context_manager(args.cuda_amp, use_cuda)
+    global_conf["amp_context_manager"], _, _ = puc.get_amp_context_manager(args.cuda_amp, use_cuda)
     global_conf["remove_authority"] = args.remove_authority
     global_conf["remove_positional_data_from_resource"] = not args.do_not_remove_positional_data_from_resource
     global_conf["parallel_likelihood"] = args.parallel_likelihood
@@ -189,6 +194,10 @@ def main(args):
     global_conf["disable_streamer"] = args.disable_streamer
     global_conf["expect_urls_base64"] = args.expect_urls_base64
     global_conf["lower"] = lower
+
+    # Some guidance
+    logger.info("Example: curl http://127.0.0.1:%d/hello-world", flask_port)
+    logger.debug("Example: curl http://127.0.0.1:%d/inference -X POST -d \"src_urls=https://domain/resource1&trg_urls=https://domain/resource2\"", flask_port)
 
     # Run flask server
     app.run(debug=args.flask_debug, port=flask_port)
@@ -212,14 +221,12 @@ def initialization():
     parser.add_argument('--disable-streamer', action="store_true", help="Do not use streamer (it might lead to slower inference and OOM errors)")
     parser.add_argument('--expect-urls-base64', action="store_true", help="Decode BASE64 URLs")
     parser.add_argument('--flask-port', type=int, default=5000, help="Flask port")
-    parser.add_argument('--do-not-lower', action="store_true", help="Do not lower URLs while preprocessing")
+    parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs while preprocessing")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")
 
     args = parser.parse_args()
-
-    print(args)
 
     return args
 

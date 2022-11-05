@@ -14,12 +14,10 @@ import torch
 import torch.nn.functional as F
 import transformers
 
-# TODO remove all "logger" parameters from functions since we can define this global variable
-#  and it works with the set configuration from the main file
 logger = logging.getLogger("parallel_urls_classifier")
 logger_tokens = logging.getLogger("parallel_urls_classifier.tokens")
 
-def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, regression, amp_context_manager,
+def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_context_manager,
                          tasks_weights=None, criteria=None):
     results = {"_internal": {"total_loss": None}}
 
@@ -55,6 +53,8 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, regression
             if head_task == "urls_classification":
                 # Main task
 
+                regression = outputs.cpu().detach().numpy().shape[1] == 1
+
                 if regression:
                     # Regression
                     outputs = torch.sigmoid(outputs).squeeze(1)
@@ -71,6 +71,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, regression
                     "outputs": outputs,
                     "outputs_argmax": outputs_argmax,
                     "loss_detach": loss.cpu().detach() if criterion else None,
+                    "regression": regression,
                 }
             elif head_task == "mlm":
                 if criterion:
@@ -96,8 +97,8 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, regression
     return results
 
 @torch.no_grad()
-def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloader, max_length_tokens, device, regression,
-              amp_context_manager, logger, classes=2):
+def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloader, max_length_tokens, device,
+              amp_context_manager, classes=2):
     model.eval()
 
     total_loss = 0.0
@@ -116,12 +117,12 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
             labels = inputs_and_outputs["labels"]
 
             # Inference
-            results = inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, regression, amp_context_manager,
-                                           criteria=criteria)
+            results = inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_context_manager, criteria=criteria)
 
             # Tasks
             loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?
             outputs_argmax = results["urls_classification"]["outputs_argmax"]
+            regression = results["urls_classification"]["regression"]
 
             if "mlm" in results:
                 # TODO propagate somehow? Statistics?
@@ -142,7 +143,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
 
     all_outputs = torch.as_tensor(all_outputs)
     all_labels = torch.as_tensor(all_labels)
-    metrics = get_metrics(all_outputs, all_labels, len(all_labels), logger, classes=classes)
+    metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
 
     total_loss /= idx + 1
     total_acc += metrics["acc"]
@@ -152,16 +153,18 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
     total_acc_per_class_abs_f1 += metrics["f1"]
     total_macro_f1 += metrics["macro_f1"]
 
-    return {"loss": total_loss,
-            "acc": total_acc,
-            "acc_per_class": total_acc_per_class,
-            "precision": total_acc_per_class_abs_precision,
-            "recall": total_acc_per_class_abs_recall,
-            "f1": total_acc_per_class_abs_f1,
-            "macro_f1": total_macro_f1,}
+    return {
+        "loss": total_loss,
+        "acc": total_acc,
+        "acc_per_class": total_acc_per_class,
+        "precision": total_acc_per_class_abs_precision,
+        "recall": total_acc_per_class_abs_recall,
+        "f1": total_acc_per_class_abs_f1,
+        "macro_f1": total_macro_f1,
+    }
 
 @torch.no_grad()
-def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, regression,
+def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                           inference_from_stdin=False, remove_authority=False, remove_positional_data_from_resource=False,
                           parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True):
     logger.info("Inference mode enabled")
@@ -211,7 +214,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
         # Debug info
         ## Tokens
-        urls_tokens = urls.cpu() * attention_mask.cpu() # PAD tokens -> 0
+        urls_tokens = urls.cpu()
 
         for idx, ut in enumerate(urls_tokens):
             url_tokens = ut[ut != tokenizer.pad_token_id]
@@ -229,15 +232,16 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                                               sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
         # Inference
-        results = inference_with_heads(model, ["urls_classification"], tokenizer, {"urls": urls, "attention_mask": attention_mask}, regression, amp_context_manager)
+        results = inference_with_heads(model, ["urls_classification"], tokenizer, {"urls": urls, "attention_mask": attention_mask},
+                                       amp_context_manager)
 
         # Get results only for main task
         outputs = results["urls_classification"]["outputs"].cpu()
         outputs_argmax = results["urls_classification"]["outputs_argmax"]
+        regression = results["urls_classification"]["regression"]
 
-        # TODO TEST_BEFORE if we use outputs_argmax.squeeze(1) instead of outputs_argmax.squeeze(), the following condition should be safe to be removed
-        if len(outputs_argmax.shape) == 0:
-            outputs_argmax = np.array([outputs_argmax])
+        #if len(outputs_argmax.shape) == 0:
+        #    outputs_argmax = np.array([outputs_argmax])
 
         assert outputs.numpy().shape[0] == len(initial_src_urls), "Output samples does not match with the length of src URLs " \
                                                                   f"({outputs.numpy().shape[0]} vs {len(initial_src_urls)})"
@@ -257,7 +261,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 @torch.no_grad()
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
-                              parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True):
+                              parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=False):
     model.eval()
     results = []
 
@@ -275,25 +279,17 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     urls = tokens["input_ids"].to(device)
     attention_mask = tokens["attention_mask"].to(device)
 
-    with amp_context_manager:
-        outputs = model(urls, attention_mask).logits
+    # Inference
+    results = inference_with_heads(model, ["urls_classification"], tokenizer, {"urls": urls, "attention_mask": attention_mask},
+                                   amp_context_manager)
 
-    regression = outputs.cpu().detach().numpy().shape[1] == 1
+    # Get results only for main task
+    outputs = results["urls_classification"]["outputs"].cpu()
+    outputs_argmax = results["urls_classification"]["outputs_argmax"]
+    regression = results["urls_classification"]["regression"]
 
-    if regression:
-        # Regression
-        outputs = torch.sigmoid(outputs).detach()
-        outputs_argmax = torch.round(outputs).squeeze(1).cpu().numpy().astype(np.int64)
-    else:
-        # Binary classification
-        outputs = outputs.detach()
-        outputs_argmax = torch.argmax(F.softmax(outputs, dim=1), dim=1).cpu().numpy()
-
-    outputs = outputs.cpu()
-
-    # TODO TEST_BEFORE if we use outputs_argmax.squeeze(1) instead of outputs_argmax.squeeze(), the following condition should be safe to be removed
-    if len(outputs_argmax.shape) == 0:
-        outputs_argmax = np.array([outputs_argmax])
+    #if len(outputs_argmax.shape) == 0:
+    #    outputs_argmax = np.array([outputs_argmax])
 
     assert outputs.numpy().shape[0] == len(src_urls), "Output samples does not match with the length of src URLs " \
                                                       f"({outputs.numpy().shape[0]} vs {len(src_urls)})"

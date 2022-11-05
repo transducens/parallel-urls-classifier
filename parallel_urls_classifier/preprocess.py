@@ -24,7 +24,7 @@ def stringify_url(url, separator=' ', lower=False):
     return url
 
 def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_data=False, separator=' ',
-                   stringify_instead_of_tokenization=False, remove_protocol=True, lower=True):
+                   stringify_instead_of_tokenization=False, remove_protocol=True, lower=False):
     urls = []
 
     if isinstance(url, str):

@@ -227,7 +227,7 @@ def main(args):
     llrd = args.llrd
     lock_file = args.lock_file
     stringify_instead_of_tokenization = args.stringify_instead_of_tokenization
-    lower = not args.do_not_lower
+    lower = args.lowercase
     auxiliary_tasks = args.auxiliary_tasks if args.auxiliary_tasks else []
     auxiliary_tasks_weights = args.auxiliary_tasks_weights
     freeze_embeddings_layer = args.freeze_embeddings_layer
@@ -326,7 +326,7 @@ def main(args):
     total_auxiliary_tasks = 0
 
     if "mlm" in auxiliary_tasks:
-        all_tasks_kwargs["mlm"] = {"num_labels": num_labels} # TODO is this doing something even wrong? Why are we doing this?
+        all_tasks_kwargs["mlm"] = {}
 
         logger.info("Using auxiliary task: mlm")
 
@@ -376,6 +376,9 @@ def main(args):
 
         if not model_input:
             model.get_base_model().resize_token_embeddings(len(tokenizer))
+
+            if freeze_embeddings_layer:
+                logger.warning("Embeddings layer is frozen, and new tokens will not be trained")
         elif model_embeddings_size + 1 == len(tokenizer):
             logger.warning("You've loaded a model which does not have the new token, so the results might be unexpected")
 
@@ -387,7 +390,7 @@ def main(args):
         logger.error("Embedding layer size does not match with the tokenizer size: %d vs %d", model_embeddings_size, len(tokenizer))
 
     if apply_inference:
-        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, regression,
+        interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
                               parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
                               remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower)
@@ -654,7 +657,7 @@ def main(args):
                 labels = inputs_and_outputs["labels"]
 
                 # Inference
-                results = inference_with_heads(model, all_tasks, tokenizer, inputs_and_outputs, regression, amp_context_manager,
+                results = inference_with_heads(model, all_tasks, tokenizer, inputs_and_outputs, amp_context_manager,
                                                criteria=criteria, tasks_weights=auxiliary_tasks_weights)
 
                 # Main task
@@ -707,7 +710,7 @@ def main(args):
 
             # Get metrics
             log = (idx + 1) % show_statistics_every_batches == 0
-            metrics = get_metrics(torch.as_tensor(batch_outputs), batch_labels_tensor, current_batch_size, logger,
+            metrics = get_metrics(torch.as_tensor(batch_outputs), batch_labels_tensor, current_batch_size,
                                   classes=classes, idx=idx, log=log)
 
             if log:
@@ -769,7 +772,7 @@ def main(args):
 
         all_outputs = torch.as_tensor(all_outputs)
         all_labels = torch.as_tensor(all_labels)
-        metrics = get_metrics(all_outputs, all_labels, len(all_labels), logger, classes=classes)
+        metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
 
         epoch_loss /= idx + 1
         epoch_acc = metrics["acc"]
@@ -790,8 +793,7 @@ def main(args):
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
         dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                          max_length_tokens, device, regression, amp_context_manager, logger,
-                                          classes=classes)
+                                          max_length_tokens, device, amp_context_manager, classes=classes)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -890,8 +892,7 @@ def main(args):
         model.from_pretrained_wrapper(model_output, device=device)
 
     dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                      max_length_tokens, device, regression, amp_context_manager, logger,
-                                      classes=classes)
+                                      max_length_tokens, device, amp_context_manager, classes=classes)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -911,8 +912,7 @@ def main(args):
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
     test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_test,
-                                       max_length_tokens, device, regression, amp_context_manager, logger,
-                                       classes=classes)
+                                       max_length_tokens, device, amp_context_manager, classes=classes)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
@@ -1004,7 +1004,7 @@ def initialization():
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")
     parser.add_argument('--stringify-instead-of-tokenization', action="store_true", help="Preprocess URLs applying custom stringify instead of tokenization")
-    parser.add_argument('--do-not-lower', action="store_true", help="Do not lower URLs while preprocessing")
+    parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs while preprocessing")
     parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm"], help="Tasks which will try to help to the main task (multitasking)")
     parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
@@ -1022,13 +1022,7 @@ def initialization():
 
     return args
 
-def cli():
-    global logger
-    global logger_verbose
-
-    args = initialization()
-
-    # Fix args.log_directory if needed
+def fix_log_directory(args):
     log_directory = args.log_directory
     waiting_time = args.waiting_time
 
@@ -1049,15 +1043,25 @@ def cli():
 
     args.log_directory = log_directory
 
+def cli():
+    global logger
+    global logger_verbose
+
+    args = initialization()
+
     # Logging
     logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=logging.DEBUG if args.verbose else logging.INFO)
-    logger.propagate = False # We don't want to see the messages multiple times
+
+    logger.debug("Arguments processed: {}".format(str(args))) # First logging message should be the processed arguments
+
+    # Verbose loggers
     logger_verbose["tokens"] = logging.getLogger("parallel_urls_classifier.tokens")
     logger_verbose["tokens"].propagate = False
-    logger_verbose["tokens"] = utils.set_up_logging_logger(logger_verbose["tokens"], level=logging.DEBUG if args.verbose else logging.INFO,
-                                                           filename=f"{log_directory}/tokens", format="%(asctime)s\t%(levelname)s\t%(message)s")
 
-    logger.debug("Arguments processed: {}".format(str(args)))
+    fix_log_directory(args) # We are going to use args.log_directory, so fix it if needed
+
+    logger_verbose["tokens"] = utils.set_up_logging_logger(logger_verbose["tokens"], level=logging.DEBUG if args.verbose else logging.INFO,
+                                                           filename=f"{args.log_directory}/tokens", format="%(asctime)s\t%(levelname)s\t%(message)s")
 
     main(args)
 
