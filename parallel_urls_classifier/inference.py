@@ -263,43 +263,46 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                               src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
                               parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=False):
     model.eval()
-    results = []
+    all_results = []
 
     # Process URLs
     src_urls = [src_url.replace('\t', ' ') for src_url in src_urls]
     trg_urls = [trg_url.replace('\t', ' ') for trg_url in trg_urls]
     str_urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
-    target_urls = next(utils.tokenize_batch_from_fd(str_urls, tokenizer, batch_size,
+    urls_generator = utils.tokenize_batch_from_fd(str_urls, tokenizer, batch_size,
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
-                                                                  separator=url_separator, lower=lower)))
+                                                                  separator=url_separator, lower=lower))
 
-    # Tokens
-    tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
-    urls = tokens["input_ids"].to(device)
-    attention_mask = tokens["attention_mask"].to(device)
+    for target_urls in urls_generator:
+        # Tokens
+        tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
+        urls = tokens["input_ids"].to(device)
+        attention_mask = tokens["attention_mask"].to(device)
 
-    # Inference
-    results = inference_with_heads(model, ["urls_classification"], tokenizer, {"urls": urls, "attention_mask": attention_mask},
-                                   amp_context_manager)
+        # Inference
+        results = inference_with_heads(model, ["urls_classification"], tokenizer, {"urls": urls, "attention_mask": attention_mask},
+                                    amp_context_manager)
 
-    # Get results only for main task
-    outputs = results["urls_classification"]["outputs"].cpu()
-    outputs_argmax = results["urls_classification"]["outputs_argmax"]
-    regression = results["urls_classification"]["regression"]
+        # Get results only for main task
+        outputs = results["urls_classification"]["outputs"].cpu()
+        outputs_argmax = results["urls_classification"]["outputs_argmax"]
+        regression = results["urls_classification"]["regression"]
 
-    #if len(outputs_argmax.shape) == 0:
-    #    outputs_argmax = np.array([outputs_argmax])
+        #if len(outputs_argmax.shape) == 0:
+        #    outputs_argmax = np.array([outputs_argmax])
 
-    assert outputs.numpy().shape[0] == len(src_urls), "Output samples does not match with the length of src URLs " \
-                                                      f"({outputs.numpy().shape[0]} vs {len(src_urls)})"
-    assert outputs.numpy().shape[0] == len(trg_urls), "Output samples does not match with the length of trg URLs " \
-                                                      f"({outputs.numpy().shape[0]} vs {len(trg_urls)})"
+        assert outputs.numpy().shape[0] == len(src_urls), "Output samples does not match with the length of src URLs " \
+                                                        f"({outputs.numpy().shape[0]} vs {len(src_urls)})"
+        assert outputs.numpy().shape[0] == len(trg_urls), "Output samples does not match with the length of trg URLs " \
+                                                        f"({outputs.numpy().shape[0]} vs {len(trg_urls)})"
 
-    if parallel_likelihood:
-        results = [data if regression else data[1] for data in outputs.numpy()]
-        results = [likelihood for likelihood in results if likelihood >= threshold]
-    else:
-        results = ['parallel' if argmax == 1 else 'non-parallel' for argmax in outputs_argmax]
+        if parallel_likelihood:
+            _results = [data if regression else data[1] for data in outputs.numpy()]
+            _results = [likelihood for likelihood in _results if likelihood >= threshold]
+        else:
+            _results = ['parallel' if argmax == 1 else 'non-parallel' for argmax in outputs_argmax]
 
-    return results
+        all_results.extend(_results)
+
+    return all_results
