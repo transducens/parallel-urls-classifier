@@ -53,8 +53,10 @@ def encode(tokenizer, text, max_length=512, add_special_tokens=True):
     encoder = tokenizer.batch_encode_plus if isinstance(text, list) else tokenizer.encode_plus
 
     # TODO remove automatically padding, sort by length and manually pad in order to improve GPU usage
-    return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding="longest",
-                   return_attention_mask=True, return_tensors="pt", max_length=max_length)
+    #return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding="longest",
+                    return_attention_mask=True, return_tensors="pt", max_length=max_length)
+    return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding="do_not_pad",
+                   return_attention_mask=False, return_tensors="pt", max_length=max_length)
 
 def apply_model(model, tokenizer, tokens, encode=False):
     if encode:
@@ -421,9 +423,17 @@ def get_data_from_batch(batch, block_size, device):
             break
 
 def get_pytorch_version():
-    torch_version_major = int(torch.__version__.split('+')[0].split('.')[0])
-    torch_version_minor = int(torch.__version__.split('+')[0].split('.')[1])
-    torch_version_patch = int(torch.__version__.split('+')[0].split('.')[2])
+    try:
+        torch_version = list(map(int, torch.__version__.split('+')[0]))
+    except Exception as e:
+        logger.error("%s", str(e))
+        logger.error("Unexpected exception: returning -1.-1.-1 as torch version")
+
+        return -1, -1, -1
+
+    assert len(torch_version) == 3, f"Torch version is expected to be X.Y.Z, but got {'.'.join(torch_version)}"
+
+    torch_version_major, torch_version_minor, torch_version_patch = torch_version
 
     return torch_version_major, torch_version_minor, torch_version_patch
 
