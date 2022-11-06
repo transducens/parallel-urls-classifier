@@ -134,7 +134,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
             labels = labels.cpu()
 
             if regression:
-                labels = torch.round(labels).type(torch.LongTensor)
+                labels = torch.round(labels).type(torch.long)
 
             total_loss += loss
 

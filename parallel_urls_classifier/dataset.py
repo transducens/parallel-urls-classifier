@@ -1,4 +1,5 @@
 
+import logging
 import multiprocessing
 
 import parallel_urls_classifier.utils.utils as utils
@@ -10,13 +11,19 @@ from torch.utils.data import (
     DataLoader,
 )
 import numpy as np
+import more_itertools
+
+logger = logging.getLogger("parallel_urls_classifier")
+
+# Original code from https://www.kaggle.com/code/rhtsingh/speeding-up-transformer-w-optimization-strategies?scriptVersionId=67176227&cellId=2
 
 class SmartBatchingURLsDataset(Dataset):
     def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False):
         super(SmartBatchingURLsDataset, self).__init__()
 
-        self.max_legnth = max_length
+        self.max_length = max_length
         self.pad_token_id = tokenizer.pad_token_id
+        self.regression = regression
 
         #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # TODO problem here when creating a new tmp array -> big arrays will lead to run out of memory...
         #self.data = non_parallel_urls + parallel_urls
@@ -37,7 +44,7 @@ class SmartBatchingURLsDataset(Dataset):
 
         # Postprocess labels
         self.labels = torch.from_numpy(self.labels)
-        self.labels = self.labels.type(torch.FloatTensor) if regression else self.labels.type(torch.LongTensor)
+        self.labels = self.labels.type(torch.float) if regression else self.labels.type(torch.long)
 
     def __len__(self):
         return len(self.tokens)
@@ -47,19 +54,26 @@ class SmartBatchingURLsDataset(Dataset):
             idx = idx.tolist()
 
         #return {"url_str": self.data[idx], "label": self.labels[idx]}
-        return {
-            "url_tokens": self.tokens[idx],
-            #"url_attention_mask": self.attention_mask[idx],
-            "label": self.labels[idx],
-        }
+        #return {
+        #    "url_tokens": self.tokens[idx],
+        #    #"url_attention_mask": self.attention_mask[idx],
+        #    "label": self.labels[idx],
+        #}
+        return self.tokens[idx], self.labels[idx]
 
-    def get_dataloader(self, batch_size, device, sampler=None):
+    def get_dataloader(self, batch_size, device, force_cpu, num_workers, sampler=None, over_sampling=False, classes_weights=None):
+        is_device_gpu = device.type.startswith("cuda")
+
         if sampler:
             self.sampler = sampler
         else:
             self.sampler = SmartBatchingSampler(
                 data_source=self.tokens,
                 batch_size=batch_size,
+                regression=self.regression,
+                data_labels=self.labels,
+                over_sampling=over_sampling,
+                classes_weights=classes_weights,
             )
 
         collate_fn = SmartBatchingCollate(
@@ -67,14 +81,37 @@ class SmartBatchingURLsDataset(Dataset):
             max_length=self.max_length,
             pad_token_id=self.pad_token_id,
         )
+        num_workers = 0 if is_device_gpu else multiprocessing.cpu_count() - 1 \
+                        if num_workers < 0 else num_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
+                                                            #  when GPU is being used
+        dataloader_kwargs = {
+            "pin_memory": True,
+            "pin_memory_device": device.type,
+            "num_workers": num_workers,
+        }
+
+        # Check if we can use recent pytorch features
+        pytorch_major, pytorch_minor, pytorch_patch = utils.get_pytorch_version()
+
+        if pytorch_major > 1 or (pytorch_major == 1 and pytorch_minor >= 12):
+            # Ok
+            pass
+        else:
+            logger.warning("Unexpected pytorch version: making some changes in DataLoader")
+
+            del dataloader_kwargs["pin_memory_device"]
+
+            if force_cpu:
+                # pin_memory uses GPU if available
+
+                dataloader_kwargs["pin_memory"] = False
+
         dataloader = DataLoader(
             dataset=self,
             batch_size=batch_size,
             sampler=self.sampler,
             collate_fn=collate_fn,
-            num_workers=multiprocessing.cpu_count() - 1,
-            pin_memory=True,
-            pin_memory_device=device.type,
+            **dataloader_kwargs,
         )
 
         return dataloader
@@ -84,23 +121,49 @@ class SmartBatchingURLsDataset(Dataset):
         return self._total_tokens
 
 class SmartBatchingSampler(Sampler):
-    def __init__(self, data_source, batch_size):
+    def __init__(self, data_source, batch_size, regression=False, over_sampling=False, data_labels=None, classes_weights=None):
         super(SmartBatchingSampler, self).__init__(data_source)
 
         self.len = len(data_source)
+        self.regression = regression
         sample_lengths = [len(seq) for seq in data_source]
         argsort_inds = np.argsort(sample_lengths) # Get indexes of tokens sorted by length
         self.batches = list(more_itertools.chunked(argsort_inds, n=batch_size)) # Batches of indexes sorted by tokens length
         self._backsort_inds = None
+        self.over_sampling = over_sampling
+        self.classes_weights = classes_weights
+        self.data_labels = data_labels.cpu().detach()
+        self.data_labels = torch.round(self.data_labels).type(torch.long) if self.regression else self.data_labels
+
+        if over_sampling:
+            if data_labels is None or classes_weights is None:
+                raise Exception("In order to apply over-sampling, data_labels and classes_weights have to be provided")
+
+            if self.len != len(data_labels):
+                raise Exception(f"Data length is different from the data labels length: {self.len} vs {len(data_labels)}")
 
     def __iter__(self):
-        if self.batches:
-            last_batch = self.batches.pop(-1) # Remove last element before randomizing since its length might be less than the batch size
+        _batches = self.batches
 
-            np.random.shuffle(self.batches) # Randomize batches
-            self.batches.append(last_batch) # Add the previously removed last element
+        if _batches:
+            last_batch = _batches.pop(-1) # Remove last element before randomizing since its length might be less than the batch size
 
-        self._inds = list(more_itertools.flatten(self.batches))
+            np.random.shuffle(_batches) # Randomize batches
+            _batches.append(last_batch) # Add the previously removed last element
+
+            if self.over_sampling:
+                for chunk_idx, chunk in enumerate(_batches):
+                    labels = np.array(self.data_labels)[chunk]
+
+                    if len(np.unique(labels)) <= 1:
+                        # Do not modify the batch if is not necessary
+                        continue
+
+                    _labels = torch.tensor([self.classes_weights[l] for l in labels])
+                    idxs = torch.multinomial(_labels, len(chunk), True)
+                    _batches[chunk_idx] = np.array(_batches[chunk_idx])[idxs].tolist()
+
+        self._inds = list(more_itertools.flatten(_batches))
 
         yield from self._inds # Return index of the randomized batches flattened but sorted by tokens length
 
@@ -124,10 +187,9 @@ class SmartBatchingCollate:
         targets = None
 
         if self._targets is not None:
-            sequences = batch["url_tokens"]
-            targets = batch["label"]
+            sequences, targets = list(zip(*batch))
         else:
-            sequences = batch["url_tokens"]
+            sequences = list(batch)
 
         input_ids, attention_mask = self.pad_sequence(sequences, self._max_length, self._pad_token_id)
 

@@ -247,7 +247,6 @@ def main(args):
     num_labels = 1 if regression else 2
     classes = 2
     amp_context_manager, amp_grad_scaler, cuda_amp = get_amp_context_manager(cuda_amp, use_cuda)
-    pytorch_major, pytorch_minor, pytorch_patch = utils.get_pytorch_version()
 
     if scheduler_str in ("linear",) and train_until_patience:
         # Depending on the LR scheduler, the training might even stop at some point (e.g. linear LR scheduler will set the LR=0 if the run epochs is greater than the provided epochs)
@@ -452,6 +451,7 @@ def main(args):
     logger.debug("Classes weights: %s", str(classes_weights))
 
     classes_weights = torch.as_tensor(classes_weights, dtype=torch.float)
+    over_sampling = imbalanced_strategy == "over-sampling"
 
     # Datasets
     dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
@@ -465,61 +465,10 @@ def main(args):
     logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
 
-    # TODO fix the use of the following variables
-    if imbalanced_strategy == "over-sampling":
-        target_list = []
-
-        for t in dataset_train:
-            l = t["label"]
-
-            if regression:
-                l = torch.round(l).type(torch.LongTensor)
-
-            target_list.append(l)
-
-        target_list = torch.as_tensor(target_list)
-        classes_weights_all = classes_weights[target_list]
-
-        # Over-sampling
-        train_sampler = WeightedRandomSampler(
-            weights=classes_weights_all,
-            num_samples=len(classes_weights_all),
-            replacement=True
-        )
-    else:
-        train_sampler = RandomSampler(dataset_train)
-
-    # TODO remove the following variables
-    no_workers = 0 if is_device_gpu else args.dataset_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
-                                                              #  when GPU is being used
-    dataloader_kwargs = {
-        "pin_memory": True,
-        "pin_memory_device": device.type,
-        "num_workers": no_workers,
-    }
-
-    if pytorch_major > 1 or (pytorch_major == 1 and pytorch_minor >= 12):
-        # Ok
-        pass
-    else:
-        logger.warning("Unexpected pytorch version: making some changes: DataLoader")
-
-        del dataloader_kwargs["pin_memory_device"]
-
-        if force_cpu:
-            # pin_memory uses GPU if available
-
-            dataloader_kwargs["pin_memory"] = False
-            no_workers = args.dataset_workers
-            dataloader_kwargs["num_workers"] = no_workers
-
-    #dataloader_train = DataLoader(dataset_train, batch_size=batch_size, sampler=train_sampler, **dataloader_kwargs)
-    #dataloader_dev = DataLoader(dataset_dev, batch_size=batch_size, sampler=SequentialSampler(dataset_dev), **dataloader_kwargs)
-    #dataloader_test = DataLoader(dataset_test, batch_size=batch_size, sampler=SequentialSampler(dataset_test), **dataloader_kwargs)
-
-    dataloader_train = dataset_train.get_dataloader(batch_size, device)
-    dataloader_dev = dataset_dev.get_dataloader(batch_size, device)
-    dataloader_test = dataset_test.get_dataloader(batch_size, device)
+    dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers,
+                                                    over_sampling=over_sampling, classes_weights=classes_weights)
+    dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
+    dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
 
     #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
@@ -631,6 +580,7 @@ def main(args):
         epoch_macro_f1 = 0.0
         all_outputs = []
         all_labels = []
+        total_train_tokens = 0
 
         model.train()
 
@@ -646,6 +596,7 @@ def main(args):
             # Process in block_size blocks in order to avoid OOM errors, but use batch_size for update the model
             for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, device):
                 labels = inputs_and_outputs["labels"]
+                total_train_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
 
                 # Inference
                 results = inference_with_heads(model, all_tasks, tokenizer, inputs_and_outputs, amp_context_manager,
@@ -665,7 +616,7 @@ def main(args):
                 labels = labels.cpu()
 
                 if regression:
-                    labels = torch.round(labels).type(torch.LongTensor)
+                    labels = torch.round(labels).type(torch.long)
 
                 batch_outputs.extend(outputs_argmax.tolist())
                 batch_labels.extend(labels.tolist())
@@ -755,6 +706,13 @@ def main(args):
                 optimizer.step()
 
             scheduler.step()
+
+        if total_train_tokens != dataset_train.total_tokens:
+            if over_sampling:
+                pass
+            else:
+                logger.error("Total processed tokens are different from the initial total tokens: %d vs %d",
+                            total_train_tokens, dataset_train.total_tokens)
 
         current_last_layer_output = utils.get_layer_from_model(model.get_base_model().base_model.encoder.layer[-1], name="output.dense.weight")
         layer_updated = (current_last_layer_output != last_layer_output).any().cpu().detach().numpy()
@@ -959,7 +917,7 @@ def initialization():
     parser.add_argument('--block-size', type=int, help="Block size. Elements which will be provided to the model at once")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
     parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
-    parser.add_argument('--dataset-workers', type=int, default=8, help="No. workers when loading the data in the dataset")
+    parser.add_argument('--dataset-workers', type=int, default=-1, help="No. workers when loading the data in the dataset. When negative, all available CPUs will be used")
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")
     parser.add_argument('--max-length-tokens', type=int, default=256, help="Max. length for the generated tokens")
     parser.add_argument('--model-input', help="Model input path which will be loaded")

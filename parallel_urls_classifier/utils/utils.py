@@ -52,9 +52,8 @@ def get_layer_from_model(layer, name=None, deepcopy=True):
 def encode(tokenizer, text, max_length=512, add_special_tokens=True):
     encoder = tokenizer.batch_encode_plus if isinstance(text, list) else tokenizer.encode_plus
 
-    # TODO remove automatically padding, sort by length and manually pad in order to improve GPU usage
     #return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding="longest",
-                    return_attention_mask=True, return_tensors="pt", max_length=max_length)
+    #                return_attention_mask=True, return_tensors="pt", max_length=max_length)
     return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding="do_not_pad",
                    return_attention_mask=False, return_tensors="pt", max_length=max_length)
 
@@ -424,7 +423,7 @@ def get_data_from_batch(batch, block_size, device):
 
 def get_pytorch_version():
     try:
-        torch_version = list(map(int, torch.__version__.split('+')[0]))
+        torch_version = list(map(int, torch.__version__.split('+')[0].split('.')))
     except Exception as e:
         logger.error("%s", str(e))
         logger.error("Unexpected exception: returning -1.-1.-1 as torch version")
