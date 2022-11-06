@@ -61,7 +61,7 @@ class SmartBatchingURLsDataset(Dataset):
         #}
         return self.tokens[idx], self.labels[idx]
 
-    def get_dataloader(self, batch_size, device, force_cpu, num_workers, sampler=None, over_sampling=False, classes_weights=None):
+    def get_dataloader(self, batch_size, device, force_cpu, num_workers, sampler=None):
         is_device_gpu = device.type.startswith("cuda")
 
         if sampler:
@@ -70,10 +70,6 @@ class SmartBatchingURLsDataset(Dataset):
             self.sampler = SmartBatchingSampler(
                 data_source=self.tokens,
                 batch_size=batch_size,
-                regression=self.regression,
-                data_labels=self.labels,
-                over_sampling=over_sampling,
-                classes_weights=classes_weights,
             )
 
         collate_fn = SmartBatchingCollate(
@@ -121,26 +117,14 @@ class SmartBatchingURLsDataset(Dataset):
         return self._total_tokens
 
 class SmartBatchingSampler(Sampler):
-    def __init__(self, data_source, batch_size, regression=False, over_sampling=False, data_labels=None, classes_weights=None):
+    def __init__(self, data_source, batch_size):
         super(SmartBatchingSampler, self).__init__(data_source)
 
         self.len = len(data_source)
-        self.regression = regression
         sample_lengths = [len(seq) for seq in data_source]
         argsort_inds = np.argsort(sample_lengths) # Get indexes of tokens sorted by length
         self.batches = list(more_itertools.chunked(argsort_inds, n=batch_size)) # Batches of indexes sorted by tokens length
         self._backsort_inds = None
-        self.over_sampling = over_sampling
-        self.classes_weights = classes_weights
-        self.data_labels = data_labels.cpu().detach()
-        self.data_labels = torch.round(self.data_labels).type(torch.long) if self.regression else self.data_labels
-
-        if over_sampling:
-            if data_labels is None or classes_weights is None:
-                raise Exception("In order to apply over-sampling, data_labels and classes_weights have to be provided")
-
-            if self.len != len(data_labels):
-                raise Exception(f"Data length is different from the data labels length: {self.len} vs {len(data_labels)}")
 
     def __iter__(self):
         _batches = self.batches
@@ -150,18 +134,6 @@ class SmartBatchingSampler(Sampler):
 
             np.random.shuffle(_batches) # Randomize batches
             _batches.append(last_batch) # Add the previously removed last element
-
-            if self.over_sampling:
-                for chunk_idx, chunk in enumerate(_batches):
-                    labels = np.array(self.data_labels)[chunk]
-
-                    if len(np.unique(labels)) <= 1:
-                        # Do not modify the batch if is not necessary
-                        continue
-
-                    _labels = torch.tensor([self.classes_weights[l] for l in labels])
-                    idxs = torch.multinomial(_labels, len(chunk), True)
-                    _batches[chunk_idx] = np.array(_batches[chunk_idx])[idxs].tolist()
 
         self._inds = list(more_itertools.flatten(_batches))
 

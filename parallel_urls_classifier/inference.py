@@ -208,7 +208,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                                                      separator=url_separator, lower=lower)))
 
         # Tokens
-        tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
+        tokens = utils.encode(tokenizer, target_urls, max_length_tokens, padding="longest", return_attention_mask=True)
         urls = tokens["input_ids"].to(device)
         attention_mask = tokens["attention_mask"].to(device)
 
@@ -276,7 +276,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
 
     for target_urls in urls_generator:
         # Tokens
-        tokens = utils.encode(tokenizer, target_urls, max_length_tokens)
+        tokens = utils.encode(tokenizer, target_urls, max_length_tokens, padding="longest", return_attention_mask=True)
         urls = tokens["input_ids"].to(device)
         attention_mask = tokens["attention_mask"].to(device)
 

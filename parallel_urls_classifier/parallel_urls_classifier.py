@@ -453,6 +453,10 @@ def main(args):
     classes_weights = torch.as_tensor(classes_weights, dtype=torch.float)
     over_sampling = imbalanced_strategy == "over-sampling"
 
+    if over_sampling:
+        # TODO implement correctly over-sampling (WeightedRandomSampler was not a correct way to do it since it was downsampling the major class as well)
+        raise Exception("TODO: implement")
+
     # Datasets
     dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
                                                      max_length_tokens, regression=regression)
@@ -465,8 +469,7 @@ def main(args):
     logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
 
-    dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers,
-                                                    over_sampling=over_sampling, classes_weights=classes_weights)
+    dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
     dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
     dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
 
