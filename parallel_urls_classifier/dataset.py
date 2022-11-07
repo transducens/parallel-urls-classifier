@@ -12,18 +12,20 @@ from torch.utils.data import (
 )
 import numpy as np
 import more_itertools
+import transformers
 
 logger = logging.getLogger("parallel_urls_classifier")
 
 # Original code from https://www.kaggle.com/code/rhtsingh/speeding-up-transformer-w-optimization-strategies?scriptVersionId=67176227&cellId=2
 
 class SmartBatchingURLsDataset(Dataset):
-    def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False):
+    def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False, sampler_better_randomness=True):
         super(SmartBatchingURLsDataset, self).__init__()
 
         self.max_length = max_length
         self.pad_token_id = tokenizer.pad_token_id
         self.regression = regression
+        self.sampler_better_randomness = sampler_better_randomness
 
         #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # TODO problem here when creating a new tmp array -> big arrays will lead to run out of memory...
         #self.data = non_parallel_urls + parallel_urls
@@ -46,6 +48,10 @@ class SmartBatchingURLsDataset(Dataset):
         self.labels = torch.from_numpy(self.labels)
         self.labels = self.labels.type(torch.float) if regression else self.labels.type(torch.long)
 
+        # TODO is it possible to apply dynamic batching instead of fixed batching?
+        #  I'd like to set a maximum number of tokens instead of a batch size... (https://github.com/microsoft/DeepSpeed/issues/1051)
+        #  Just like it is done in fairseq: https://github.com/huggingface/transformers/issues/10512
+
     def __len__(self):
         return len(self.tokens)
 
@@ -66,6 +72,10 @@ class SmartBatchingURLsDataset(Dataset):
 
         if sampler:
             self.sampler = sampler
+        elif self.sampler_better_randomness:
+            # LengthGroupedSampler handles worse the padding problem (suboptimal) but better the randomness than SmartBatchingSampler
+            lengths = [len(seq) for seq in self.tokens]
+            self.sampler = transformers.trainer_pt_utils.LengthGroupedSampler(batch_size, lengths=lengths)
         else:
             self.sampler = SmartBatchingSampler(
                 data_source=self.tokens,
