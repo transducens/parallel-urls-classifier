@@ -10,3 +10,4 @@ service_streamer==0.1.2
 nltk==3.7
 Levenshtein==0.20.6
 more-itertools==9.0.0
+tldextract==3.4.0

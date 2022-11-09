@@ -14,6 +14,7 @@ import parallel_urls_classifier.generate_dataset.negative_samples_generator as n
 import parallel_urls_classifier.utils.utils as utils
 
 import numpy as np
+from tldextract import extract
 
 def store_negative_samples(parallel_urls, non_parallel_filename, target_domains, unary_generator, logging_cte=2):
     no_parallel_domains = len(target_domains)
@@ -124,7 +125,7 @@ def main(args):
     generate_positive_samples = not args.do_not_generate_positive_samples
     seed = args.seed
     max_negative_samples_alignments = args.max_negative_samples_alignments
-    same_authority = args.same_authority
+    check_same = args.check_same
     train_perc, dev_perc, test_perc = args.sets_percentage
     src_freq_file = args.src_freq_file
     trg_freq_file = args.trg_freq_file
@@ -169,10 +170,30 @@ def main(args):
 
         url_pair[0] = urllib.parse.unquote(url_pair[0], errors="backslashreplace")
         url_pair[1] = urllib.parse.unquote(url_pair[1], errors="backslashreplace")
-        domains = ((url_pair[0] + '/').split('/')[2].replace('\t', ' '), (url_pair[1] + '/').split('/')[2].replace('\t', ' '))
+        src_subdomain, src_domain, src_tld = extract(url_pair[0])
+        trg_subdomain, trg_domain, trg_tld = extract(url_pair[1])
+        domains = (src_domain, trg_domain) # We are grouping by domain
+        src_check, trg_check = '', ''
 
-        if same_authority and domains[0] != domains[1]:
-            logging.debug("Skipping line #%d because the URLs do not belong to the same domain (%s vs %s)", idx + 1, domains[0], domains[1])
+        if check_same == "authority":
+            src_check = f"{src_subdomain}.{src_domain}.{src_tld}"
+            trg_check = f"{trg_subdomain}.{trg_domain}.{trg_tld}"
+        elif check_same == "subdomain":
+            src_check = src_subdomain
+            trg_check = trg_subdomain
+        elif check_same == "domain":
+            src_check = src_domain
+            trg_check = trg_domain
+        elif check_same == "tld":
+            src_check = src_tld
+            trg_check = trg_tld
+        elif check_same == "none":
+            pass
+        else:
+            raise Exception(f"Unknown 'check_same' option: {check_same}")
+
+        if src_check != trg_check:
+            logging.debug("Skipping line #%d because the URLs didn't pass the check (%s vs %s)", idx + 1, src_check, trg_check)
             skipped_urls += 1
 
             continue
@@ -254,7 +275,7 @@ def initialization():
     parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")
     parser.add_argument('--do-not-generate-positive-samples', action='store_true', help="Do not generate positive samples. Useful if you only want to generate negative samples")
     parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples. Useful if you only want to split the data in train/dev/test")
-    parser.add_argument('--same-authority', action='store_true', help="Skip pair of URLs with different authority")
+    parser.add_argument('--check-same', choices=["none", "authority", "subdomain", "domain", "tld"], default="domain", help="Skip pair of URLs according to the specified configuration")
     parser.add_argument('--sets-percentage', type=float, nargs=3, default=[0.8, 0.1, 0.1], help="Train, dev and test percentages")
     parser.add_argument('--src-freq-file', help="Src monolingual freq dictionary. Used if 'replace-freq-words' is in --generator-technique. Expected format: occurrences<tab>word")
     parser.add_argument('--trg-freq-file', help="Src monolingual freq dictionary. Used if 'replace-freq-words' is in --generator-technique. Expected format: occurrences<tab>word")
