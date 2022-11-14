@@ -28,7 +28,7 @@ class SmartBatchingURLsDataset(Dataset):
         self.regression = regression
         self.sampler_better_randomness = sampler_better_randomness
 
-        #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # TODO problem here when creating a new tmp array -> big arrays will lead to run out of memory...
+        #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # Problem here when creating a new tmp array -> big arrays will lead to run out of memory...
         #self.data = non_parallel_urls + parallel_urls
 
         # Tokenize data (we need to tokenize one by one because the length of all the provided URLs will not be the same)
@@ -64,10 +64,6 @@ class SmartBatchingURLsDataset(Dataset):
         # Postprocess labels
         self.labels = torch.from_numpy(self.labels)
         self.labels = self.labels.type(torch.float) if regression else self.labels.type(torch.long)
-
-        # TODO is it possible to apply dynamic batching instead of fixed batching?
-        #  I'd like to set a maximum number of tokens instead of a batch size... (https://github.com/microsoft/DeepSpeed/issues/1051)
-        #  Just like it is done in fairseq: https://github.com/huggingface/transformers/issues/10512
 
     def __len__(self):
         return len(self.tokens)
@@ -140,7 +136,7 @@ class SmartBatchingURLsDataset(Dataset):
 
         dataloader = DataLoader(
             dataset=self,
-            batch_size=None if max_tokens else batch_size,
+            batch_size=None if max_tokens else batch_size, # https://pytorch.org/docs/stable/data.html#disable-automatic-batching
             sampler=self.sampler,
             collate_fn=collate_fn,
             **dataloader_kwargs,
@@ -226,6 +222,10 @@ class SmartBatchingCollate:
         return output
 
 class MaxTokensCollate:
+    # Issues related:
+    #  https://github.com/microsoft/DeepSpeed/issues/1051
+    #  Mentioning --max_tokens from fairseq: https://github.com/huggingface/transformers/issues/10512
+
     def __init__(self, pad_token_id, max_tokens, total_number_of_batches):
         self._max_length = max_length
         self._pad_token_id = pad_token_id
@@ -244,14 +244,7 @@ class MaxTokensCollate:
             self._current_number_batch = 0
 
     def __call__(self, batch):
-        # TODO modify the function in order to work with max_tokens
-        # TODO provide the maximum number of times per epoch that the dataloader will be called and return here
-        #  batches taking into account the max_tokens, the number of times this collate function has been called
-        #  and the number of max times which will be called, so we will know that we have to return the last batch
-        #  even if the max tokens criteria is not met
-
         sequence, target = batch
-
         self._current_batch.append([sequence, target])
         self._current_max_length = max(self._current_max_length, len(sequence)) # Necessary for padding
         self._current_tokens = self._current_max_length * len(self._current_batch) # Simulate padding with the current longest sentence
@@ -271,7 +264,7 @@ class MaxTokensCollate:
             }
             output["label"] = torch.tensor(targets)
 
-            # TODO Reset variables
+            # Reset variables
             self.reset_max_tokens_variables(self, last_or_first_batch=last_batch)
 
             # Return batch

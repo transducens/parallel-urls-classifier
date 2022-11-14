@@ -597,7 +597,6 @@ def main(args):
                 continue
 
             idx += 1
-            logger.error("asd: %s", batch["url_tokens"].shape) # TODO remove
             batch_outputs = []
             batch_labels = []
             loss_value = None
