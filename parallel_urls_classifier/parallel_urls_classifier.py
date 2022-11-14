@@ -168,6 +168,7 @@ def main(args):
 
     batch_size = args.batch_size
     block_size = args.block_size
+    max_tokens = args.max_tokens if args.max_tokens > 0 else None
     epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     force_cpu = args.force_cpu
     use_cuda = utils.use_cuda(force_cpu=force_cpu) # Will be True if possible and False otherwise
@@ -209,6 +210,7 @@ def main(args):
     auxiliary_tasks_weights = args.auxiliary_tasks_weights
     freeze_embeddings_layer = args.freeze_embeddings_layer
     waiting_time = args.waiting_time
+    remove_instead_of_truncate = args.remove_instead_of_truncate
 
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
@@ -459,7 +461,8 @@ def main(args):
 
     # Datasets
     dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
-                                                     max_length_tokens, regression=regression)
+                                                     max_length_tokens, regression=regression,
+                                                     remove_instead_of_truncate=remove_instead_of_truncate)
     dataset_dev = dataset.SmartBatchingURLsDataset(parallel_urls_dev, non_parallel_urls_dev, tokenizer,
                                                    max_length_tokens, regression=regression)
     dataset_test = dataset.SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer,
@@ -469,7 +472,7 @@ def main(args):
     logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
 
-    dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
+    dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
     dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
     dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
 
@@ -584,10 +587,17 @@ def main(args):
         all_outputs = []
         all_labels = []
         total_train_tokens = 0
+        idx = -1
 
         model.train()
 
-        for idx, batch in enumerate(dataloader_train):
+        for batch in dataloader_train:
+            if max_tokens and batch is None:
+                # Batch is under construction using max_tokens...
+                continue
+
+            idx += 1
+            logger.error("asd: %s", batch["url_tokens"].shape) # TODO remove
             batch_outputs = []
             batch_labels = []
             loss_value = None
@@ -918,6 +928,7 @@ def initialization():
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be processed before proceed to train, but the whole batch will be processed in blocks in order to avoid OOM errors")
     parser.add_argument('--block-size', type=int, help="Block size. Elements which will be provided to the model at once")
+    parser.add_argument('--max-tokens', type=int, default=-1, help="Process batches in groups tokens size (fairseq style). This only applies to training. Batch size is still relevant since the value is used when batches are needed (e.g. sampler from dataset)")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
     parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
     parser.add_argument('--dataset-workers', type=int, default=-1, help="No. workers when loading the data in the dataset. When negative, all available CPUs will be used")
@@ -960,6 +971,7 @@ def initialization():
     parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm"], help="Tasks which will try to help to the main task (multitasking)")
     parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
+    parser.add_argument('--remove-instead-of-truncate', action="store_true", help="Remove pairs of URLs which would need to be truncated (if not enabled, truncation will be applied). This option will be only applied to the training set")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")

@@ -19,7 +19,8 @@ logger = logging.getLogger("parallel_urls_classifier")
 # Original code from https://www.kaggle.com/code/rhtsingh/speeding-up-transformer-w-optimization-strategies?scriptVersionId=67176227&cellId=2
 
 class SmartBatchingURLsDataset(Dataset):
-    def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False, sampler_better_randomness=True):
+    def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False, sampler_better_randomness=True,
+                 remove_instead_of_truncate=False):
         super(SmartBatchingURLsDataset, self).__init__()
 
         self.max_length = max_length
@@ -31,8 +32,24 @@ class SmartBatchingURLsDataset(Dataset):
         #self.data = non_parallel_urls + parallel_urls
 
         # Tokenize data (we need to tokenize one by one because the length of all the provided URLs will not be the same)
-        self.tokens = [utils.encode(tokenizer, url, max_length=max_length)["input_ids"][0].tolist()
-                       for url in non_parallel_urls + parallel_urls]
+        self.tokens = utils.encode(tokenizer, non_parallel_urls + parallel_urls, max_length=max_length, return_tensors=None, truncation=False)["input_ids"]
+
+        # Truncate or remove
+        if remove_instead_of_truncate:
+            initial_pairs = len(self.token)
+
+            self.tokens = list(filter(lambda pair: len(pair) <= max_length, self.tokens))
+
+            after_remove_pairs = len(self.token)
+
+            logger.debug("%d pairs of URLs have been removed: from %d to %d pairs", initial_pairs - after_remove_pairs, initial_pairs, after_remove_pairs)
+        else:
+            needs_truncation = sum([1 if len(pair) > max_length else 0 for pair in self.tokens])
+
+            logger.debug("%d pairs of URLs need truncation of %d pairs", needs_truncation, len(self.tokens))
+
+            self.tokens = [pair[:max_length] for pair in self.tokens]
+
         self._total_tokens = sum([len(t) for t in self.tokens])
         #self.attention_mask = data["attention_mask"]
         #self.tokens = [tokenizer.convert_tokens_to_ids(tokenizer.tokenize(url)) for url in non_parallel_urls + parallel_urls]
@@ -67,7 +84,7 @@ class SmartBatchingURLsDataset(Dataset):
         #}
         return self.tokens[idx], self.labels[idx]
 
-    def get_dataloader(self, batch_size, device, force_cpu, num_workers, sampler=None):
+    def get_dataloader(self, batch_size, device, force_cpu, num_workers, sampler=None, max_tokens=None):
         is_device_gpu = device.type.startswith("cuda")
 
         if sampler:
@@ -82,11 +99,20 @@ class SmartBatchingURLsDataset(Dataset):
                 batch_size=batch_size,
             )
 
-        collate_fn = SmartBatchingCollate(
-            targets=self.labels,
-            max_length=self.max_length,
-            pad_token_id=self.pad_token_id,
-        )
+        if max_tokens:
+            logger.info("Batch size will be data-dependant: batches of, approximately (greater or equal), %d tokens will be returned",
+                        max_tokens)
+
+            collate_fn = MaxTokensCollate(
+                pad_token_id=self.pad_token_id,
+                max_tokens=max_tokens,
+                total_number_of_batches=len(self.tokens),
+            )
+        else:
+            collate_fn = SmartBatchingCollate(
+                pad_token_id=self.pad_token_id,
+            )
+
         num_workers = 0 if is_device_gpu else multiprocessing.cpu_count() - 1 \
                         if num_workers < 0 else num_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
                                                             #  when GPU is being used
@@ -114,7 +140,7 @@ class SmartBatchingURLsDataset(Dataset):
 
         dataloader = DataLoader(
             dataset=self,
-            batch_size=batch_size,
+            batch_size=None if max_tokens else batch_size,
             sampler=self.sampler,
             collate_fn=collate_fn,
             **dataloader_kwargs,
@@ -159,57 +185,97 @@ class SmartBatchingSampler(Sampler):
 
         return self._backsort_inds
 
+def pad_sequence(sequence_batch, pad_token_id, max_length=0):
+    max_batch_len = max(len(sequence) for sequence in sequence_batch)
+    max_len = min(max_batch_len, max_length) if max_length > 0 else max_batch_len
+    padded_sequences, attention_masks = [], []
+    attend, no_attend = 1, 0
+
+    for sequence in sequence_batch:
+        # Truncate if exceeds max_len
+        new_sequence = list(sequence[:max_len])
+
+        attention_mask = [attend] * len(new_sequence)
+        pad_length = max_len - len(new_sequence)
+
+        new_sequence.extend([pad_token_id] * pad_length)
+        attention_mask.extend([no_attend] * pad_length)
+
+        padded_sequences.append(new_sequence)
+        attention_masks.append(attention_mask)
+
+    padded_sequences = torch.tensor(padded_sequences)
+    attention_masks = torch.tensor(attention_masks)
+
+    return padded_sequences, attention_masks
+
 class SmartBatchingCollate:
-    def __init__(self, targets, max_length, pad_token_id):
-        self._targets = targets
-        self._max_length = max_length
+    def __init__(self, pad_token_id):
         self._pad_token_id = pad_token_id
 
     def __call__(self, batch):
-        targets = None
-
-        if self._targets is not None:
-            sequences, targets = list(zip(*batch))
-        else:
-            sequences = list(batch)
-
-        input_ids, attention_mask = self.pad_sequence(sequences, self._max_length, self._pad_token_id)
-
-        #if self._targets is not None:
-        #    output = input_ids, attention_mask, torch.tensor(targets)
-        #else:
-        #    output = input_ids, attention_mask
+        sequences, targets = list(zip(*batch))
+        input_ids, attention_mask = pad_sequence(sequences, self._pad_token_id)
 
         output = {
             "url_tokens": input_ids,
             "url_attention_mask": attention_mask,
         }
-
-        if self._targets is not None:
-            output["label"] = torch.tensor(targets)
+        output["label"] = torch.tensor(targets)
 
         return output
 
-    def pad_sequence(self, sequence_batch, max_sequence_length, pad_token_id):
-        max_batch_len = max(len(sequence) for sequence in sequence_batch)
-        max_len = min(max_batch_len, max_sequence_length)
-        padded_sequences, attention_masks = [], []
-        attend, no_attend = 1, 0
+class MaxTokensCollate:
+    def __init__(self, pad_token_id, max_tokens, total_number_of_batches):
+        self._max_length = max_length
+        self._pad_token_id = pad_token_id
+        self._max_tokens = max_tokens
+        self._total_number_of_batches = total_number_of_batches
 
-        for sequence in sequence_batch:
-            # As discussed above, truncate if exceeds max_len
-            new_sequence = list(sequence[:max_len])
+        self.reset_max_tokens_variables(last_or_first_batch=True)
 
-            attention_mask = [attend] * len(new_sequence)
-            pad_length = max_len - len(new_sequence)
+    def reset_max_tokens_variables(self, last_or_first_batch=False):
+        # Max tokens variables
+        self._current_tokens = 0
+        self._current_batch = []
+        self._current_max_length = 0
 
-            new_sequence.extend([pad_token_id] * pad_length)
-            attention_mask.extend([no_attend] * pad_length)
+        if last_or_first_batch:
+            self._current_number_batch = 0
 
-            padded_sequences.append(new_sequence)
-            attention_masks.append(attention_mask)
+    def __call__(self, batch):
+        # TODO modify the function in order to work with max_tokens
+        # TODO provide the maximum number of times per epoch that the dataloader will be called and return here
+        #  batches taking into account the max_tokens, the number of times this collate function has been called
+        #  and the number of max times which will be called, so we will know that we have to return the last batch
+        #  even if the max tokens criteria is not met
 
-        padded_sequences = torch.tensor(padded_sequences)
-        attention_masks = torch.tensor(attention_masks)
+        sequence, target = batch
 
-        return padded_sequences, attention_masks
+        self._current_batch.append([sequence, target])
+        self._current_max_length = max(self._current_max_length, len(sequence)) # Necessary for padding
+        self._current_tokens = self._current_max_length * len(self._current_batch) # Simulate padding with the current longest sentence
+        self._current_number_batch += 1
+        max_tokens_processed = self._current_tokens >= self._max_tokens
+        last_batch = self._current_number_batch >= self._total_number_of_batches
+
+        if max_tokens_processed or last_batch:
+            # Return dynamic batch when max_tokens criteria is met or last batch is being processed
+            sequences, targets = list(zip(*self._current_batch))
+
+            input_ids, attention_mask = pad_sequence(sequences, self._pad_token_id)
+
+            output = {
+                "url_tokens": input_ids,
+                "url_attention_mask": attention_mask,
+            }
+            output["label"] = torch.tensor(targets)
+
+            # TODO Reset variables
+            self.reset_max_tokens_variables(self, last_or_first_batch=last_batch)
+
+            # Return batch
+            return output
+        else:
+            # Keep accumulating partial batches
+            return None
