@@ -227,7 +227,6 @@ class MaxTokensCollate:
     #  Mentioning --max_tokens from fairseq: https://github.com/huggingface/transformers/issues/10512
 
     def __init__(self, pad_token_id, max_tokens, total_number_of_batches):
-        self._max_length = max_length
         self._pad_token_id = pad_token_id
         self._max_tokens = max_tokens
         self._total_number_of_batches = total_number_of_batches
@@ -255,7 +254,6 @@ class MaxTokensCollate:
         if max_tokens_processed or last_batch:
             # Return dynamic batch when max_tokens criteria is met or last batch is being processed
             sequences, targets = list(zip(*self._current_batch))
-
             input_ids, attention_mask = pad_sequence(sequences, self._pad_token_id)
 
             output = {
@@ -265,7 +263,7 @@ class MaxTokensCollate:
             output["label"] = torch.tensor(targets)
 
             # Reset variables
-            self.reset_max_tokens_variables(self, last_or_first_batch=last_batch)
+            self.reset_max_tokens_variables(last_or_first_batch=last_batch)
 
             # Return batch
             return output
