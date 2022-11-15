@@ -564,7 +564,7 @@ def main(args):
     stop_training = False
     epoch = 0
     current_patience = 0
-    total_blocks_per_batch = max(int(np.ceil(batch_size / block_size)), 1)
+    total_blocks_per_batch = 1 if max_tokens else max(int(np.ceil(batch_size / block_size)), 1)
 
     # Statistics
     batch_loss = []
@@ -606,7 +606,7 @@ def main(args):
             model.zero_grad()
 
             # Process in block_size blocks in order to avoid OOM errors, but use batch_size for update the model
-            for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, device):
+            for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, device):
                 labels = inputs_and_outputs["labels"]
                 total_train_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
 

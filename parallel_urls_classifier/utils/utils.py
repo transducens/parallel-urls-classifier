@@ -397,8 +397,8 @@ def get_data_from_batch(batch, block_size, device):
 
     # Split in batch_size batches
     start = 0
-    end = start + block_size
     current_batch_size = labels.reshape(-1).shape[0]
+    end = start + (block_size if block_size else current_batch_size) # Return the whole batch if the block size was not provided
 
     while True:
         if start < end:
@@ -416,7 +416,7 @@ def get_data_from_batch(batch, block_size, device):
             yield inputs_and_outputs
 
             start = end
-            end = min(start + block_size, current_batch_size)
+            end = min(start + (block_size if block_size else current_batch_size), current_batch_size)
         else:
             break
 

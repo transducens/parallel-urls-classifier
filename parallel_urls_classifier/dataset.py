@@ -96,7 +96,7 @@ class SmartBatchingURLsDataset(Dataset):
             )
 
         if max_tokens:
-            logger.info("Batch size will be data-dependant: batches of, approximately (greater or equal), %d tokens will be returned",
+            logger.info("Batch size will be data-dependant: batches of, approximately, %d tokens will be returned",
                         max_tokens)
 
             collate_fn = MaxTokensCollate(
@@ -241,17 +241,33 @@ class MaxTokensCollate:
 
         if last_or_first_batch:
             self._current_number_batch = 0
+            self._aux_batch = [] # Auxiliar storage (we want to avoid to exceed max_tokens)
 
     def __call__(self, batch):
         sequence, target = batch
-        self._current_batch.append([sequence, target])
-        self._current_max_length = max(self._current_max_length, len(sequence)) # Necessary for padding
-        self._current_tokens = self._current_max_length * len(self._current_batch) # Simulate padding with the current longest sentence
-        self._current_number_batch += 1
-        max_tokens_processed = self._current_tokens >= self._max_tokens
-        last_batch = self._current_number_batch >= self._total_number_of_batches
 
-        if max_tokens_processed or last_batch:
+        if len(self._aux_batch) > 0:
+            self._current_batch.extend(self._aux_batch)
+            self._aux_batch = []
+            self._current_max_length = max(self._current_max_length, max([len(s) for s, _ in self._current_batch]))
+
+        self._current_max_length = max(self._current_max_length, len(sequence)) # Necessary for padding
+        self._current_tokens = self._current_max_length * (len(self._current_batch) + 1) # Simulate padding with the current longest sentence
+        self._current_number_batch += 1
+        equal_max_tokens_processed = self._current_tokens == self._max_tokens
+        more_max_tokens_processed = self._current_tokens > self._max_tokens
+        max_tokens_processed = equal_max_tokens_processed or more_max_tokens_processed
+        last_batch = self._current_number_batch >= self._total_number_of_batches
+        force_return = False
+
+        if more_max_tokens_processed and not last_batch:
+            self._aux_batch.append([sequence, target])
+
+            force_return = True
+        else:
+            self._current_batch.append([sequence, target])
+
+        if force_return or max_tokens_processed or last_batch:
             # Return dynamic batch when max_tokens criteria is met or last batch is being processed
             sequences, targets = list(zip(*self._current_batch))
             input_ids, attention_mask = pad_sequence(sequences, self._pad_token_id)
