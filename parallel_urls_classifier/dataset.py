@@ -14,14 +14,53 @@ from torch.utils.data import (
 import numpy as np
 import more_itertools
 import transformers
+import imblearn
 
 logger = logging.getLogger("parallel_urls_classifier")
 
-# Original code from https://www.kaggle.com/code/rhtsingh/speeding-up-transformer-w-optimization-strategies?scriptVersionId=67176227&cellId=2
+def remove_padding(sequence_batch, pad_token_id):
+    _sequence_batch = sequence_batch.tolist()
+
+    for idx, sequence in enumerate(_sequence_batch):
+        try:
+            padding_token_idx = sequence.index(pad_token_id)
+
+            if padding_token_idx > 0:
+                _sequence_batch[idx] = _sequence_batch[idx][:padding_token_idx - 1]
+        except ValueError:
+            pass # Hasn't been padded
+
+    return _sequence_batch
+
+def pad_sequence(sequence_batch, pad_token_id, max_length=0):
+    max_batch_len = max(len(sequence) for sequence in sequence_batch)
+    max_len = min(max_batch_len, max_length) if max_length > 0 else max_batch_len
+    padded_sequences, attention_masks = [], []
+    attend, no_attend = 1, 0
+
+    for sequence in sequence_batch:
+        # Truncate if exceeds max_len
+        new_sequence = list(sequence[:max_len])
+
+        attention_mask = [attend] * len(new_sequence)
+        pad_length = max_len - len(new_sequence)
+
+        new_sequence.extend([pad_token_id] * pad_length)
+        attention_mask.extend([no_attend] * pad_length)
+
+        padded_sequences.append(new_sequence)
+        attention_masks.append(attention_mask)
+
+    padded_sequences = torch.tensor(padded_sequences)
+    attention_masks = torch.tensor(attention_masks)
+
+    return padded_sequences, attention_masks
 
 class SmartBatchingURLsDataset(Dataset):
+    # Code based on https://www.kaggle.com/code/rhtsingh/speeding-up-transformer-w-optimization-strategies?scriptVersionId=67176227&cellId=2
+
     def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False, sampler_better_randomness=True,
-                 remove_instead_of_truncate=False, set_desc=''):
+                 remove_instead_of_truncate=False, set_desc='', imbalanced_strategy=''):
         super(SmartBatchingURLsDataset, self).__init__()
 
         self.max_length = max_length
@@ -66,6 +105,28 @@ class SmartBatchingURLsDataset(Dataset):
         #self.labels[:len(non_parallel_urls)] = 0
         # Set to 1 the parallel URLs
         self.labels[len(non_parallel_urls):] = 1
+
+        # Imbalanced strategy?
+        if imbalanced_strategy:
+            balance = False
+
+            if imbalanced_strategy in ("none", "weighted-loss"):
+                # It is not our responsability
+                pass
+            elif imbalanced_strategy == "over-sampling":
+                balance = True
+                imbalanced_obj = imblearn.over_sampling.RandomOverSampler(sampling_strategy="minority")
+            else:
+                raise Exception(f"Unknown imbalanced_strategy: {imbalanced_strategy}")
+
+            if balance:
+                lengths_before = [np.sum(self.labels == 0), np.sum(self.labels == 1)]
+                self.tokens, _ = pad_sequence(self.tokens, self.pad_token_id, max_length=self.max_length) # We need to apply padding :/
+                self.tokens, self.labels = imbalanced_obj.fit_resample(self.tokens, self.labels)
+                self.tokens = remove_padding(self.tokens, self.pad_token_id) # Remove padding
+                lengths_after = [np.sum(self.labels == 0), np.sum(self.labels == 1)]
+
+                logger.info("Imbalanced strategy '%s': from %s to %s", imbalanced_strategy, str(lengths_before), str(lengths_after))
 
         # Postprocess labels
         self.labels = torch.from_numpy(self.labels)
@@ -196,30 +257,6 @@ class SmartBatchingSampler(Sampler):
             self._backsort_inds = np.argsort(self._inds)
 
         return self._backsort_inds
-
-def pad_sequence(sequence_batch, pad_token_id, max_length=0):
-    max_batch_len = max(len(sequence) for sequence in sequence_batch)
-    max_len = min(max_batch_len, max_length) if max_length > 0 else max_batch_len
-    padded_sequences, attention_masks = [], []
-    attend, no_attend = 1, 0
-
-    for sequence in sequence_batch:
-        # Truncate if exceeds max_len
-        new_sequence = list(sequence[:max_len])
-
-        attention_mask = [attend] * len(new_sequence)
-        pad_length = max_len - len(new_sequence)
-
-        new_sequence.extend([pad_token_id] * pad_length)
-        attention_mask.extend([no_attend] * pad_length)
-
-        padded_sequences.append(new_sequence)
-        attention_masks.append(attention_mask)
-
-    padded_sequences = torch.tensor(padded_sequences)
-    attention_masks = torch.tensor(attention_masks)
-
-    return padded_sequences, attention_masks
 
 class SmartBatchingCollate:
     def __init__(self, pad_token_id):

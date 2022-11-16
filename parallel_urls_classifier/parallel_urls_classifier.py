@@ -262,9 +262,6 @@ def main(args):
     # Disable parallelism since throws warnings
     os.environ["TOKENIZERS_PARALLELISM"] = "False"
 
-    if not apply_inference and train_until_patience:
-        logger.warning("Be aware that even training until patience is reached and not a fixed number of epochs, the selected number of epochs is relevant since it is a parameter which is used by the LR scheduler")
-
     if apply_inference and not model_input:
         logger.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
 
@@ -457,16 +454,11 @@ def main(args):
                 logger.warning("Your data seems to be imbalanced and you did not selected any imbalanced data strategy")
                 break
 
-    over_sampling = imbalanced_strategy == "over-sampling"
-
-    if over_sampling:
-        # TODO implement correctly over-sampling (WeightedRandomSampler was not a correct way to do it since it was downsampling the major class as well)
-        raise Exception("TODO: implement")
-
     # Datasets
     dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
                                                      max_length_tokens, regression=regression, set_desc="train",
-                                                     remove_instead_of_truncate=remove_instead_of_truncate)
+                                                     remove_instead_of_truncate=remove_instead_of_truncate,
+                                                     imbalanced_strategy=imbalanced_strategy)
     dataset_dev = dataset.SmartBatchingURLsDataset(parallel_urls_dev, non_parallel_urls_dev, tokenizer,
                                                    max_length_tokens, regression=regression, set_desc="dev")
     dataset_test = dataset.SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer,
@@ -734,11 +726,12 @@ def main(args):
             scheduler.step()
 
         if total_train_tokens != dataset_train.total_tokens:
-            if over_sampling:
-                pass
-            else:
+            if imbalanced_strategy in ("none", "weighted-loss"):
                 logger.error("Total processed tokens are different from the initial total tokens: %d vs %d",
-                            total_train_tokens, dataset_train.total_tokens)
+                             total_train_tokens, dataset_train.total_tokens)
+            else:
+                # The selected imbalanced_strategy modifies the number of samples, so we can't compare if it's what we expect
+                pass
 
         current_last_layer_output = utils.get_layer_from_model(model.get_base_model().base_model.encoder.layer[-1], name="output.dense.weight")
         layer_updated = (current_last_layer_output != last_layer_output).any().cpu().detach().numpy()
