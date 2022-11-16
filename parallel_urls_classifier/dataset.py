@@ -176,6 +176,10 @@ class SmartBatchingURLsDataset(Dataset):
                 pad_token_id=self.pad_token_id,
             )
 
+        # "RuntimeError: DataLoader worker (pid 22966) is killed by signal: Killed."
+        #  Workaround: num_workers = 0
+        #  Solution: https://github.com/pytorch/pytorch/issues/8976
+
         if not is_device_gpu and num_workers < 0:
             num_workers = len(os.sched_getaffinity(0)) # Same value used by dataloader implementation
 
