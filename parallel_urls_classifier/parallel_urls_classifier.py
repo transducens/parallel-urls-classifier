@@ -473,8 +473,8 @@ def main(args):
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
 
     dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
-    dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
-    dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
+    dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
+    dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
 
     #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
@@ -587,6 +587,7 @@ def main(args):
         all_outputs = []
         all_labels = []
         total_train_tokens = 0
+        total_train_tokens_with_padding = 0
         idx = -1
 
         model.train()
@@ -609,6 +610,7 @@ def main(args):
             for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, device):
                 labels = inputs_and_outputs["labels"]
                 total_train_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
+                total_train_tokens_with_padding += sum([len(urls) for urls in inputs_and_outputs["urls"]])
 
                 # Inference
                 results = inference_with_heads(model, all_tasks, tokenizer, inputs_and_outputs, amp_context_manager,
@@ -669,6 +671,8 @@ def main(args):
 
             if log:
                 logger.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
+                logger.debug("[train:batch#%d] Processed tokens (without padding): %d (%d)", idx + 1, total_train_tokens_with_padding,
+                             total_train_tokens)
 
                 if len(all_tasks) > 1:
                     for t, v in tasks_loss_value.items():
@@ -753,8 +757,8 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                          device, amp_context_manager, classes=classes)
+        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
+                                          device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -852,8 +856,8 @@ def main(args):
 
         model.from_pretrained_wrapper(model_output, device=device)
 
-    dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                      device, amp_context_manager, classes=classes)
+    dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
+                                      device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -872,8 +876,8 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_test,
-                                       device, amp_context_manager, classes=classes)
+    test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_test,
+                                       device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
@@ -927,7 +931,7 @@ def initialization():
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be processed before proceed to train, but the whole batch will be processed in blocks in order to avoid OOM errors")
     parser.add_argument('--block-size', type=int, help="Block size. Elements which will be provided to the model at once")
-    parser.add_argument('--max-tokens', type=int, default=-1, help="Process batches in groups tokens size (fairseq style). This only applies to training. Batch size is still relevant since the value is used when batches are needed (e.g. sampler from dataset)")
+    parser.add_argument('--max-tokens', type=int, default=-1, help="Process batches in groups tokens size (fairseq style). Batch size is still relevant since the value is used when batches are needed (e.g. sampler from dataset)")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
     parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
     parser.add_argument('--dataset-workers', type=int, default=-1, help="No. workers when loading the data in the dataset. When negative, all available CPUs will be used")

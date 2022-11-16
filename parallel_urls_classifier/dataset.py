@@ -27,6 +27,7 @@ class SmartBatchingURLsDataset(Dataset):
         self.pad_token_id = tokenizer.pad_token_id
         self.regression = regression
         self.sampler_better_randomness = sampler_better_randomness
+        self.dataloader = None
 
         #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # Problem here when creating a new tmp array -> big arrays will lead to run out of memory...
         #self.data = non_parallel_urls + parallel_urls
@@ -80,7 +81,7 @@ class SmartBatchingURLsDataset(Dataset):
         #}
         return self.tokens[idx], self.labels[idx]
 
-    def get_dataloader(self, batch_size, device, force_cpu, num_workers, sampler=None, max_tokens=None):
+    def get_dataloader(self, batch_size, device, force_cpu, num_workers, sampler=None, max_tokens=None, set_dataloader=True):
         is_device_gpu = device.type.startswith("cuda")
 
         if sampler:
@@ -141,6 +142,12 @@ class SmartBatchingURLsDataset(Dataset):
             collate_fn=collate_fn,
             **dataloader_kwargs,
         )
+
+        if set_dataloader:
+            if self.dataloader:
+                logger.warning("Be aware that the dataloader has been updated")
+
+            self.dataloader = dataloader
 
         return dataloader
 
