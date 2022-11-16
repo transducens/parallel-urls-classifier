@@ -102,13 +102,14 @@ class MultitaskModel(transformers.PreTrainedModel):
 
         for task in tasks:
             if task == "urls_classification":
-                heads["urls_classification"] = transformers.AutoModelForSequenceClassification
-                task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
-                heads_config["urls_classification"] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
+                heads[task] = transformers.AutoModelForSequenceClassification
             elif task == "mlm":
-                heads["mlm"] = transformers.AutoModelForMaskedLM
-                task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
-                heads_config["mlm"] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
+                heads[task] = transformers.AutoModelForMaskedLM
+            else:
+                raise Exception(f"Unknown task: {task}")
+
+            task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
+            heads_config[task] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
 
         return heads, heads_config
 

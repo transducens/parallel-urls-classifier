@@ -37,10 +37,7 @@ from torch.utils.data import (
 )
 import transformers
 from transformers import (
-    AutoModel,
     AutoTokenizer,
-    AutoModelForSequenceClassification,
-    AutoModelForMaskedLM,
     get_linear_schedule_with_warmup,
 )
 import sklearn
