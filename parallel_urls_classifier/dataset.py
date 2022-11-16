@@ -1,4 +1,5 @@
 
+import os
 import logging
 import multiprocessing
 
@@ -20,7 +21,7 @@ logger = logging.getLogger("parallel_urls_classifier")
 
 class SmartBatchingURLsDataset(Dataset):
     def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False, sampler_better_randomness=True,
-                 remove_instead_of_truncate=False):
+                 remove_instead_of_truncate=False, set_desc=''):
         super(SmartBatchingURLsDataset, self).__init__()
 
         self.max_length = max_length
@@ -28,6 +29,7 @@ class SmartBatchingURLsDataset(Dataset):
         self.regression = regression
         self.sampler_better_randomness = sampler_better_randomness
         self.dataloader = None
+        self.set_desc = set_desc
 
         #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # Problem here when creating a new tmp array -> big arrays will lead to run out of memory...
         #self.data = non_parallel_urls + parallel_urls
@@ -43,11 +45,14 @@ class SmartBatchingURLsDataset(Dataset):
 
             after_remove_pairs = len(self.token)
 
-            logger.debug("%d pairs of URLs have been removed: from %d to %d pairs", initial_pairs - after_remove_pairs, initial_pairs, after_remove_pairs)
+            logger.debug("%d pairs of URLs have been removed%s: from %d to %d pairs", initial_pairs - after_remove_pairs,
+                                                                                      f" ({self.set_desc})" if self.set_desc else '',
+                                                                                      initial_pairs, after_remove_pairs)
         else:
             needs_truncation = sum([1 if len(pair) > max_length else 0 for pair in self.tokens])
 
-            logger.debug("%d pairs of URLs need truncation of %d pairs", needs_truncation, len(self.tokens))
+            logger.debug("%d pairs of URLs need truncation of %d pairs%s", needs_truncation, len(self.tokens),
+                                                                           f" ({self.set_desc})" if self.set_desc else '')
 
             self.tokens = [pair[:max_length] for pair in self.tokens]
 
@@ -97,8 +102,8 @@ class SmartBatchingURLsDataset(Dataset):
             )
 
         if max_tokens:
-            logger.info("Batch size will be data-dependant: batches of, approximately, %d tokens will be returned",
-                        max_tokens)
+            logger.info("Batch size will be data-dependant%s: batches of, approximately, %d tokens will be returned",
+                        f" ({self.set_desc})" if self.set_desc else '', max_tokens)
 
             collate_fn = MaxTokensCollate(
                 pad_token_id=self.pad_token_id,
@@ -110,14 +115,23 @@ class SmartBatchingURLsDataset(Dataset):
                 pad_token_id=self.pad_token_id,
             )
 
-        num_workers = 0 if is_device_gpu else multiprocessing.cpu_count() - 1 \
-                        if num_workers < 0 else num_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
-                                                            #  when GPU is being used
+        if not is_device_gpu and num_workers < 0:
+            num_workers = len(os.sched_getaffinity(0)) # Same value used by dataloader implementation
+
+            logger.debug("Num. workers%s: %d", f" ({self.set_desc})" if self.set_desc else '', num_workers)
+        else:
+            num_workers = 0 if is_device_gpu else num_workers # 0 is the adviced value in https://pytorch.org/docs/stable/data.html
+                                                              #  when GPU is being used
+
         dataloader_kwargs = {
             "pin_memory": True,
             "pin_memory_device": device.type,
             "num_workers": num_workers,
         }
+
+        if force_cpu:
+            dataloader_kwargs["pin_memory"] = False # pin_memory uses GPU if available
+            dataloader_kwargs["pin_memory_device"] = ''
 
         # Check if we can use recent pytorch features
         pytorch_major, pytorch_minor, pytorch_patch = utils.get_pytorch_version()
@@ -130,11 +144,6 @@ class SmartBatchingURLsDataset(Dataset):
 
             del dataloader_kwargs["pin_memory_device"]
 
-            if force_cpu:
-                # pin_memory uses GPU if available
-
-                dataloader_kwargs["pin_memory"] = False
-
         dataloader = DataLoader(
             dataset=self,
             batch_size=None if max_tokens else batch_size, # https://pytorch.org/docs/stable/data.html#disable-automatic-batching
@@ -145,7 +154,7 @@ class SmartBatchingURLsDataset(Dataset):
 
         if set_dataloader:
             if self.dataloader:
-                logger.warning("Be aware that the dataloader has been updated")
+                logger.warning("Be aware that the dataloader has been updated%s", f" ({self.set_desc})" if self.set_desc else '')
 
             self.dataloader = dataloader
 
@@ -273,6 +282,16 @@ class MaxTokensCollate:
             force_return = True
         else:
             self._current_batch.append([sequence, target])
+
+        if more_max_tokens_processed and last_batch:
+            logger.warning("Specified max_tokens have been exceeded: edge case where we had some element in the auxiliary"
+                           "storage because of the previous iteration but we hit the last batch and has to be processed:"
+                           "this might cause an OOM if using GPU: %d extra tokens", self._current_tokens - self._max_tokens)
+
+            if len(self._current_batch) != 2:
+                # We expect batch size to be 2: stored element and last element
+                # This can't happen with 1 element since max_tokens >= max_length_tokens_model (tokens are either truncated or removed)
+                logger.error("The expected batch size is 2, but got %d (bug?)", len(self._current_batch))
 
         if force_return or max_tokens_processed or last_batch:
             # Return dynamic batch when max_tokens criteria is met or last batch is being processed

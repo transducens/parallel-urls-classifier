@@ -43,6 +43,7 @@ from transformers import (
     AutoModelForMaskedLM,
     get_linear_schedule_with_warmup,
 )
+import sklearn
 
 # Disable (less verbose) 3rd party logging
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
@@ -291,6 +292,11 @@ def main(args):
         logger.warning("HuggingFace models can handle a max. of 512 tokens at once and you set %d: changing value to 512")
 
         max_length_tokens = 512
+    if max_tokens and max_tokens < max_length_tokens:
+        logger.warning("The specified max_tokens has to be greater or equal that the max length tokens of the model:"
+                       "changing value from %d to %d", max_tokens, max_length_tokens)
+
+        max_tokens = max_length_tokens
 
     logger.info("Device: %s", device)
 
@@ -381,6 +387,8 @@ def main(args):
             logger.warning("Incompatible weight strategy ('%s'): regression can't be applied with the selected strategy: "
                            "it will not be applied", imbalanced_strategy)
 
+            imbalanced_strategy = "none"
+
     # Unfreeze heads layers
     for task in all_tasks:
         head = model.get_head(task)
@@ -439,7 +447,6 @@ def main(args):
     min_train_samples = min(len(non_parallel_urls_train), len(parallel_urls_train))
     classes_count = np.array([len(non_parallel_urls_train), len(parallel_urls_train)]) # non-parallel URLs label is 0, and
                                                                                        #  parallel URLs label is 1
-    classes_weights = 1.0 / classes_count
     min_classes_weights = min_train_samples / classes_count
 
     if imbalanced_strategy == "none":
@@ -450,9 +457,6 @@ def main(args):
                 logger.warning("Your data seems to be imbalanced and you did not selected any imbalanced data strategy")
                 break
 
-    logger.debug("Classes weights: %s", str(classes_weights))
-
-    classes_weights = torch.as_tensor(classes_weights, dtype=torch.float)
     over_sampling = imbalanced_strategy == "over-sampling"
 
     if over_sampling:
@@ -461,12 +465,12 @@ def main(args):
 
     # Datasets
     dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
-                                                     max_length_tokens, regression=regression,
+                                                     max_length_tokens, regression=regression, set_desc="train",
                                                      remove_instead_of_truncate=remove_instead_of_truncate)
     dataset_dev = dataset.SmartBatchingURLsDataset(parallel_urls_dev, non_parallel_urls_dev, tokenizer,
-                                                   max_length_tokens, regression=regression)
+                                                   max_length_tokens, regression=regression, set_desc="dev")
     dataset_test = dataset.SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer,
-                                                    max_length_tokens, regression=regression)
+                                                    max_length_tokens, regression=regression, set_desc="test")
 
     logger.debug("Total tokens (train): %d", dataset_train.total_tokens)
     logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
@@ -480,10 +484,16 @@ def main(args):
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
     #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
+    classes_weights = torch.as_tensor(sklearn.utils.class_weight.compute_class_weight("balanced",
+                                                                                      classes=np.unique(dataset_train.labels),
+                                                                                      y=dataset_train.labels.numpy()),
+                                      dtype=torch.float)
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     training_steps_per_epoch = len(dataloader_train)
     training_steps = training_steps_per_epoch * epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     criteria = {}
+
+    logger.debug("Classes weights: %s", str(classes_weights))
 
     # Get criterion for each head task
     for head_task in all_tasks:
@@ -493,7 +503,7 @@ def main(args):
                 criterion = nn.MSELoss()
             else:
                 # Binary classification
-                criterion = nn.CrossEntropyLoss(weight=loss_weight) # Raw input, not normalized (i.e. don't apply softmax)
+                criterion = nn.CrossEntropyLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized (i.e. don't apply softmax)
         elif head_task == "mlm":
             criterion = nn.CrossEntropyLoss()
         else:
@@ -943,7 +953,7 @@ def initialization():
     parser.add_argument('--inference-from-stdin', action="store_true", help="Read inference from stdin")
     parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
     parser.add_argument('--threshold', type=float, default=-np.inf, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
-    parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="")
+    parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="Strategy for dealing with imbalanced data")
     parser.add_argument('--patience', type=int, default=0, help="Patience before stopping the training")
     parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored in order to stop, but will still be used for other actions like LR scheduler)")
     parser.add_argument('--do-not-load-best-model', action="store_true", help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
