@@ -24,12 +24,11 @@ def get_urls_from_sent(sent_file, src_url_idx, trg_url_idx, bicleaner_idx=None):
 
             try:
                 if bicleaner_idx is not None:
-                    # Avg bicleaner score
-                    urls[url]["bicleaner"] = (urls[url]["bicleaner"] * urls[url]["occurrences"] + bicleaner) / (urls[url]["occurrences"] + 1)
+                    urls[url]["bicleaner_sum"] += bicleaner
 
                 urls[url]["occurrences"] += 1
             except KeyError:
-                urls[url] = {"occurrences": 1, "bicleaner": bicleaner}
+                urls[url] = {"occurrences": 1, "bicleaner_sum": bicleaner}
 
     return urls
 

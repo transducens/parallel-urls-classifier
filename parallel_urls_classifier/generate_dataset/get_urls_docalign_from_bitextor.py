@@ -294,7 +294,8 @@ def main(args):
     if sent_file:
         logging.info("Processing sent.gz file")
 
-        aligned_urls = utils_bitextor.get_urls_from_sent(sent_file, sent_file_src_url_idx, sent_file_trg_url_idx, bicleaner_idx=sent_file_bicleaner_idx)
+        aligned_urls = utils_bitextor.get_urls_from_sent(sent_file, sent_file_src_url_idx, sent_file_trg_url_idx,
+                                                         bicleaner_idx=sent_file_bicleaner_idx)
 
         logging.info("Unique different paired URLs: %d", len(aligned_urls))
 
@@ -305,7 +306,7 @@ def main(args):
         for idx, (url, data) in enumerate(aligned_urls.items()):
             # Iterate through unique URLs
             occurrences = data["occurrences"]
-            avg_doc_bicleaner_score = data["bicleaner"]
+            avg_doc_bicleaner_score = min(data["bicleaner_sum"] / occurrences, 1.0)
 
             if (idx + 1) % 10000 == 0:
                 logging.debug("%.2f finished", (idx + 1) * 100.0 / len(aligned_urls))
@@ -393,7 +394,7 @@ def initialization():
     parser.add_argument('--sent-file-bicleaner-idx', type=int, default=None, help=".sent.gz file bicleaner idx")
 
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
-    parser.add_argument('--bicleaner-threshold', type=float, default=0.5,
+    parser.add_argument('--bicleaner-threshold', type=float, default=0.0,
                         help="Bicleaner threshold. The threshold is applied to the avg scores for all the sentences of the document")
     parser.add_argument('--docalign-threshold', type=float, default=0.0, help="Docalign threshold")
 
