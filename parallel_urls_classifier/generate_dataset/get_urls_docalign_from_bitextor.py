@@ -285,6 +285,10 @@ def main(args):
                 nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
 
                 if not sent_file:
+                    # We want to avoid scientific notation
+                    score = round(score, 5)
+                    nolines_score = round(nolines_score, 5)
+
                     sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
                     sys.stdout.write('\n')
 
@@ -356,6 +360,13 @@ def main(args):
 
                 if process_docalign:
                     logging.warning("Docalign score not found for URLs: ('%s', '%s')", src_url, trg_url)
+
+            # We want to avoid scientific notation
+            score = round(score, 5)
+            nolines_score = round(nolines_score, 5)
+            occurrences_score = round(occurrences_score, 5)
+            nolines_and_occurences_score_f1 = round(nolines_and_occurences_score_f1, 5)
+            avg_doc_bicleaner_score = round(avg_doc_bicleaner_score, 5)
 
             sys.stdout.write(f"{src_url}\t{trg_url}")
 
