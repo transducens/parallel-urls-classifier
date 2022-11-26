@@ -39,8 +39,8 @@ def evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs, lowercase_tokens, pr
     parallel = 0
 
     # Replace and check
-    src_url_replace = [trg_lang if token == src_lang else token for token in src_url_tokenized]
-    parallel = 1 if src_url_replace == trg_url_tokenized else 0
+    normalized_url = [trg_lang if token == src_lang else token for token in src_url_tokenized]
+    parallel = 1 if normalized_url == trg_url_tokenized else 0
     pair = f"{src_url}\t{trg_url}"
 
     if print_pair and parallel:
@@ -84,7 +84,7 @@ def main(args):
 
     # Create pairs of URLs to evaluate
     if evaluate_urls_in_gs and gs_file:
-        logging.debug("Adding only URLs which appears in the GS")
+        logging.debug("Only URLs which appears in the GS will be evaluated")
     else:
         logging.warning("GS will not be used for evaluation, so the product of all URLs will be added")
 
