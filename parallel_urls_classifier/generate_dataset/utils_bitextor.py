@@ -10,7 +10,7 @@ sys.path.insert(0, f"{cdir}/../..")
 
 import parallel_urls_classifier.utils.utils as utils
 
-def get_urls_from_sent(sent_file, src_url_idx, trg_url_idx):
+def get_urls_from_sent(sent_file, src_url_idx, trg_url_idx, bicleaner_idx=None):
     urls = {}
 
     with utils.open_xz_or_gzip_or_plain(sent_file) as fd:
@@ -19,12 +19,17 @@ def get_urls_from_sent(sent_file, src_url_idx, trg_url_idx):
             line[-1] = line[-1].rstrip('\n')
             src_url = line[src_url_idx]
             trg_url = line[trg_url_idx]
+            bicleaner = float(line[bicleaner_idx]) if bicleaner_idx is not None else -1.0
             url = f"{src_url}\t{trg_url}"
 
             try:
-                urls[url] += 1
+                if bicleaner_idx is not None:
+                    # Avg bicleaner score
+                    urls[url]["bicleaner"] = (urls[url]["bicleaner"] * urls[url]["occurrences"] + bicleaner) / (urls[url]["occurrences"] + 1)
+
+                urls[url]["occurrences"] += 1
             except KeyError:
-                urls[url] = 1
+                urls[url] = {"occurrences": 1, "bicleaner": bicleaner}
 
     return urls
 

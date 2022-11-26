@@ -124,9 +124,11 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
 
 def main(args):
     min_occurrences = args.min_occurrences
+    bicleaner_threshold = args.bicleaner_threshold
     sent_file = args.sent_file
     sent_file_src_url_idx = args.sent_file_src_url_idx
     sent_file_trg_url_idx = args.sent_file_trg_url_idx
+    sent_file_bicleaner_idx = args.sent_file_bicleaner_idx
     docalign_mt_matches_files = args.docalign_mt_matches_files
     src_url_files = args.src_url_files
     trg_url_files = args.trg_url_files
@@ -224,6 +226,9 @@ def main(args):
     if sent_file:
         sys.stdout.write("\tsegalign_src_and_trg_nolines\tsegalign_src_and_trg_nolines_score\tsegalign_and_docs_nolines_score_f1")
 
+        if sent_file_bicleaner_idx is not None:
+            sys.stdout.write("avg_doc_bicleaner_score")
+
     sys.stdout.write('\n')
 
     if process_docalign:
@@ -289,21 +294,29 @@ def main(args):
     if sent_file:
         logging.info("Processing sent.gz file")
 
-        aligned_urls = utils_bitextor.get_urls_from_sent(sent_file, sent_file_src_url_idx, sent_file_trg_url_idx)
+        aligned_urls = utils_bitextor.get_urls_from_sent(sent_file, sent_file_src_url_idx, sent_file_trg_url_idx, bicleaner_idx=sent_file_bicleaner_idx)
 
         logging.info("Unique different paired URLs: %d", len(aligned_urls))
 
         skipped_bc_docalign = 0
         skipped_bc_min_occ = 0
+        skipped_bc_bicleaner = 0
 
-        for idx, (url, occurrences) in enumerate(aligned_urls.items()):
+        for idx, (url, data) in enumerate(aligned_urls.items()):
+            # Iterate through unique URLs
+            occurrences = data["occurrences"]
+            avg_doc_bicleaner_score = data["bicleaner"]
+
             if (idx + 1) % 10000 == 0:
                 logging.debug("%.2f finished", (idx + 1) * 100.0 / len(aligned_urls))
-                logging.debug("Currently skipped URLs (min occ., docalign, diff. nolines): (%d, %d)",
-                              skipped_bc_min_occ, skipped_bc_docalign)
+                logging.debug("Currently skipped URLs (min occ., docalign, bicleaner): (%d, %d, %d)",
+                              skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner)
 
             if occurrences < min_occurrences:
                 skipped_bc_min_occ += 1
+                continue
+            if sent_file_bicleaner_idx is not None and avg_doc_bicleaner_score < bicleaner_threshold:
+                skipped_bc_bicleaner += 1
                 continue
 
             urls = url.split('\t')
@@ -350,12 +363,16 @@ def main(args):
 
             sys.stdout.write(f"\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
             sys.stdout.write(f"\t{occurrences}\t{occurrences_score}\t{nolines_and_occurences_score_f1}")
+
+            if sent_file_bicleaner_idx is not None:
+                sys.stdout.write(f"\t{avg_doc_bicleaner_score}")
+
             sys.stdout.write('\n')
 
             total_printed_urls += 1
 
-        logging.info("Total skipped URLs (min occ., docalign, diff. nolines): (%d, %d)",
-                     skipped_bc_min_occ, skipped_bc_docalign)
+        logging.info("Total skipped URLs (min occ., docalign, bicleaner): (%d, %d, %d)",
+                     skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner)
 
     logging.info("Total printed URLs: %d", total_printed_urls)
 
@@ -368,11 +385,16 @@ def initialization():
     parser.add_argument('--trg-url-files', nargs='+', required=True, help="Target url.gz files from sharding")
     parser.add_argument('--src-sentences-files', nargs='+', required=True, help="Source sentences.gz files from sharding")
     parser.add_argument('--trg-sentences-files', nargs='+', required=True, help="Target sentences.gz files from sharding")
-    parser.add_argument('--sent-file', help=".sent.gz file. If not provided, only docalign will be taken into account")
+    parser.add_argument('--sent-file',
+                        help=".sent.gz file (you may want to apply some filtering, e.g., bicleaner score, and"
+                             "dedup should not be applied). If not provided, only docalign will be taken into account")
     parser.add_argument('--sent-file-src-url-idx', type=int, default=0, help=".sent.gz file src URL idx")
     parser.add_argument('--sent-file-trg-url-idx', type=int, default=1, help=".sent.gz file trg URL idx")
+    parser.add_argument('--sent-file-bicleaner-idx', type=int, default=None, help=".sent.gz file bicleaner idx")
 
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
+    parser.add_argument('--bicleaner-threshold', type=float, default=0.5,
+                        help="Bicleaner threshold. The threshold is applied to the avg scores for all the sentences of the document")
     parser.add_argument('--docalign-threshold', type=float, default=0.0, help="Docalign threshold")
 
     parser.add_argument('-q', '--quiet', action='store_true', help="Silent logging mode")

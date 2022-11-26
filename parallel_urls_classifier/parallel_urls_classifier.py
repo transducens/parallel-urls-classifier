@@ -491,6 +491,7 @@ def main(args):
             else:
                 # Binary classification
                 criterion = nn.CrossEntropyLoss(weight=loss_weight) # Raw input, not normalized (i.e. don't apply softmax)
+                # TODO change to BCELoss? bceloss vs crossentropyloss -> BCELoss seems to fit here
         elif head_task == "mlm":
             criterion = nn.CrossEntropyLoss()
         else:
