@@ -63,6 +63,8 @@ def main(args):
     y_true, y_pred = [], []
     src_urls, trg_urls = [], []
     total_pairs = 0
+    src_urls_found, trg_urls_found = set(), set()
+    matches = 0
 
     # Read URLs
     for idx, line in enumerate(input_file, 1):
@@ -91,6 +93,10 @@ def main(args):
     for src_url, trg_url in itertools.product(src_urls, trg_urls):
         pair = False
 
+        if src_url in src_urls_found or trg_url in trg_urls_found:
+            # We don't evaluate URLs which were classified as parallel
+            continue
+
         if evaluate_urls_in_gs and gs_file:
             if src_url in src_gs or trg_url in trg_gs:
                 # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
@@ -107,7 +113,16 @@ def main(args):
 
             total_pairs += 1
 
+            if _y_pred:
+                src_urls_found.add(src_url)
+                trg_urls_found.add(trg_url)
+
+                matches += 1
+
+    negative_matches = total_pairs - matches
+
     logging.info("URL pairs: %d", total_pairs)
+    logging.info("Positive and negative matches: %d, %d", matches, negative_matches)
     logging.info("Evaluating...")
 
     if gs_file:
