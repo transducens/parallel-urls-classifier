@@ -97,8 +97,8 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
     return results
 
 @torch.no_grad()
-def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloader, device,
-              amp_context_manager, classes=2):
+def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset, device,
+              amp_context_manager, classes=2, max_tokens=None):
     model.eval()
 
     total_loss = 0.0
@@ -110,11 +110,20 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
     total_macro_f1 = 0.0
     all_outputs = []
     all_labels = []
-    total_blocks_per_batch = max(int(np.ceil(batch_size / block_size)), 1)
+    total_blocks_per_batch = 1 if max_tokens else max(int(np.ceil(batch_size / block_size)), 1)
+    total_tokens = 0
+    total_tokens_with_padding = 0
+    dataloader = dataset.dataloader
 
     for idx, batch in enumerate(dataloader):
+        if max_tokens and batch is None:
+            # Batch is under construction using max_tokens...
+            continue
+
         for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, device):
             labels = inputs_and_outputs["labels"]
+            total_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
+            total_tokens_with_padding += sum([len(urls) for urls in inputs_and_outputs["urls"]])
 
             # Inference
             results = inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_context_manager, criteria=criteria)
@@ -140,6 +149,10 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataloa
 
             all_outputs.extend(outputs_argmax.tolist())
             all_labels.extend(labels.tolist())
+
+    if total_tokens != dataset.total_tokens:
+        logger.error("Total processed tokens are different from the initial total tokens: %d vs %d",
+                     total_tokens, dataset.total_tokens)
 
     all_outputs = torch.as_tensor(all_outputs)
     all_labels = torch.as_tensor(all_labels)
@@ -276,7 +289,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
 
     for target_urls in urls_generator:
         # Tokens
-        tokens = utils.encode(tokenizer, target_urls, max_length_tokens, padding="longest", return_attention_mask=True)
+        tokens = utils.encode(tokenizer, target_urls, max_length=max_length_tokens, padding="longest", return_attention_mask=True)
         urls = tokens["input_ids"].to(device)
         attention_mask = tokens["attention_mask"].to(device)
 

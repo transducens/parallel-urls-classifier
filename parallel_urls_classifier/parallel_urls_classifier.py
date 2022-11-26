@@ -43,6 +43,7 @@ from transformers import (
     AutoModelForMaskedLM,
     get_linear_schedule_with_warmup,
 )
+import sklearn
 
 # Disable (less verbose) 3rd party logging
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
@@ -168,6 +169,7 @@ def main(args):
 
     batch_size = args.batch_size
     block_size = args.block_size
+    max_tokens = args.max_tokens if args.max_tokens > 0 else None
     epochs = args.epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     force_cpu = args.force_cpu
     use_cuda = utils.use_cuda(force_cpu=force_cpu) # Will be True if possible and False otherwise
@@ -209,6 +211,7 @@ def main(args):
     auxiliary_tasks_weights = args.auxiliary_tasks_weights
     freeze_embeddings_layer = args.freeze_embeddings_layer
     waiting_time = args.waiting_time
+    remove_instead_of_truncate = args.remove_instead_of_truncate
 
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
@@ -259,9 +262,6 @@ def main(args):
     # Disable parallelism since throws warnings
     os.environ["TOKENIZERS_PARALLELISM"] = "False"
 
-    if not apply_inference and train_until_patience:
-        logger.warning("Be aware that even training until patience is reached and not a fixed number of epochs, the selected number of epochs is relevant since it is a parameter which is used by the LR scheduler")
-
     if apply_inference and not model_input:
         logger.warning("Flag --model-input is recommended when --inference is provided: waiting %d seconds before proceed", waiting_time)
 
@@ -289,6 +289,11 @@ def main(args):
         logger.warning("HuggingFace models can handle a max. of 512 tokens at once and you set %d: changing value to 512")
 
         max_length_tokens = 512
+    if max_tokens and max_tokens < max_length_tokens:
+        logger.warning("The specified max_tokens has to be greater or equal that the max length tokens of the model:"
+                       "changing value from %d to %d", max_tokens, max_length_tokens)
+
+        max_tokens = max_length_tokens
 
     logger.info("Device: %s", device)
 
@@ -379,6 +384,8 @@ def main(args):
             logger.warning("Incompatible weight strategy ('%s'): regression can't be applied with the selected strategy: "
                            "it will not be applied", imbalanced_strategy)
 
+            imbalanced_strategy = "none"
+
     # Unfreeze heads layers
     for task in all_tasks:
         head = model.get_head(task)
@@ -437,7 +444,6 @@ def main(args):
     min_train_samples = min(len(non_parallel_urls_train), len(parallel_urls_train))
     classes_count = np.array([len(non_parallel_urls_train), len(parallel_urls_train)]) # non-parallel URLs label is 0, and
                                                                                        #  parallel URLs label is 1
-    classes_weights = 1.0 / classes_count
     min_classes_weights = min_train_samples / classes_count
 
     if imbalanced_strategy == "none":
@@ -448,39 +454,38 @@ def main(args):
                 logger.warning("Your data seems to be imbalanced and you did not selected any imbalanced data strategy")
                 break
 
-    logger.debug("Classes weights: %s", str(classes_weights))
-
-    classes_weights = torch.as_tensor(classes_weights, dtype=torch.float)
-    over_sampling = imbalanced_strategy == "over-sampling"
-
-    if over_sampling:
-        # TODO implement correctly over-sampling (WeightedRandomSampler was not a correct way to do it since it was downsampling the major class as well)
-        raise Exception("TODO: implement")
-
     # Datasets
     dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
-                                                     max_length_tokens, regression=regression)
+                                                     max_length_tokens, regression=regression, set_desc="train",
+                                                     remove_instead_of_truncate=remove_instead_of_truncate,
+                                                     imbalanced_strategy=imbalanced_strategy)
     dataset_dev = dataset.SmartBatchingURLsDataset(parallel_urls_dev, non_parallel_urls_dev, tokenizer,
-                                                   max_length_tokens, regression=regression)
+                                                   max_length_tokens, regression=regression, set_desc="dev")
     dataset_test = dataset.SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer,
-                                                    max_length_tokens, regression=regression)
+                                                    max_length_tokens, regression=regression, set_desc="test")
 
     logger.debug("Total tokens (train): %d", dataset_train.total_tokens)
     logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
 
-    dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
-    dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
-    dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers)
+    dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
+    dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
+    dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
 
     #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
     #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
+    classes_weights = torch.as_tensor(sklearn.utils.class_weight.compute_class_weight("balanced",
+                                                                                      classes=np.unique(dataset_train.labels),
+                                                                                      y=dataset_train.labels.numpy()),
+                                      dtype=torch.float)
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     training_steps_per_epoch = len(dataloader_train)
     training_steps = training_steps_per_epoch * epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     criteria = {}
+
+    logger.debug("Classes weights: %s", str(classes_weights))
 
     # Get criterion for each head task
     for head_task in all_tasks:
@@ -490,7 +495,7 @@ def main(args):
                 criterion = nn.MSELoss()
             else:
                 # Binary classification
-                criterion = nn.CrossEntropyLoss(weight=loss_weight) # Raw input, not normalized (i.e. don't apply softmax)
+                criterion = nn.CrossEntropyLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized (i.e. don't apply softmax)
                 # TODO change to BCELoss? bceloss vs crossentropyloss -> BCELoss seems to fit here
         elif head_task == "mlm":
             criterion = nn.CrossEntropyLoss()
@@ -562,7 +567,7 @@ def main(args):
     stop_training = False
     epoch = 0
     current_patience = 0
-    total_blocks_per_batch = max(int(np.ceil(batch_size / block_size)), 1)
+    total_blocks_per_batch = 1 if max_tokens else max(int(np.ceil(batch_size / block_size)), 1)
 
     # Statistics
     batch_loss = []
@@ -585,10 +590,17 @@ def main(args):
         all_outputs = []
         all_labels = []
         total_train_tokens = 0
+        total_train_tokens_with_padding = 0
+        idx = -1
 
         model.train()
 
-        for idx, batch in enumerate(dataloader_train):
+        for batch in dataloader_train:
+            if max_tokens and batch is None:
+                # Batch is under construction using max_tokens...
+                continue
+
+            idx += 1
             batch_outputs = []
             batch_labels = []
             loss_value = None
@@ -598,9 +610,10 @@ def main(args):
             model.zero_grad()
 
             # Process in block_size blocks in order to avoid OOM errors, but use batch_size for update the model
-            for inputs_and_outputs in utils.get_data_from_batch(batch, block_size, device):
+            for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, device):
                 labels = inputs_and_outputs["labels"]
                 total_train_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
+                total_train_tokens_with_padding += sum([len(urls) for urls in inputs_and_outputs["urls"]])
 
                 # Inference
                 results = inference_with_heads(model, all_tasks, tokenizer, inputs_and_outputs, amp_context_manager,
@@ -661,6 +674,8 @@ def main(args):
 
             if log:
                 logger.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
+                logger.debug("[train:batch#%d] Processed tokens (without padding): %d (%d)", idx + 1, total_train_tokens_with_padding,
+                             total_train_tokens)
 
                 if len(all_tasks) > 1:
                     for t, v in tasks_loss_value.items():
@@ -712,11 +727,12 @@ def main(args):
             scheduler.step()
 
         if total_train_tokens != dataset_train.total_tokens:
-            if over_sampling:
-                pass
-            else:
+            if imbalanced_strategy in ("none", "weighted-loss"):
                 logger.error("Total processed tokens are different from the initial total tokens: %d vs %d",
-                            total_train_tokens, dataset_train.total_tokens)
+                             total_train_tokens, dataset_train.total_tokens)
+            else:
+                # The selected imbalanced_strategy modifies the number of samples, so we can't compare if it's what we expect
+                pass
 
         current_last_layer_output = utils.get_layer_from_model(model.get_base_model().base_model.encoder.layer[-1], name="output.dense.weight")
         layer_updated = (current_last_layer_output != last_layer_output).any().cpu().detach().numpy()
@@ -745,8 +761,8 @@ def main(args):
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
 
-        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                          device, amp_context_manager, classes=classes)
+        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
+                                          device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
         # Dev metrics
         dev_loss = dev_inference_metrics["loss"]
@@ -844,8 +860,8 @@ def main(args):
 
         model.from_pretrained_wrapper(model_output, device=device)
 
-    dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_dev,
-                                      device, amp_context_manager, classes=classes)
+    dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
+                                      device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -864,8 +880,8 @@ def main(args):
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
 
-    test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataloader_test,
-                                       device, amp_context_manager, classes=classes)
+    test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_test,
+                                       device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
@@ -919,6 +935,7 @@ def initialization():
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be processed before proceed to train, but the whole batch will be processed in blocks in order to avoid OOM errors")
     parser.add_argument('--block-size', type=int, help="Block size. Elements which will be provided to the model at once")
+    parser.add_argument('--max-tokens', type=int, default=-1, help="Process batches in groups tokens size (fairseq style). Batch size is still relevant since the value is used when batches are needed (e.g. sampler from dataset)")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
     parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
     parser.add_argument('--dataset-workers', type=int, default=-1, help="No. workers when loading the data in the dataset. When negative, all available CPUs will be used")
@@ -930,7 +947,7 @@ def initialization():
     parser.add_argument('--inference-from-stdin', action="store_true", help="Read inference from stdin")
     parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
     parser.add_argument('--threshold', type=float, default=-np.inf, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
-    parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="")
+    parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="Strategy for dealing with imbalanced data")
     parser.add_argument('--patience', type=int, default=0, help="Patience before stopping the training")
     parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored in order to stop, but will still be used for other actions like LR scheduler)")
     parser.add_argument('--do-not-load-best-model', action="store_true", help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
@@ -961,6 +978,7 @@ def initialization():
     parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm"], help="Tasks which will try to help to the main task (multitasking)")
     parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
+    parser.add_argument('--remove-instead-of-truncate', action="store_true", help="Remove pairs of URLs which would need to be truncated (if not enabled, truncation will be applied). This option will be only applied to the training set")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")

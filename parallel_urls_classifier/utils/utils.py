@@ -49,11 +49,12 @@ def get_layer_from_model(layer, name=None, deepcopy=True):
 
     return last_layer_param_data
 
-def encode(tokenizer, text, max_length=512, add_special_tokens=True, padding="do_not_pad", return_attention_mask=False):
+def encode(tokenizer, text, max_length=512, add_special_tokens=True, padding="do_not_pad", return_attention_mask=False,
+           return_tensors="pt", truncation=True):
     encoder = tokenizer.batch_encode_plus if isinstance(text, list) else tokenizer.encode_plus
 
-    return encoder(text, add_special_tokens=add_special_tokens, truncation=True, padding=padding,
-                   return_attention_mask=return_attention_mask, return_tensors="pt", max_length=max_length)
+    return encoder(text, add_special_tokens=add_special_tokens, truncation=truncation, padding=padding,
+                   return_attention_mask=return_attention_mask, return_tensors=return_tensors, max_length=max_length)
 
 def apply_model(model, tokenizer, tokens, encode=False):
     if encode:
@@ -396,8 +397,8 @@ def get_data_from_batch(batch, block_size, device):
 
     # Split in batch_size batches
     start = 0
-    end = start + block_size
     current_batch_size = labels.reshape(-1).shape[0]
+    end = start + (block_size if block_size else current_batch_size) # Return the whole batch if the block size was not provided
 
     while True:
         if start < end:
@@ -415,7 +416,7 @@ def get_data_from_batch(batch, block_size, device):
             yield inputs_and_outputs
 
             start = end
-            end = min(start + block_size, current_batch_size)
+            end = min(start + (block_size if block_size else current_batch_size), current_batch_size)
         else:
             break
 
