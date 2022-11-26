@@ -393,7 +393,7 @@ def initialization():
     parser.add_argument('--sent-file-bicleaner-idx', type=int, default=None, help=".sent.gz file bicleaner idx")
 
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
-    parser.add_argument('--bicleaner-threshold', type=float, default=0.5,
+    parser.add_argument('--bicleaner-threshold', type=float, default=0.0,
                         help="Bicleaner threshold. The threshold is applied to the avg scores for all the sentences of the document")
     parser.add_argument('--docalign-threshold', type=float, default=0.0, help="Docalign threshold")
 
