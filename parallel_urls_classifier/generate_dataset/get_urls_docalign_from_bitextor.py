@@ -227,7 +227,7 @@ def main(args):
         sys.stdout.write("\tsegalign_src_and_trg_nolines\tsegalign_src_and_trg_nolines_score\tsegalign_and_docs_nolines_score_f1")
 
         if sent_file_bicleaner_idx is not None:
-            sys.stdout.write("avg_doc_bicleaner_score")
+            sys.stdout.write("\tavg_doc_bicleaner_score")
 
     sys.stdout.write('\n')
 
