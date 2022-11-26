@@ -33,20 +33,17 @@ def get_gs(file):
 
     return gs, src_gs, trg_gs
 
-def evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs, lowercase_tokens):
+def evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs, lowercase_tokens, print_pair=True):
     src_url_tokenized = tokenizer.tokenize(src_url.lower() if lowercase_tokens else src_url, check_gaps=False)
     trg_url_tokenized = tokenizer.tokenize(trg_url.lower() if lowercase_tokens else trg_url, check_gaps=False)
     parallel = 0
 
-    # Replace
-    trg_url_replace = [trg_lang if token == src_lang else token for token in src_url_tokenized]
-
-    if trg_url_replace == src_url_tokenized:
-        parallel = 1
-
+    # Replace and check
+    src_url_replace = [trg_lang if token == src_lang else token for token in src_url_tokenized]
+    parallel = 1 if src_url_replace == trg_url_tokenized else 0
     pair = f"{src_url}\t{trg_url}"
 
-    if parallel:
+    if print_pair and parallel:
         print(pair)
 
     y_pred = parallel
