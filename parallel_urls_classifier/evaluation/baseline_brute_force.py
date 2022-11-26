@@ -33,6 +33,27 @@ def get_gs(file):
 
     return gs, src_gs, trg_gs
 
+def evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs, lowercase_tokens):
+    src_url_tokenized = tokenizer.tokenize(src_url.lower() if lowercase_tokens else src_url, check_gaps=False)
+    trg_url_tokenized = tokenizer.tokenize(trg_url.lower() if lowercase_tokens else trg_url, check_gaps=False)
+    parallel = 0
+
+    # Replace
+    trg_url_replace = [trg_lang if token == src_lang else token for token in src_url_tokenized]
+
+    if trg_url_replace == src_url_tokenized:
+        parallel = 1
+
+    pair = f"{src_url}\t{trg_url}"
+
+    if parallel:
+        print(pair)
+
+    y_pred = parallel
+    y_true = 1 if pair in gs else 0
+
+    return y_pred, y_true
+
 def main(args):
     input_file = args.input
     src_lang = args.src_lang
@@ -44,7 +65,7 @@ def main(args):
     gs, src_gs, trg_gs = get_gs(gs_file) if gs_file else (set(), set(), set())
     y_true, y_pred = [], []
     src_urls, trg_urls = [], []
-    pairs = []
+    total_pairs = 0
 
     # Read URLs
     for idx, line in enumerate(input_file, 1):
@@ -71,35 +92,26 @@ def main(args):
         logging.warning("GS will not be used for evaluation, so the product of all URLs will be added")
 
     for src_url, trg_url in itertools.product(src_urls, trg_urls):
+        pair = False
+
         if evaluate_urls_in_gs and gs_file:
             if src_url in src_gs or trg_url in trg_gs:
                 # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
-                pairs.append((src_url, trg_url))
+                pair = True
         else:
-            pairs.append((src_url, trg_url))
+            pair = True
 
-    logging.info("URL pairs: %d", len(pairs))
+        if pair:
+            # Evaluate URL pair
+            _y_pred, _y_true = evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs, lowercase_tokens)
+
+            y_pred.append(_y_pred)
+            y_true.append(_y_true)
+
+            total_pairs += 1
+
+    logging.info("URL pairs: %d", total_pairs)
     logging.info("Evaluating...")
-
-    # Evaluate all URL pairs
-    for src_url, trg_url in pairs:
-        src_url_tokenized = tokenizer.tokenize(src_url.lower() if lowercase_tokens else src_url, check_gaps=False)
-        trg_url_tokenized = tokenizer.tokenize(trg_url.lower() if lowercase_tokens else trg_url, check_gaps=False)
-        parallel = 0
-
-        # Replace
-        trg_url_replace = [trg_lang if token == src_lang else token for token in src_url_tokenized]
-
-        if trg_url_replace == src_url_tokenized:
-            parallel = 1
-
-        pair = f"{src_url}\t{trg_url}"
-
-        if parallel:
-            print(pair)
-
-        y_pred.append(parallel)
-        y_true.append(1 if pair in gs else 0)
 
     if gs_file:
         # Log metrics
