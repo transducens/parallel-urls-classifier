@@ -16,7 +16,7 @@ import parallel_urls_classifier.tokenizer as tokenizer
 
 import sklearn.metrics
 
-def get_gs(file):
+def get_gs(file, lowercase=False):
     gs, src_gs, trg_gs = set(), set(), set()
 
     for idx, line in enumerate(file, 1):
@@ -27,15 +27,18 @@ def get_gs(file):
 
             continue
 
+        if lowercase:
+            line = line.lower()
+
         src_gs.add(line[0])
         trg_gs.add(line[1])
         gs.add('\t'.join(line))
 
     return gs, src_gs, trg_gs
 
-def evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs, lowercase_tokens, print_pair=True):
-    src_url_tokenized = tokenizer.tokenize(src_url.lower() if lowercase_tokens else src_url, check_gaps=False)
-    trg_url_tokenized = tokenizer.tokenize(trg_url.lower() if lowercase_tokens else trg_url, check_gaps=False)
+def evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs, print_pair=True):
+    src_url_tokenized = tokenizer.tokenize(src_url, check_gaps=False)
+    trg_url_tokenized = tokenizer.tokenize(trg_url, check_gaps=False)
     parallel = 0
 
     # Replace and check
@@ -57,9 +60,9 @@ def main(args):
     trg_lang = args.trg_lang
     gs_file = args.gold_standard
     evaluate_urls_in_gs = args.evaluate_urls_in_gs
-    lowercase_tokens = args.lowercase_tokens
+    lowercase = args.lowercase
 
-    gs, src_gs, trg_gs = get_gs(gs_file) if gs_file else (set(), set(), set())
+    gs, src_gs, trg_gs = get_gs(gs_file, lowercase=lowercase) if gs_file else (set(), set(), set())
     y_true, y_pred = [], []
     src_urls, trg_urls = [], []
     total_pairs = 0
@@ -77,12 +80,17 @@ def main(args):
 
         url, lang = line
 
+        if lowercase:
+            url = url.lower()
+
         if lang == src_lang:
             src_urls.append(url)
         elif lang == trg_lang:
             trg_urls.append(url)
         else:
             logging.warning("Unexpected lang in TSV entry #%d: %s", idx, lang)
+
+    logging.info("Src and trg URLs: %d, %d", len(src_urls), len(trg_urls))
 
     # Create pairs of URLs to evaluate
     if evaluate_urls_in_gs and gs_file:
@@ -106,7 +114,7 @@ def main(args):
 
         if pair:
             # Evaluate URL pair
-            _y_pred, _y_true = evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs, lowercase_tokens)
+            _y_pred, _y_true = evaluate_pair(src_lang, trg_lang, src_url, trg_url, gs)
 
             y_pred.append(_y_pred)
             y_true.append(_y_true)
@@ -151,7 +159,7 @@ def initialization():
     parser.add_argument('--trg-lang', default="fr", help="Trg lang for the provided URL in the 1st column of the input file")
     parser.add_argument('--gold-standard', type=argparse.FileType('rt'), help="GS filename with parallel URLs (TSV format)")
     parser.add_argument('--evaluate-urls-in-gs', action="store_true", help="Only evaluate those URLs which are present in the GS")
-    parser.add_argument('--lowercase-tokens', action="store_true", help="Lowercase URL tokens. It might increase the evaluation results")
+    parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs (GS as well if provided). It might increase the evaluation results")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 
