@@ -35,7 +35,7 @@ def get_gs(file, lowercase=False):
 
     return gs, src_gs, trg_gs
 
-def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, gs, src_gs, trg_gs, print_pairs=True):
+def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs, print_pairs=True):
     def evaluate(src_url, trg_url):
         src_url_tokenized = tokenizer.tokenize(src_url, check_gaps=False)
         trg_url_tokenized = tokenizer.tokenize(trg_url, check_gaps=False)
@@ -64,7 +64,7 @@ def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, gs, src_gs, trg
         for idx, trg_url in enumerate(trg_urls):
             pair = False
 
-            if evaluate_urls_in_gs and gs_file:
+            if use_gs:
                 if src_url in src_gs or trg_url in trg_gs:
                     # Only append those URLs which are in the GS (we don't need to evaluate ALL the src and trg product URLs)
                     pair = True
@@ -94,7 +94,7 @@ def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, gs, src_gs, trg
 
     return y_pred, y_true, matches, total_pairs
 
-def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, gs, src_gs, print_pairs=True):
+def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, print_pairs=True):
     trg_urls_tokenized = [tokenizer.tokenize(trg_url, check_gaps=False) for trg_url in trg_urls]
 
     def evaluate(src_url):
@@ -133,7 +133,7 @@ def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, gs, src_gs, prin
         remove_trg_urls_idx = None
         pair = False
 
-        if evaluate_urls_in_gs and gs_file:
+        if use_gs:
             if src_url in src_gs:
                 # Only append those URLs which are in the GS
                 pair = True
@@ -173,6 +173,7 @@ def main(args):
 
     gs, src_gs, trg_gs = get_gs(gs_file, lowercase=lowercase) if gs_file else (set(), set(), set())
     src_urls, trg_urls = [], []
+    use_gs = evaluate_urls_in_gs and gs_file
 
     # Read URLs
     for idx, line in enumerate(input_file, 1):
@@ -198,7 +199,7 @@ def main(args):
     logging.info("Src and trg URLs: %d, %d", len(src_urls), len(trg_urls))
 
     # Create pairs of URLs to evaluate
-    if evaluate_urls_in_gs and gs_file:
+    if use_gs:
         logging.debug("Only URLs which appears in the GS will be evaluated")
     else:
         logging.warning("GS will not be used for evaluation, so the product of all URLs will be added")
@@ -208,10 +209,10 @@ def main(args):
     # Evaluate
     if evaluate_m_x_n:
         y_pred, y_true, matches, total_pairs =\
-            evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, gs, src_gs, trg_gs)
+            evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs)
     else:
         y_pred, y_true, matches, total_pairs =\
-            evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, gs, src_gs)
+            evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs)
 
     # Some statistics
     negative_matches = total_pairs - matches
