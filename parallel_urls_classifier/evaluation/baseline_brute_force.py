@@ -27,7 +27,7 @@ def get_gs(file, lowercase=False):
             continue
 
         if lowercase:
-            line = [l.lower() for l in line.lower()]
+            line = [l.lower() for l in line]
 
         src_gs.add(line[0])
         trg_gs.add(line[1])
