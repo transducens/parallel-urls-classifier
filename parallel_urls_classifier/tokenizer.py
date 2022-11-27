@@ -5,7 +5,7 @@ import logging
 
 from nltk.tokenize import RegexpTokenizer
 
-_tokenizer_regex = r'[^\W_]+|[^\w\s]+|_' # Similar to wordpunct_tokenize but '_' aware
+_tokenizer_regex = r'[^\W_0-9]+|[^\w\s]+|_+|\s+|[0-9]+' # Similar to wordpunct_tokenize
 _tokenize = RegexpTokenizer(_tokenizer_regex).tokenize
 _tokenize_gaps = RegexpTokenizer(_tokenizer_regex, gaps=True).tokenize
 
