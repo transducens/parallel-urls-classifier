@@ -147,9 +147,6 @@ def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_
             if remove_trg_urls_idx is not None:
                 # We have a "possible pair"
 
-                y_pred.append(_y_pred)
-                y_true.append(_y_true)
-
                 total_pairs += 1
 
                 if _y_pred:
@@ -159,6 +156,10 @@ def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_
                     del trg_urls_tokenized[remove_trg_urls_idx]
 
                     matches += 1
+
+            y_pred.append(0 if _y_pred is None else _y_pred)
+            y_true.append(1 if _y_true is None else _y_true) # The FN is forced when GS is not provided, but when has been provided,
+                                                             #   this point is reached because src_url is in the GS, so is a genuine FN
 
     return y_pred, y_true, matches, total_pairs
 
