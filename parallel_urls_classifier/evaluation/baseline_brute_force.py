@@ -15,7 +15,7 @@ import parallel_urls_classifier.tokenizer as tokenizer
 
 import sklearn.metrics
 
-def get_gs(file, lowercase=False):
+def get_gs(file):
     gs, src_gs, trg_gs = set(), set(), set()
 
     for idx, line in enumerate(file, 1):
@@ -26,23 +26,44 @@ def get_gs(file, lowercase=False):
 
             continue
 
-        if lowercase:
-            line = [l.lower() for l in line]
-
         src_gs.add(line[0])
         trg_gs.add(line[1])
         gs.add('\t'.join(line))
 
     return gs, src_gs, trg_gs
 
-def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs, print_pairs=True):
+def get_same_case(s, reference, apply=True):
+    if not apply:
+        return s
+
+    if len(reference) != len(s):
+        logging.warning("Different lengths: can't apply the same case: returning without changes")
+
+        return s
+
+    result = ''
+
+    for _s, _r in zip(s, reference):
+        if _r.islower():
+            result += _s.lower()
+        elif _r.isupper():
+            result += _s.upper()
+        else:
+            logging.warning("Reference '%s' (specifically: '%s') is not either lower or upper: returning without changes", reference, _r)
+
+            return s
+
+    return result
+
+def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs, lowercase_tokens=False, print_pairs=True):
     def evaluate(src_url, trg_url):
         src_url_tokenized = tokenizer.tokenize(src_url, check_gaps=False)
         trg_url_tokenized = tokenizer.tokenize(trg_url, check_gaps=False)
         parallel = 0
 
         # Replace and check
-        normalized_url = [trg_lang if token == src_lang else token for token in src_url_tokenized]
+        normalized_url = [get_same_case(trg_lang, src_lang, apply=lowercase_tokens) if \
+                          (token.lower() if lowercase_tokens else token) == src_lang else token for token in src_url_tokenized]
         parallel = 1 if normalized_url == trg_url_tokenized else 0
         pair = f"{src_url}\t{trg_url}"
 
@@ -94,7 +115,7 @@ def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src
 
     return y_pred, y_true, matches, total_pairs
 
-def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, print_pairs=True):
+def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, lowercase_tokens=False, print_pairs=True):
     trg_urls_tokenized = [tokenizer.tokenize(trg_url, check_gaps=False) for trg_url in trg_urls]
 
     def evaluate(src_url):
@@ -103,7 +124,8 @@ def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_
         parallel = 0
 
         # Replace and check
-        normalized_url = [trg_lang if token == src_lang else token for token in src_url_tokenized]
+        normalized_url = [get_same_case(trg_lang, src_lang, apply=lowercase_tokens) if \
+                          (token.lower() if lowercase_tokens else token) == src_lang else token for token in src_url_tokenized]
         y_pred, y_true, trg_url_idx = None, None, None
         parallel = 0
         pair = ''
@@ -169,10 +191,10 @@ def main(args):
     trg_lang = args.trg_lang
     gs_file = args.gold_standard
     evaluate_urls_in_gs = args.evaluate_urls_in_gs
-    lowercase = args.lowercase
+    lowercase_tokens = args.lowercase_tokens
     evaluate_m_x_n = args.evaluate_m_x_n
 
-    gs, src_gs, trg_gs = get_gs(gs_file, lowercase=lowercase) if gs_file else (set(), set(), set())
+    gs, src_gs, trg_gs = get_gs(gs_file) if gs_file else (set(), set(), set())
     src_urls, trg_urls = [], []
     use_gs = evaluate_urls_in_gs and gs_file
 
@@ -186,9 +208,6 @@ def main(args):
             continue
 
         url, lang = line
-
-        if lowercase:
-            url = url.lower()
 
         if lang == src_lang:
             src_urls.append(url)
@@ -210,10 +229,10 @@ def main(args):
     # Evaluate
     if evaluate_m_x_n:
         y_pred, y_true, matches, total_pairs =\
-            evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs)
+            evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs, lowercase_tokens=lowercase_tokens)
     else:
         y_pred, y_true, matches, total_pairs =\
-            evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs)
+            evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, lowercase_tokens=lowercase_tokens)
 
     # Some statistics
     negative_matches = total_pairs - matches
@@ -249,7 +268,7 @@ def initialization():
     parser.add_argument('--trg-lang', default="fr", help="Trg lang for the provided URL in the 1st column of the input file")
     parser.add_argument('--gold-standard', type=argparse.FileType('rt'), help="GS filename with parallel URLs (TSV format)")
     parser.add_argument('--evaluate-urls-in-gs', action="store_true", help="Only evaluate those URLs which are present in the GS")
-    parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs (GS as well if provided). It might increase the evaluation results")
+    parser.add_argument('--lowercase-tokens', action="store_true", help="Lowercase URL tokens (GS as well if provided). It might increase the evaluation results")
     parser.add_argument('--evaluate-m-x-n', action="store_true",
                         help="Evaluate all the possible pairs instead of construct 'possible pairs' like is described in section 4.2 of YODA system")
 
