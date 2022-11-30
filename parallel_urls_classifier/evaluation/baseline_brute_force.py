@@ -5,6 +5,7 @@ import os
 import sys
 import logging
 import argparse
+import itertools
 
 cdir = os.path.dirname(os.path.realpath(__file__))
 
@@ -55,20 +56,39 @@ def get_same_case(s, reference, apply=True):
 
     return result
 
-def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs, lowercase_tokens=False, print_pairs=True):
+def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs,
+                         lowercase_tokens=False, print_pairs=True, print_negative_matches=False, print_score=False):
     def evaluate(src_url, trg_url):
         src_url_tokenized = tokenizer.tokenize(src_url, check_gaps=False)
         trg_url_tokenized = tokenizer.tokenize(trg_url, check_gaps=False)
         parallel = 0
 
         # Replace and check
-        normalized_url = [get_same_case(trg_lang, src_lang, apply=lowercase_tokens) if \
-                          (token.lower() if lowercase_tokens else token) == src_lang else token for token in src_url_tokenized]
-        parallel = 1 if normalized_url == trg_url_tokenized else 0
+        normalized_urls = [
+            [get_same_case(trg_lang_token, token, apply=lowercase_tokens) if \
+                (token.lower() if lowercase_tokens else token) == src_lang_token else token for token in src_url_tokenized]
+            for src_lang_token, trg_lang_token in itertools.product(src_lang_tokens, trg_lang_tokens)
+        ]
+        found = 0
         pair = f"{src_url}\t{trg_url}"
 
-        if print_pairs and parallel:
-            print(pair)
+        for normalized_url in normalized_urls:
+            parallel = 1 if normalized_url == trg_url_tokenized else 0
+
+            if parallel:
+                found += 1
+
+        if found > 0:
+            parallel = 1
+
+            if found > 1:
+                logging.warning("More than 1 normalized URL found: %d: why? It shouldn't affect the result", found)
+
+        if print_pairs and (parallel or print_negative_matches):
+            if print_score:
+                print(f"{pair}\t{parallel}")
+            else:
+                print(pair)
 
         y_pred = parallel
         y_true = 1 if pair in gs else 0
@@ -115,7 +135,8 @@ def evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src
 
     return y_pred, y_true, matches, total_pairs
 
-def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, lowercase_tokens=False, print_pairs=True):
+def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs,
+                        lowercase_tokens=False, print_pairs=True, print_score=False):
     trg_urls_tokenized = [tokenizer.tokenize(trg_url, check_gaps=False) for trg_url in trg_urls]
 
     def evaluate(src_url):
@@ -124,23 +145,38 @@ def evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_
         parallel = 0
 
         # Replace and check
-        normalized_url = [get_same_case(trg_lang, src_lang, apply=lowercase_tokens) if \
-                          (token.lower() if lowercase_tokens else token) == src_lang else token for token in src_url_tokenized]
+        normalized_urls = [
+            [get_same_case(trg_lang_token, token, apply=lowercase_tokens) if \
+                (token.lower() if lowercase_tokens else token) == src_lang_token else token for token in src_url_tokenized]
+            for src_lang_token, trg_lang_token in itertools.product(src_lang_tokens, trg_lang_tokens)
+        ]
         y_pred, y_true, trg_url_idx = None, None, None
         parallel = 0
         pair = ''
+        found = 0
 
-        try:
-            trg_url_idx = trg_urls_tokenized.index(normalized_url)
-            parallel = 1
-            pair = f"{src_url}\t{trg_urls[trg_url_idx]}"
-        except ValueError:
-            # Normalized URL not found: is not a "possible pair"
+        for normalized_url in normalized_urls:
+            try:
+                trg_url_idx = trg_urls_tokenized.index(normalized_url)
+                parallel = 1
+                pair = f"{src_url}\t{trg_urls[trg_url_idx]}"
+                found += 1
 
+                break
+            except ValueError:
+                # Normalized URL not found: is not a "possible pair"
+                pass
+
+        if not found:
             return y_pred, y_true, trg_url_idx
+        elif found > 1:
+            logging.warning("More than 1 normalized URL found: %d: returning last match: it might affect the result", found)
 
         if print_pairs and parallel:
-            print(pair)
+            if print_score:
+                print(f"{pair}\t{parallel}")
+            else:
+                print(pair)
 
         y_pred = parallel
         y_true = 1 if pair in gs else 0
@@ -189,10 +225,14 @@ def main(args):
     input_file = args.input
     src_lang = args.src_lang
     trg_lang = args.trg_lang
+    src_lang_tokens = args.src_lang_tokens
+    trg_lang_tokens = args.trg_lang_tokens
     gs_file = args.gold_standard
     evaluate_urls_in_gs = args.evaluate_urls_in_gs
     lowercase_tokens = args.lowercase_tokens
     evaluate_m_x_n = args.evaluate_m_x_n
+    print_negative_matches = args.print_negative_matches
+    print_score = args.print_score
 
     gs, src_gs, trg_gs = get_gs(gs_file) if gs_file else (set(), set(), set())
     src_urls, trg_urls = [], []
@@ -229,10 +269,13 @@ def main(args):
     # Evaluate
     if evaluate_m_x_n:
         y_pred, y_true, matches, total_pairs =\
-            evaluate_pairs_m_x_n(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs, lowercase_tokens=lowercase_tokens)
+            evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs,
+                                 lowercase_tokens=lowercase_tokens, print_negative_matches=print_negative_matches,
+                                 print_score=print_score)
     else:
         y_pred, y_true, matches, total_pairs =\
-            evaluate_section_42(src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, lowercase_tokens=lowercase_tokens)
+            evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs,
+                                lowercase_tokens=lowercase_tokens, print_score=print_score)
 
     # Some statistics
     negative_matches = total_pairs - matches
@@ -266,11 +309,19 @@ def initialization():
 
     parser.add_argument('--src-lang', default="en", help="Src lang for the provided URL in the 1st column of the input file")
     parser.add_argument('--trg-lang', default="fr", help="Trg lang for the provided URL in the 1st column of the input file")
+    parser.add_argument('--src-lang-tokens', nargs='+', default=["en"], # Found in WMT16 train: ["en", "eng", "e"]
+                        help="Src tokens which will be used for checking the normalized URL (cart. product with --trg-lang-tokens)")
+    parser.add_argument('--trg-lang-tokens', nargs='+', default=["fr"], # Found in WMT16 train: ["fr", "francais", "fra", "f", "fre", "french"]
+                        help="Trg tokens which will be used for replacing in the normalized URL (cart. product with --src-lang-tokens)")
     parser.add_argument('--gold-standard', type=argparse.FileType('rt'), help="GS filename with parallel URLs (TSV format)")
     parser.add_argument('--evaluate-urls-in-gs', action="store_true", help="Only evaluate those URLs which are present in the GS")
     parser.add_argument('--lowercase-tokens', action="store_true", help="Lowercase URL tokens (GS as well if provided). It might increase the evaluation results")
     parser.add_argument('--evaluate-m-x-n', action="store_true",
                         help="Evaluate all the possible pairs instead of construct 'possible pairs' like is described in section 4.2 of YODA system")
+    parser.add_argument('--print-negative-matches', action="store_true",
+                        help="Print, when possible, negative matches (i.e. not only possitive matches)")
+    parser.add_argument('--print-score', action="store_true",
+                        help="Print 0 or 1 for positive or negative matches, respectively")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 
