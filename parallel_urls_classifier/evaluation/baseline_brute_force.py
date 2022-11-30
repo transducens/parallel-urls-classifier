@@ -33,12 +33,19 @@ def get_gs(file):
 
     return gs, src_gs, trg_gs
 
+_get_same_case_warning_only_once = False
 def get_same_case(s, reference, apply=True):
     if not apply:
         return s
 
     if len(reference) != len(s):
-        logging.warning("Different lengths: can't apply the same case: returning without changes")
+        global _get_same_case_warning_only_once
+
+        if not _get_same_case_warning_only_once:
+            logging.warning("Different lengths: can't apply the same case: returning without changes:"
+                            "this message will be displayed only once")
+
+            _get_same_case_warning_only_once = True
 
         return s
 
