@@ -56,7 +56,7 @@ def get_same_case(s, reference, apply=True):
 
     return result
 
-def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_lang, trg_lang, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs,
+def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs,
                          lowercase_tokens=False, print_pairs=True, print_negative_matches=False, print_score=False):
     def evaluate(src_url, trg_url):
         src_url_tokenized = tokenizer.tokenize(src_url, check_gaps=False)
