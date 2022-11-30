@@ -10,15 +10,17 @@ sys.path.insert(0, f"{cdir}/..")
 
 import parallel_urls_classifier.utils.utils as utils
 
-from nltk.tokenize import RegexpTokenizer
+#from nltk.tokenize import RegexpTokenizer
+import nltk.tokenize
 
 _tokenizer_regex = r'[^\W_0-9]+|[^\w\s]+|_+|\s+|[0-9]+' # Similar to wordpunct_tokenize
-_tokenize = RegexpTokenizer(_tokenizer_regex).tokenize
-_tokenize_gaps = RegexpTokenizer(_tokenizer_regex, gaps=True).tokenize
+_tokenize = nltk.tokenize.RegexpTokenizer(_tokenizer_regex).tokenize
+_tokenize_gaps = nltk.tokenize.RegexpTokenizer(_tokenizer_regex, gaps=True).tokenize
 
 _tokenizers = {
     "tokenizers": {
         "wordpunct_tokenize_urls": _tokenize,
+        "word_tokenize": nltk.tokenize.word_tokenize
     },
     "gaps": {
         "wordpunct_tokenize_urls": _tokenize_gaps
@@ -29,7 +31,13 @@ def tokenize(s, check_gaps=True, gaps_whitelist=[' '], tokenizer="wordpunct_toke
     tokenized_str = _tokenizers["tokenizers"][tokenizer](s)
 
     if check_gaps:
-        tokenized_str_gaps = _tokenizers["gaps"][tokenizer](s)
+        try:
+            gaps_tokenizer = _tokenizers["gaps"][tokenizer]
+        except KeyError:
+            # Tokenizer without gaps support
+            gaps_tokenizer = lambda s: [] # Fake "no gaps"
+
+        tokenized_str_gaps = gaps_tokenizer(s)
 
         if len(tokenized_str_gaps) != 0:
             for gap in tokenized_str_gaps:
@@ -69,7 +77,7 @@ def initialization():
     #parser.add_argument('--input-filename', type=argparse.FileType('rb'), default='-', help="Input file with sentences to be tokenized")
     parser.add_argument('--input-filename', default='-', help="Input file with sentences to be tokenized")
     parser.add_argument('--disable-check-gaps', action="store_true", help="Do not check gaps when tokenize provided sentences")
-    parser.add_argument('--tokenizer', choices=["wordpunct_tokenize_urls"], default="wordpunct_tokenize_urls",
+    parser.add_argument('--tokenizer', choices=["wordpunct_tokenize_urls", "word_tokenize"], default="wordpunct_tokenize_urls",
                         help="Different available tokenizers")
     parser.add_argument('--disable-join-tokens', action="store_true", help="Do not join the sentences with ' ' but show the list with the tokens")
 
