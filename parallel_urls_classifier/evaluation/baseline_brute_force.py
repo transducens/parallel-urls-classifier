@@ -144,7 +144,7 @@ def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, u
 # TODO is evaluate_section_42 equivalent to evaluate_pairs_m_x_n?
 def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs,
                         lowercase_tokens=False, print_pairs=True, print_negative_matches=False, print_score=False):
-    trg_urls_tokenized = [tokenizer.tokenize(trg_url, check_gaps=False) for trg_url in trg_urls]
+    trg_urls_tokenized = ['\t'.join(tokenizer.tokenize(trg_url, check_gaps=False)) for trg_url in trg_urls] # Separate tokens using \t
     trg_urls_tokenized_set = set(trg_urls_tokenized)
 
     def evaluate(src_url):
@@ -154,8 +154,9 @@ def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, us
 
         # Replace and check
         normalized_urls = [
-            [get_same_case(trg_lang_token, token, apply=lowercase_tokens) if \
-                (token.lower() if lowercase_tokens else token) == src_lang_token else token for token in src_url_tokenized]
+            # Separate tokens using \t
+            '\t'.join([get_same_case(trg_lang_token, token, apply=lowercase_tokens) if \
+                (token.lower() if lowercase_tokens else token) == src_lang_token else token for token in src_url_tokenized])
             for src_lang_token, trg_lang_token in itertools.product(src_lang_tokens, trg_lang_tokens)
         ]
         y_pred, y_true, trg_url_idx = None, None, None
