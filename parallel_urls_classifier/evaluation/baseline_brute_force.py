@@ -105,11 +105,10 @@ def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, u
     y_pred, y_true = [], []
     matches = 0
     total_pairs = 0
+    seen_src_urls, seen_trg_urls = set(), set()
 
     for src_url in src_urls:
-        remove_trg_urls_idx = None
-
-        for idx, trg_url in enumerate(trg_urls):
+        for trg_url in trg_urls:
             pair = False
 
             if use_gs:
@@ -123,27 +122,27 @@ def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, u
                 # Evaluate URL pair
                 _y_pred, _y_true = evaluate(src_url, trg_url)
 
+                if src_url in seen_src_urls or trg_url in seen_trg_urls:
+                    # Already evaluated pairs are "removed"
+                    _y_pred = 0
+
                 y_pred.append(_y_pred)
                 y_true.append(_y_true)
 
                 total_pairs += 1
 
                 if _y_pred:
-                    remove_trg_urls_idx = idx
-
                     matches += 1
 
-                    break # src_url now has a match, so we don't look for any other
+                    seen_src_urls.add(src_url)
+                    seen_trg_urls.add(trg_url)
 
-        if remove_trg_urls_idx is not None:
-            # Remove trg URLs which were identified as parallel (we don't need to do the same for the src URLs since they will
-            #  be checked only once)
-            del trg_urls[remove_trg_urls_idx]
+                    # We don't break because we need to evaluate all the URLs from the cart. product
 
     return y_pred, y_true, matches, total_pairs
 
 def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs,
-                        lowercase_tokens=False, print_pairs=True, print_score=False):
+                        lowercase_tokens=False, print_pairs=True, print_negative_matches=False, print_score=False):
     trg_urls_tokenized = [tokenizer.tokenize(trg_url, check_gaps=False) for trg_url in trg_urls]
 
     def evaluate(src_url):
@@ -175,13 +174,15 @@ def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, us
                 pass
 
         if not found:
+            # We don't have a trg_url, so we can't do anything else -> return
+
             return y_pred, y_true, trg_url_idx
         elif found > 1:
             logging.warning("More than 1 normalized URL found: %d: returning last match: it might affect the result", found)
 
         if print_pairs and parallel:
             if print_score:
-                print(f"{pair}\t{parallel}")
+                print(f"{pair}\t{parallel}") # Be aware that parallel will be always 1
             else:
                 print(pair)
 
@@ -193,9 +194,10 @@ def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, us
     y_pred, y_true = [], []
     matches = 0
     total_pairs = 0
+    seen_src_urls, seen_trg_urls = set(), set()
+    possible_pairs = set()
 
     for src_url in src_urls:
-        remove_trg_urls_idx = None
         pair = False
 
         if use_gs:
@@ -207,24 +209,49 @@ def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, us
 
         if pair:
             # Evaluate URL pair
-            _y_pred, _y_true, remove_trg_urls_idx = evaluate(src_url)
+            _y_pred, _y_true, trg_urls_idx = evaluate(src_url)
 
-            if remove_trg_urls_idx is not None:
+            if trg_urls_idx is not None:
                 # We have a "possible pair"
 
                 total_pairs += 1
+                trg_url = trg_urls[trg_urls_idx]
+                possible_pair = f"{src_url}\t{trg_url}"
+
+                if src_url in seen_src_urls or trg_url in seen_trg_urls:
+                    # Already evaluated pairs are "removed"
+                    _y_pred = 0
+
+                possible_pairs.add(possible_pair)
 
                 if _y_pred:
-                    # Remove trg URLs which were identified as parallel (we don't need to do the same for the src URLs
-                    #  since they will be checked only once)
-                    del trg_urls[remove_trg_urls_idx]
-                    del trg_urls_tokenized[remove_trg_urls_idx]
+                    seen_src_urls.add(src_url)
+                    seen_trg_urls.add(trg_url)
 
                     matches += 1
 
-            y_pred.append(0 if _y_pred is None else _y_pred)
-            y_true.append(1 if _y_true is None else _y_true) # The FN is forced when GS is not provided, but when has been provided,
-                                                             #   this point is reached because src_url is in the GS, so is a genuine FN
+                y_pred.append(_y_pred)
+                y_true.append(_y_true)
+
+        for trg_url in trg_urls:
+            # Evaluate the rest of pairs: we can do it now since if a pair was found with src_url, it's been already detected
+            pair = f"{src_url}\t{trg_url}"
+
+            if pair in possible_pairs:
+                # Already evaluated
+                continue
+
+            total_pairs += 1
+            parallel = 0
+
+            if print_pairs and (parallel or print_negative_matches):
+                if print_score:
+                    print(f"{pair}\t{parallel}")
+                else:
+                    print(pair)
+
+            y_pred.append(parallel)
+            y_true.append(1 if pair in gs else 0)
 
     return y_pred, y_true, matches, total_pairs
 
@@ -282,7 +309,8 @@ def main(args):
     else:
         y_pred, y_true, matches, total_pairs =\
             evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs,
-                                lowercase_tokens=lowercase_tokens, print_score=print_score)
+                                lowercase_tokens=lowercase_tokens, print_negative_matches=print_negative_matches,
+                                print_score=print_score)
 
     # Some statistics
     negative_matches = total_pairs - matches
@@ -326,7 +354,7 @@ def initialization():
     parser.add_argument('--evaluate-m-x-n', action="store_true",
                         help="Evaluate all the possible pairs instead of construct 'possible pairs' like is described in section 4.2 of YODA system")
     parser.add_argument('--print-negative-matches', action="store_true",
-                        help="Print, when possible, negative matches (i.e. not only possitive matches)")
+                        help="Print negative matches (i.e. not only possitive matches)")
     parser.add_argument('--print-score', action="store_true",
                         help="Print 0 or 1 for positive or negative matches, respectively")
 
