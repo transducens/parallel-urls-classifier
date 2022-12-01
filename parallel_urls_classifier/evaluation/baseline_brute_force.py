@@ -141,9 +141,11 @@ def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, u
 
     return y_pred, y_true, matches, total_pairs
 
+# TODO is evaluate_section_42 equivalent to evaluate_pairs_m_x_n?
 def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs,
                         lowercase_tokens=False, print_pairs=True, print_negative_matches=False, print_score=False):
     trg_urls_tokenized = [tokenizer.tokenize(trg_url, check_gaps=False) for trg_url in trg_urls]
+    trg_urls_tokenized_set = set(trg_urls_tokenized)
 
     def evaluate(src_url):
         src_url_tokenized = tokenizer.tokenize(src_url, check_gaps=False)
@@ -162,16 +164,15 @@ def evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, us
         found = 0
 
         for normalized_url in normalized_urls:
-            try:
-                trg_url_idx = trg_urls_tokenized.index(normalized_url)
-                parallel = 1
-                pair = f"{src_url}\t{trg_urls[trg_url_idx]}"
-                found += 1
-
-                break
-            except ValueError:
+            if normalized_url not in trg_urls_tokenized_set:
                 # Normalized URL not found: is not a "possible pair"
-                pass
+
+                continue
+
+            trg_url_idx = trg_urls_tokenized.index(normalized_url)
+            parallel = 1
+            pair = f"{src_url}\t{trg_urls[trg_url_idx]}"
+            found += 1
 
         if not found:
             # We don't have a trg_url, so we can't do anything else -> return
