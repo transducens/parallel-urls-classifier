@@ -16,8 +16,7 @@ def main(args):
     urls_file = args.urls_file
     gold_standard_file = args.gold_standard_file
 
-    parallel_src_urls, parallel_trg_urls = [], []
-    non_parallel_src_urls, non_parallel_trg_urls = [], []
+    parallel_urls, non_parallel_urls = 0, 0
     src_gs_urls, trg_gs_urls = [], []
     gs_pairs = set()
     tp, fp, fn, tn = 0, 0, 0, 0
@@ -45,28 +44,31 @@ def main(args):
             is_parallel = urls[0]
             src_url = urls[1]
             trg_url = urls[2]
+            pair = f"{src_url}\t{trg_url}"
 
             if is_parallel not in ("parallel", "non-parallel"):
                 raise Exception(f"Unexpected parallel value: {is_parallel}")
 
             if is_parallel == "parallel":
-                parallel_src_urls.append(src_url)
-                parallel_trg_urls.append(trg_url)
+                parallel_urls += 1
 
-                if f"f{src_url}\t{trg_url}" in gs_pairs:
+                if pair in gs_pairs:
                     tp += 1
                 else:
                     fp += 1
             else:
-                non_parallel_src_urls.append(src_url)
-                non_parallel_trg_urls.append(trg_url)
+                non_parallel_urls += 1
 
-                if f"f{src_url}\t{trg_url}" in gs_pairs:
+                if pair in gs_pairs:
                     fn += 1
                 else:
                     tn += 1
 
-    logging.info("Provided URL pairs: %d", len(parallel_src_urls) + len(non_parallel_src_urls))
+    logging.info("Provided parallel and non-parallel URL pairs: %d, %d", parallel_urls, non_parallel_urls)
+
+    if tp + fn != len(gs_pairs):
+        logging.warning("Not all pairs from GS were classified in the provided data, so metrics might not be trustworthy:"
+                        "only %d of %d pairs were provided", tp + fn, len(gs_pairs))
 
     logging.info("tp, tn: %d, %d", tp, tn)
     logging.info("fp, fn: %d, %d", fp, fn)

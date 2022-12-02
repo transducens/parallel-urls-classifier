@@ -56,26 +56,16 @@ def main(args):
     disable_join_tokens = args.disable_join_tokens
 
     join_function = (lambda s: s) if disable_join_tokens else ' '.join
-    input_fd = sys.stdin.buffer
 
-    if input_filename != '-':
-        input_fd = open(input_filename, "rb")
-
-    for s in input_fd:
-        s = s.decode(errors="backslashreplace")
-
+    for s in input_filename:
         print(join_function(tokenize(s.rstrip('\n'), check_gaps=check_gaps, tokenizer=tokenizer)))
-
-    if input_filename != '-':
-        input_fd.close()
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Tokenizer")
 
-    # We can't use argparse.FileType('rb') due to https://bugs.python.org/issue14156
-    #parser.add_argument('--input-filename', type=argparse.FileType('rb'), default='-', help="Input file with sentences to be tokenized")
-    parser.add_argument('--input-filename', default='-', help="Input file with sentences to be tokenized")
+    # We can't use argparse.FileType('rb') due to https://bugs.python.org/issue14156 -> Workaround: use 'errors="backslashreplace"'
+    parser.add_argument('--input-filename', type=argparse.FileType('rt', errors="backslashreplace"), default='-', help="Input file with sentences to be tokenized")
     parser.add_argument('--disable-check-gaps', action="store_true", help="Do not check gaps when tokenize provided sentences")
     parser.add_argument('--tokenizer', choices=["wordpunct_tokenize_urls", "word_tokenize"], default="wordpunct_tokenize_urls",
                         help="Different available tokenizers")

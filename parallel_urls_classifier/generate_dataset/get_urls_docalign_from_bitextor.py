@@ -117,7 +117,7 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
         #  awk -F$'\t' 'NR == 1 {print $0} NR > 1 {
         #    a=($8 > 100) ? 100 : $8;
         #    b=($8 <= 100) ? $9 : ($6 + a > 0) ? 2 * (($6 * a) / ($6 + a)): 0;
-        #    print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7"\t"a"\t"b}' # if docalign and sent.gz were provided
+        #    print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7"\t"a"\t"b}' # if docalign and raw.gz were provided
         occurrences_score = min(occurrences, min_doc_nolines) / min_doc_nolines * 100.0 if min_doc_nolines > 0 else 0.0 # Domain: [0, 100]
 
     return nolines_score, occurrences_score
@@ -125,15 +125,20 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
 def main(args):
     min_occurrences = args.min_occurrences
     bicleaner_threshold = args.bicleaner_threshold
-    sent_file = args.sent_file
-    sent_file_src_url_idx = args.sent_file_src_url_idx
-    sent_file_trg_url_idx = args.sent_file_trg_url_idx
-    sent_file_bicleaner_idx = args.sent_file_bicleaner_idx
+    raw_file = args.raw_file
+    raw_file_src_url_idx = args.raw_file_src_url_idx
+    raw_file_trg_url_idx = args.raw_file_trg_url_idx
+    raw_file_src_text_idx = args.raw_file_src_text_idx
+    raw_file_trg_text_idx = args.raw_file_trg_text_idx
+    raw_file_bicleaner_idx = args.raw_file_bicleaner_idx
     docalign_mt_matches_files = args.docalign_mt_matches_files
     src_url_files = args.src_url_files
     trg_url_files = args.trg_url_files
     src_sentences_files = args.src_sentences_files
     trg_sentences_files = args.trg_sentences_files
+    src_sentences_preprocess_cmd = args.src_sentences_preprocess_cmd
+    trg_sentences_preprocess_cmd = args.trg_sentences_preprocess_cmd
+    raw_preprocess_cmd = args.raw_preprocess_cmd
     docalign_threshold = args.docalign_threshold
     process_docalign = True if docalign_mt_matches_files else False
 
@@ -210,10 +215,12 @@ def main(args):
     total_possible_printed_urls = 0
 
     # Get number of lines per document/URL
-    src_urls_nolines = utils_bitextor.get_nolines_from_url_and_sentences(src_url_files, src_sentences_files)
-    trg_urls_nolines = utils_bitextor.get_nolines_from_url_and_sentences(trg_url_files, trg_sentences_files)
+    src_urls_statistics = \
+        utils_bitextor.get_statistics_from_url_and_sentences(src_url_files, src_sentences_files, preprocess_cmd=src_sentences_preprocess_cmd)
+    trg_urls_statistics = \
+        utils_bitextor.get_statistics_from_url_and_sentences(trg_url_files, trg_sentences_files, preprocess_cmd=trg_sentences_preprocess_cmd)
 
-    logging.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_nolines), len(trg_urls_nolines))
+    logging.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_statistics), len(trg_urls_statistics))
 
     # Print header
     sys.stdout.write("src_url\ttrg_url")
@@ -221,13 +228,15 @@ def main(args):
     if process_docalign:
         sys.stdout.write("\tdocalign_score")
 
-    sys.stdout.write("\tsrc_doc_nolines\ttrg_doc_nolines\tsrc_and_trg_docs_nolines_score")
+    sys.stdout.write("\tsrc_doc_nolines\ttrg_doc_nolines\tsrc_and_trg_docs_nolines_score\tsrc_doc_tokens\ttrg_doc_tokens")
 
-    if sent_file:
+    if raw_file:
         sys.stdout.write("\tsegalign_src_and_trg_nolines\tsegalign_src_and_trg_nolines_score\tsegalign_and_docs_nolines_score_f1")
 
-        if sent_file_bicleaner_idx is not None:
+        if raw_file_bicleaner_idx is not None:
             sys.stdout.write("\tavg_doc_bicleaner_score")
+
+        sys.stdout.write("\tsrc_doc_alignment_tokens\ttrg_doc_alignment_tokens\ttokens_score")
 
     sys.stdout.write('\n')
 
@@ -280,32 +289,37 @@ def main(args):
 
                 k = hash(f"{src_url}\t{trg_url}")
                 docalign_url_scores[k] = score
-                src_url_nolines = src_urls_nolines[src_url]
-                trg_url_nolines = trg_urls_nolines[trg_url]
+                src_url_nolines = src_urls_statistics[src_url]["nolines"]
+                trg_url_nolines = trg_urls_statistics[trg_url]["nolines"]
+                src_url_tokens = src_urls_statistics[src_url]["tokens"]
+                trg_url_tokens = trg_urls_statistics[trg_url]["tokens"]
                 nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
 
-                if not sent_file:
+                if not raw_file:
                     # We want to avoid scientific notation
                     score = round(score, 4)
                     nolines_score = round(nolines_score, 4)
 
-                    sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
+                    sys.stdout.write(f"{src_url}\t{trg_url}\t{score}\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}"
+                                     f"\t{src_url_tokens}\t{trg_url_tokens}")
                     sys.stdout.write('\n')
 
                     total_printed_urls += 1
 
-    # Process sent.gz file
-    if sent_file:
-        logging.info("Processing sent.gz file")
+    # Process raw.gz file
+    if raw_file:
+        logging.info("Processing raw.gz file")
 
-        aligned_urls = utils_bitextor.get_urls_from_sent(sent_file, sent_file_src_url_idx, sent_file_trg_url_idx,
-                                                         bicleaner_idx=sent_file_bicleaner_idx)
+        aligned_urls = utils_bitextor.get_statistics_from_raw(raw_file, raw_file_src_url_idx, raw_file_trg_url_idx,
+                                                              raw_file_src_text_idx, raw_file_trg_text_idx
+                                                              bicleaner_idx=raw_file_bicleaner_idx)
 
         logging.info("Unique different paired URLs: %d", len(aligned_urls))
 
         skipped_bc_docalign = 0
         skipped_bc_min_occ = 0
         skipped_bc_bicleaner = 0
+        aligned_tokens = {}
 
         for idx, (url, data) in enumerate(aligned_urls.items()):
             # Iterate through unique URLs
@@ -320,7 +334,7 @@ def main(args):
             if occurrences < min_occurrences:
                 skipped_bc_min_occ += 1
                 continue
-            if sent_file_bicleaner_idx is not None and avg_doc_bicleaner_score < bicleaner_threshold:
+            if raw_file_bicleaner_idx is not None and avg_doc_bicleaner_score < bicleaner_threshold:
                 skipped_bc_bicleaner += 1
                 continue
 
@@ -341,8 +355,10 @@ def main(args):
                     continue
 
             try:
-                src_url_nolines = src_urls_nolines[src_url]
-                trg_url_nolines = trg_urls_nolines[trg_url]
+                src_url_nolines = src_urls_statistics[src_url]["nolines"]
+                trg_url_nolines = trg_urls_statistics[trg_url]["nolines"]
+                src_url_tokens = src_urls_statistics[src_url]["tokens"]
+                trg_url_tokens = trg_urls_statistics[trg_url]["tokens"]
             except KeyError:
                 logging.warning("src URL (%s) or trg URL (%s) not in aligned URLs", src_url, trg_url)
 
@@ -352,6 +368,9 @@ def main(args):
             nolines_score, occurrences_score = get_doc_nolines_score(src_url_nolines, trg_url_nolines, occurrences=occurrences,
                                                                      src_url=src_url, trg_url=trg_url)
             nolines_and_occurences_score_f1 = 2 * ((nolines_score * occurrences_score) / (nolines_score + occurrences_score)) if not np.isclose(nolines_score + occurrences_score, 0.0) else 0.0
+            aligned_src_tokens = aligned_urls[src_url]["src_tokens"]
+            aligned_trg_tokens = aligned_urls[trg_url]["trg_tokens"]
+            tokens_score = (aligned_src_tokens + aligned_trg_tokens) / (src_url_tokens + trg_url_tokens)
 
             try:
                 score = docalign_url_scores[k]
@@ -367,18 +386,20 @@ def main(args):
             occurrences_score = round(occurrences_score, 4)
             nolines_and_occurences_score_f1 = round(nolines_and_occurences_score_f1, 4)
             avg_doc_bicleaner_score = round(avg_doc_bicleaner_score, 4)
+            tokens_score = round(tokens_score, 4)
 
             sys.stdout.write(f"{src_url}\t{trg_url}")
 
             if process_docalign:
                 sys.stdout.write(f"\t{score}")
 
-            sys.stdout.write(f"\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}")
+            sys.stdout.write(f"\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}\t{src_url_tokens}\t{trg_url_tokens}")
             sys.stdout.write(f"\t{occurrences}\t{occurrences_score}\t{nolines_and_occurences_score_f1}")
 
-            if sent_file_bicleaner_idx is not None:
+            if raw_file_bicleaner_idx is not None:
                 sys.stdout.write(f"\t{avg_doc_bicleaner_score}")
 
+            sys.stdout.write(f"\t{aligned_src_tokens}\t{aligned_trg_tokens}\t{tokens_score}")
             sys.stdout.write('\n')
 
             total_printed_urls += 1
@@ -397,12 +418,21 @@ def initialization():
     parser.add_argument('--trg-url-files', nargs='+', required=True, help="Target url.gz files from sharding")
     parser.add_argument('--src-sentences-files', nargs='+', required=True, help="Source sentences.gz files from sharding")
     parser.add_argument('--trg-sentences-files', nargs='+', required=True, help="Target sentences.gz files from sharding")
-    parser.add_argument('--sent-file',
-                        help=".sent.gz file (you may want to apply some filtering, e.g., bicleaner score, and"
-                             "dedup should not be applied). If not provided, only docalign will be taken into account")
-    parser.add_argument('--sent-file-src-url-idx', type=int, default=0, help=".sent.gz file src URL idx")
-    parser.add_argument('--sent-file-trg-url-idx', type=int, default=1, help=".sent.gz file trg URL idx")
-    parser.add_argument('--sent-file-bicleaner-idx', type=int, default=None, help=".sent.gz file bicleaner idx")
+    parser.add_argument('--src-sentences-preprocess-cmd',
+                        help="Preprocess command to apply to the src sentences."
+                             "The provided command has to read sentences from stdin and print to stdout")
+    parser.add_argument('--trg-sentences-preprocess-cmd',
+                        help="Preprocess command to apply to the trg sentences."
+                             "The provided command has to read sentences from stdin and print to stdout")
+    parser.add_argument('--raw-file', help=".rwa.gz file. If not provided, only docalign will be taken into account")
+    parser.add_argument('--raw-file-src-url-idx', type=int, default=0, help=".raw.gz file src URL idx")
+    parser.add_argument('--raw-file-trg-url-idx', type=int, default=1, help=".raw.gz file trg URL idx")
+    parser.add_argument('--raw-file-src-text-idx', type=int, default=2, help=".raw.gz file text URL idx")
+    parser.add_argument('--raw-file-trg-text-idx', type=int, default=3, help=".raw.gz file text URL idx")
+    parser.add_argument('--raw-file-bicleaner-idx', type=int, default=None, help=".raw.gz file bicleaner idx")
+    parser.add_argument('--raw-preprocess-cmd',
+                        help="Preprocess command to apply to the src and trg alignments."
+                             "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
 
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
     parser.add_argument('--bicleaner-threshold', type=float, default=0.0,
