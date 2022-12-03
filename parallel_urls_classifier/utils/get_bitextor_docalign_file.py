@@ -65,7 +65,7 @@ def initialization():
 
     parser.add_argument('src_urls_data', help="Src URLs. Gzip file")
     parser.add_argument('trg_urls_data', help="Trg URLs. Gzip file")
-    parser.add_argument('classifier_data', type=argparse.FileType('rt'), help="Format: score <tab> src_url <tab> trg_url")
+    parser.add_argument('classifier_data', type=argparse.FileType('rt', errors="backslashreplace"), help="Format: score <tab> src_url <tab> trg_url")
     parser.add_argument('transient_prefix', help="Prefix where transient output files will be stored")
 
     parser.add_argument('--header-column-score', default="dic_doc_aligner_score", help="Header column name of the score")
@@ -77,6 +77,9 @@ def initialization():
     return args
 
 if __name__ == "__main__":
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
     args = initialization()
 
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)

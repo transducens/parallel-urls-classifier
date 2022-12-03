@@ -267,7 +267,7 @@ def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Create URLs dataset from parallel samples")
 
-    parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt'), help="Input TSV file with parallel URLs")
+    parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt', errors="backslashreplace"), help="Input TSV file with parallel URLs")
     parser.add_argument('output_files_prefix', help="Output files prefix")
 
     parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens", "replace-freq-words"],
@@ -289,6 +289,9 @@ def initialization():
     return args
 
 if __name__ == "__main__":
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
     args = initialization()
 
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)

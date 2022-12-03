@@ -78,6 +78,9 @@ def initialization():
     return args
 
 if __name__ == "__main__":
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
     args = initialization()
 
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)

@@ -923,12 +923,12 @@ def initialization():
     inference = "--inference" in sys.argv
 
     if not inference:
-        parser.add_argument('parallel_urls_train_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
-        parser.add_argument('parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
-        parser.add_argument('parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with parallel URLs (TSV format)")
-        parser.add_argument('non_parallel_urls_train_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
-        parser.add_argument('non_parallel_urls_dev_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
-        parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt'), help="Filename with non-parallel URLs (TSV format)")
+        parser.add_argument('parallel_urls_train_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with parallel URLs (TSV format)")
+        parser.add_argument('parallel_urls_dev_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with parallel URLs (TSV format)")
+        parser.add_argument('parallel_urls_test_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with parallel URLs (TSV format)")
+        parser.add_argument('non_parallel_urls_train_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with non-parallel URLs (TSV format)")
+        parser.add_argument('non_parallel_urls_dev_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with non-parallel URLs (TSV format)")
+        parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with non-parallel URLs (TSV format)")
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be processed before proceed to train, but the whole batch will be processed in blocks in order to avoid OOM errors")
     parser.add_argument('--block-size', type=int, help="Block size. Elements which will be provided to the model at once")
@@ -1034,4 +1034,7 @@ def cli():
     main(args)
 
 if __name__ == "__main__":
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
     cli()

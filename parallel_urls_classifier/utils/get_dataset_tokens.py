@@ -48,7 +48,7 @@ def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Get tokens information from a dataset of parallel URLs")
 
-    parser.add_argument('dataset', type=argparse.FileType('rt'), help="Filename with URLs (TSV format)")
+    parser.add_argument('dataset', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with URLs (TSV format)")
 
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")
@@ -63,6 +63,9 @@ def initialization():
     return args
 
 if __name__ == "__main__":
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
     args = initialization()
 
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)

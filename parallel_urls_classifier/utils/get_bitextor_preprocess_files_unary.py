@@ -76,14 +76,14 @@ def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Create Bitextor preprocess files")
 
-    parser.add_argument('data', type=argparse.FileType('rt'), help="Format: lang <tab> URL <tab> base64_html <tab> base64_text")
+    parser.add_argument('data', type=argparse.FileType('rt', errors="backslashreplace"), help="Format: lang <tab> URL <tab> base64_html <tab> base64_text")
     parser.add_argument('prefix', help="Src prefix where src output files will be stored")
     #parser.add_argument('transient_prefix', help="Prefix where transient output files will be stored")
 
     parser.add_argument('--lang', required=True, help="Lang")
     parser.add_argument('--mime', default="text/plain", help="MIME value")
-    parser.add_argument('--gold-standard', type=argparse.FileType('rt'), help="Gold standard file. If provided, only URLs which are in the GS, it will be processed")
-    #parser.add_argument('--urls-docalign', type=argparse.FileType('rt'), help="URLs docalign file. If provided, the docalign index of matches will be created. Format: score <tab> src URL <tab> trg URL")
+    parser.add_argument('--gold-standard', type=argparse.FileType('rt', errors="backslashreplace"), help="Gold standard file. If provided, only URLs which are in the GS, it will be processed")
+    #parser.add_argument('--urls-docalign', type=argparse.FileType('rt', errors="backslashreplace"), help="URLs docalign file. If provided, the docalign index of matches will be created. Format: score <tab> src URL <tab> trg URL")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 
@@ -92,6 +92,9 @@ def initialization():
     return args
 
 if __name__ == "__main__":
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
     args = initialization()
 
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)

@@ -49,7 +49,8 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
     def update_results(r, src_pair, trg_pair, v, clean_pairs):
         pair = f"{src_pair}\t{trg_pair}"
         pair_reversed = f"{trg_pair}\t{src_pair}"
-        match = True
+        match = 1
+        dup = 0
 
         # Append only the provided pairs which are inside the pairs that we want to classify
         if pair in pairs or (clean_pairs and pair in clean_pairs):
@@ -58,6 +59,8 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
 
             if pair not in r:
                 r[pair] = v
+            else:
+                dup = 1
         elif pair_reversed in pairs or (clean_pairs and pair_reversed in clean_pairs):
             # Fix direction
             logging.error("Wrong direction: have the data been provided correctly?")
@@ -67,10 +70,12 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
 
             if pair_reversed not in r:
                 r[pair] = v
+            else:
+                dup = 1
         else:
-            match = False
+            match = 0
 
-        return match
+        return match, dup
 
     results = {}
     error = False
@@ -81,27 +86,23 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
     if results_fd:
         clean_pairs = set(map(lambda p: p.encode("utf-8", errors="backslashreplace").decode("utf-8", errors="backslashreplace"), pairs))
         missing_pairs = 0
+        dup = 0
 
-        for idx, l in enumerate(results_fd, 1):
-            l = l.rstrip('\n')
+        for idx, line in enumerate(results_fd, 1):
+            v, src_pair, trg_pair = line.rstrip('\n').split('\t')
 
-            classifier_output.append(f"from FD: {l}")
+            classifier_output.append(f"from FD: {v}\t{src_pair}\t{trg_pair}")
 
-            l = l.split('\t')
-
-            if len(l) != 3:
-                raise Exception(f"Line #{idx} doesn't have the expected format: {len(l)} columns vs 3 columns")
-
-            v, src_pair, trg_pair = l
             v, error = get_classification_value(v, error, idx)
+            m, d = update_results(results, src_pair, trg_pair, v, clean_pairs)
+            missing_pairs += 0 if m else 1
+            dup += d
 
-            if not update_results(results, src_pair, trg_pair, v, clean_pairs):
-                missing_pairs += 1
+        if missing_pairs:
+            logging.warning("Missing pairs from the FD: %d", missing_pairs)
 
-        logging.debug("Missing pairs: %d", missing_pairs)
-
-        if idx != len(results):
-            logging.warning("Duplicated pairs loaded from FD: they have been skipped: %d", idx - len(results))
+        if dup:
+            logging.warning("Duplicated pairs loaded from FD: they have been skipped: %d", dup)
 
     if classify_missing_pairs and len(results) < len(pairs):
         # We have to calculate the missing pairs or all the pairs if they were not provided
@@ -118,16 +119,20 @@ def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_
         sp_result = subprocess.Popen(shlex.split(command), stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
         aux_results, aux_err = sp_result.communicate('\n'.join(classifier_list_results).encode(errors="backslashreplace"))
         missing_pairs = 0
+        dup = 0
 
         for idx, aux_result in enumerate(aux_results.decode("utf-8", errors="backslashreplace").strip().split('\n'), 1):
             v, src_pair, trg_pair = aux_result.split('\t')
             v, error = get_classification_value(v, error, idx)
-
-            if not update_results(results, src_pair, trg_pair, v, None):
-                missing_pairs += 1
+            m, d = update_results(results, src_pair, trg_pair, v, None)
+            missing_pairs += 0 if m else 1
+            dup += d
 
         if missing_pairs:
             logging.warning("Missing pairs after generate the missing pairs: %d", missing_pairs)
+
+        if dup:
+            logging.warning("Pairs which couldn't be added because they had already been added: %d", dup)
 
         classifier_output.extend(list(map(lambda e: f"from classifier command (subprocess): {e}", aux_err.decode("utf-8", errors="backslashreplace").strip().split('\n'))))
 
@@ -278,23 +283,26 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
     if len(gs_pairs) == 0:
         logging.warning("GS does not contain values")
 
-    parallel_pairs_found = tp + fn
     expected_pairs_found = len(gs_pairs)
+    parallel_pairs_found = tp + fn
 
     if rule_1_1:
-        # We need to add PNM and subtract NNM because NM will be classified as TP or FP, and the real GS pair (it should be
-        #  among the pairs) will be classified as FP if rule 1-1 is enabled
-        # TODO fix
-        expected_pairs_found += 2 * positive_near_matches - negative_near_matches
+        # We need to subtract PNM because NM will be classified as TP or FP, and the real GS pair (it should be among
+        #  the pairs) will be classified as FP if rule 1-1 is enabled, so we need to take into account only PNM
+        parallel_pairs_found -= positive_near_matches
 
-    if parallel_pairs_found != expected_pairs_found:
+    if not rule_1_1 and not disable_near_matchs:
+        expected_pairs_found = parallel_pairs_found
+
+    if expected_pairs_found != parallel_pairs_found:
         logging.error("Unexpected GS pairs found: %d were expected, %d were found", expected_pairs_found, parallel_pairs_found)
 
-    recall = tp / len(gs_pairs) if len(gs_pairs) != 0 else 1.0 # TODO tp + fn instead of len(gs_pairs) when not rule_1_1 and not disable_near_matchs? tp + fn always instead of len(gs_pairs)?
+    recall = tp / expected_pairs_found if expected_pairs_found != 0 else 1.0
     precision = tp / (tp + fp) if (tp + fp) != 0 else 1.0
 
     print(f"Recall: {recall}")
     print(f"Precision (not trustworthy because GS is not exhaustive): {precision}")
+    print(f"TN, FP, FN, TP, recall_divisor: {tn} {fp} {fn} {tp} {expected_pairs_found}")
 
 def main(args):
     input_file = args.input_file
@@ -361,9 +369,9 @@ def main(args):
     logging.info("GS entries: %d from %d", len(src_gs), gs_entries)
 
     if len(src_gs) != gs_entries:
-        logging.warning("Not all the GS entries were processed: this is expected if you calculate the final evaluation later."
-                        "Be aware that the calculated metrics will be valid for the current provided domain of the data, but not"
-                        "for all the data: you will need to calculate the metrics separately later using the TP, FP, TN and FN")
+        logging.info("Not all the GS entries were processed: this is expected if you calculate the final evaluation later."
+                     "Be aware that the calculated metrics will be valid for the current provided domain of the data, but not"
+                     "for all the data: you will need to calculate the metrics separately later using the TP, FP, TN and FN")
 
     if other_lang_docs:
         logging.warning("Other langs provided (skipped): %d: langs: %s", other_lang_docs, str(other_langs))
@@ -484,18 +492,27 @@ def initialization():
     if "--classifier-results" in sys.argv and "--do-not-classify-missing-pairs" in sys.argv:
         classifier_command_required = False
 
-    parser.add_argument('input_file', type=argparse.FileType('rt', errors="backslashreplace"), help="Input file from the test set with the following format: lang<tab>URL<tab>base64-doc (they should be 1st, 4th and 6th column in the original WMT16 test set)")
-    parser.add_argument('gold_standard_file', type=argparse.FileType('rt'), help="Gold standard file")
+    parser.add_argument('input_file', type=argparse.FileType('rt', errors="backslashreplace"),
+                        help="Input file from the test set with the following format: lang<tab>URL<tab>base64-doc (they should be 1st,"
+                             "4th and 6th column in the original WMT16 test set)")
+    parser.add_argument('gold_standard_file', type=argparse.FileType('rt', errors="backslashreplace"), help="Gold standard file")
 
     parser.add_argument('--classifier-command', required=classifier_command_required,
-                        help="Classifier command whose expected output format is: class<tab>src_url<tab>trg_url (class is expected to be 'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)."
-                             "It will not be necessary when --classifier-results and --do-not-classify-missing-pairs are set")
-    parser.add_argument('--classifier-results', type=argparse.FileType('rt', errors="backslashreplace"), help="Classifier results (if not all the results were provided, the ones that are missing will be obtained with the classifier) whose expected format is: class<tab>src_url<tab>trg_url (class is expected to be 'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)")
-    parser.add_argument('--results-are-fp', action='store_true', help="Classification results are FP values intead of 'parallel'/'non-parallel'")
-    parser.add_argument('--parallel-threshold', type=float, default=0.5, help="Take URLs as parallel when the score is greater than the provided (only applied when flag --results-are-fp is set)")
+                        help="Classifier command whose expected output format is: class<tab>src_url<tab>trg_url (class is expected to be"
+                             "'parallel'/'non-parallel' or a numeric value if --results-are-fp is set). It will not be necessary when"
+                             "--classifier-results and --do-not-classify-missing-pairs are set")
+    parser.add_argument('--classifier-results', type=argparse.FileType('rt', errors="backslashreplace"),
+                        help="Classifier results (if not all the results were provided, the ones that are missing will be obtained"
+                             "with the classifier) whose expected format is: class<tab>src_url<tab>trg_url (class is expected to be"
+                             "'parallel'/'non-parallel' or a numeric value if --results-are-fp is set)")
+    parser.add_argument('--results-are-fp', action='store_true',
+                        help="Classification results are FP values intead of 'parallel'/'non-parallel'")
+    parser.add_argument('--parallel-threshold', type=float, default=0.5,
+                        help="Take URLs as parallel when the score is greater than the provided (only applied if --results-are-fp is set)")
     parser.add_argument('--disable-rule-1-1', action='store_true', help="Disable WMT16 rule 1-1")
     parser.add_argument('--disable-near-matchs', action='store_true', help="Disable near-matchs (edition distance)")
-    parser.add_argument('--do-not-classify-missing-pairs', action='store_true', help="Missing classified pairs will not be generated when provided using --classifier-results")
+    parser.add_argument('--do-not-classify-missing-pairs', action='store_true',
+                        help="Missing classified pairs will not be generated when provided using --classifier-results")
 
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
 
@@ -504,6 +521,9 @@ def initialization():
     return args
 
 if __name__ == "__main__":
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
     args = initialization()
 
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)

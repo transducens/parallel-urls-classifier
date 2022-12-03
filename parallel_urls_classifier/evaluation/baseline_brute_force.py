@@ -342,7 +342,7 @@ def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Classify URLs using brute force method")
 
-    parser.add_argument('input', type=argparse.FileType('rt'), help="Filename with URLs (TSV format). Format: URL <tab> lang")
+    parser.add_argument('input', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with URLs (TSV format). Format: URL <tab> lang")
 
     parser.add_argument('--src-lang', default="en", help="Src lang for the provided URL in the 1st column of the input file")
     parser.add_argument('--trg-lang', default="fr", help="Trg lang for the provided URL in the 1st column of the input file")
@@ -350,7 +350,7 @@ def initialization():
                         help="Src tokens which will be used for checking the normalized URL (cart. product with --trg-lang-tokens)")
     parser.add_argument('--trg-lang-tokens', nargs='+', default=["fr"], # Found in WMT16 train: ["fr", "francais", "fra", "f", "fre", "french"]
                         help="Trg tokens which will be used for replacing in the normalized URL (cart. product with --src-lang-tokens)")
-    parser.add_argument('--gold-standard', type=argparse.FileType('rt'), help="GS filename with parallel URLs (TSV format)")
+    parser.add_argument('--gold-standard', type=argparse.FileType('rt', errors="backslashreplace"), help="GS filename with parallel URLs (TSV format)")
     parser.add_argument('--evaluate-urls-in-gs', action="store_true", help="Only evaluate those URLs which are present in the GS")
     parser.add_argument('--lowercase-tokens', action="store_true", help="Lowercase URL tokens (GS as well if provided). It might increase the evaluation results")
     parser.add_argument('--evaluate-m-x-n', action="store_true",
@@ -367,6 +367,9 @@ def initialization():
     return args
 
 if __name__ == "__main__":
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
     args = initialization()
 
     utils.set_up_logging(level=logging.DEBUG if args.verbose else logging.INFO)
