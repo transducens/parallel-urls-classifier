@@ -16,6 +16,7 @@ import parallel_urls_classifier.tokenizer as tokenizer
 import joblib
 
 _tokenize = lambda s: tokenizer.tokenize(s, check_gaps=False, tokenizer="word_tokenize")
+logger = logging.getLogger("parallel_urls_classifier")
 
 def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, bicleaner_idx=None, preprocess_cmd=None):
     results = {}
@@ -44,11 +45,11 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
                 pair = pair.decode('utf-8', errors="backslashreplace").rstrip('\n')
 
                 if rtn_code:
-                    logging.error("Preprocess cmd returning code != 0: %d", rtn_code)
+                    logger.error("Preprocess cmd returning code != 0: %d", rtn_code)
 
                 if err:
-                    logging.warning("Preprocess cmd printed content from stderr: %s",
-                                    err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
+                    logger.warning("Preprocess cmd printed content from stderr: %s",
+                                   err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
 
             pair = pair.split('\t')
 
@@ -86,7 +87,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         preprocess_cmd = shlex.split(preprocess_cmd)
 
     def process(idx, url_file, sentences_file, level):
-        utils.set_up_logging(level=level)
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
 
         _results = {}
         current_read_docs = 0
@@ -97,7 +98,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                 sentences_line = sentences_line.strip()
 
                 if url_line in _results:
-                    logging.warning("URL already processed: skipping: %s", url_line)
+                    logger.warning("URL already processed: skipping: %s", url_line)
 
                     continue
                 else:
@@ -114,11 +115,11 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                     rtn_code = cmd.returncode
 
                     if rtn_code:
-                        logging.error("Files url.gz and sentences.gz #%d,%d: preprocess cmd returning code != 0: %d", idx, idx_fd, rtn_code)
+                        logger.error("Files url.gz and sentences.gz #%d,%d: preprocess cmd returning code != 0: %d", idx, idx_fd, rtn_code)
 
                     if err:
-                        logging.warning("Files url.gz and sentences.gz #%d,%d: preprocess cmd printed content from stderr: %s",
-                                        idx, idx_fd, err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
+                        logger.warning("Files url.gz and sentences.gz #%d,%d: preprocess cmd printed content from stderr: %s",
+                                       idx, idx_fd, err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
 
                 sentences_line = sentences_line.decode('utf-8', errors="backslashreplace").strip().split('\n')
 
@@ -130,20 +131,20 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                 current_read_docs += 1
 
                 if (current_read_docs % _log_read_docs) == 0:
-                    logging.debug("Files url.gz and sentences.gz #%d: documents read: %d", idx, current_read_docs)
+                    logger.debug("Files url.gz and sentences.gz #%d: documents read: %d", idx, current_read_docs)
 
-        logging.debug("Files url.gz and sentences.gz #%d: total documents read: %d", idx, current_read_docs)
+        logger.debug("Files url.gz and sentences.gz #%d: total documents read: %d", idx, current_read_docs)
 
         return _results
 
     if n_jobs == 0:
-        logging.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
+        logger.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
 
         n_jobs = 1
     if n_jobs < 1:
-        logging.warning("Using all CPUs - %d", n_jobs + 1)
+        logger.warning("Using all CPUs - %d", abs(n_jobs + 1))
 
-    _results = joblib.Parallel(n_jobs=n_jobs)(joblib.delayed(process)(idx, url_file, sentences_file, logging.getLogger().level) \
+    _results = joblib.Parallel(n_jobs=n_jobs)(joblib.delayed(process)(idx, url_file, sentences_file, logger.level) \
         for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
 
     for idx, r in enumerate(_results, 1):
@@ -151,12 +152,12 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
 
         for intersection_url in intersection:
             if results[intersection_url] != r[intersection_url]:
-                logging.warning("Files url.gz and sentences.gz #%d: %d elements, which are different, will be"
-                                "updated because are duplicated: %s", idx, len(intersection), intersection_url)
+                logger.warning("Files url.gz and sentences.gz #%d: %d elements, which are different, will be"
+                               "updated because are duplicated: %s", idx, len(intersection), intersection_url)
 
         results.update(r)
 
-        logging.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
+        logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
 
     return results
 

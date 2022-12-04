@@ -35,7 +35,7 @@ global_conf = {
     "expect_urls_base64": None,
     "lower": None,
 }
-logger = logging
+logger = logging.getLogger("parallel_urls_classifier")
 
 @app.route('/', methods=['GET'])
 def info():
@@ -237,8 +237,6 @@ def cli():
     logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier.flask_server"), level=logging.DEBUG if args.verbose else logging.INFO)
 
     logger.debug("Arguments processed: {}".format(str(args)))
-
-    puc.logger = logger
 
     main(args)
 

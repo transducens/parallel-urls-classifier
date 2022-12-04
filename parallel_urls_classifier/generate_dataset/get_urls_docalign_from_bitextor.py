@@ -33,14 +33,14 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
         if _occurrences_warning_only_once and _occurrences_warning_already_done:
             pass
         else:
-            logging.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer "
-                            "(re-segmentation might increase the number of occurrences): %s    %s",
-                            occurrences, src_nolines, trg_nolines, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
+            logger.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer "
+                           "(re-segmentation might increase the number of occurrences): %s    %s",
+                           occurrences, src_nolines, trg_nolines, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
 
             _occurrences_warning_already_done = True
 
             if _occurrences_warning_only_once:
-                logging.warning("Previous warning will only be shown once: you can modify '_occurrences_warning_only_once' for changing this behavior")
+                logger.warning("Previous warning will only be shown once: you can modify '_occurrences_warning_only_once' for changing this behavior")
 
     def top_margin(x):
         # WMT16 numbers in order to know how to select a good margin:
@@ -223,7 +223,7 @@ def main(args):
         utils_bitextor.get_statistics_from_url_and_sentences(trg_url_files, trg_sentences_files, preprocess_cmd=trg_sentences_preprocess_cmd,
                                                              n_jobs=n_jobs)
 
-    logging.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_statistics), len(trg_urls_statistics))
+    logger.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_statistics), len(trg_urls_statistics))
 
     # Print header
     sys.stdout.write("src_url\ttrg_url")
@@ -249,7 +249,7 @@ def main(args):
             src_urls_idx, trg_urls_idx, scores = [], [], []
 
             with utils.open_xz_or_gzip_or_plain(docalign_mt_matches_file) as f:
-                logging.debug("Processing '%s'", docalign_mt_matches_file)
+                logger.debug("Processing '%s'", docalign_mt_matches_file)
 
                 for line in f:
                     line = line.strip().split('\t')
@@ -278,7 +278,7 @@ def main(args):
                 raise Exception("Unexpected different number of URLs and scores "
                                 f"({len(src_urls)} vs {len(scores)}) in file '{docalign_mt_matches_file}'")
 
-            logging.debug("Number of aligned URLs from '%s': %d", docalign_mt_matches_file, len(src_urls))
+            logger.debug("Number of aligned URLs from '%s': %d", docalign_mt_matches_file, len(src_urls))
 
             for score, src_url, trg_url in zip(scores, src_urls, trg_urls):
                 try:
@@ -311,13 +311,13 @@ def main(args):
 
     # Process raw.gz file
     if raw_file:
-        logging.info("Processing raw.gz file")
+        logger.info("Processing raw.gz file")
 
         aligned_urls = utils_bitextor.get_statistics_from_raw(raw_file, raw_file_src_url_idx, raw_file_trg_url_idx,
                                                               raw_file_src_text_idx, raw_file_trg_text_idx,
                                                               bicleaner_idx=raw_file_bicleaner_idx, preprocess_cmd=raw_preprocess_cmd)
 
-        logging.info("Unique different paired URLs: %d", len(aligned_urls))
+        logger.info("Unique different paired URLs: %d", len(aligned_urls))
 
         skipped_bc_docalign = 0
         skipped_bc_min_occ = 0
@@ -330,9 +330,9 @@ def main(args):
             avg_doc_bicleaner_score = min(data["bicleaner_sum"] / occurrences, 1.0)
 
             if (idx + 1) % 10000 == 0:
-                logging.debug("%.2f finished", (idx + 1) * 100.0 / len(aligned_urls))
-                logging.debug("Currently skipped URLs (min occ., docalign, bicleaner): (%d, %d, %d)",
-                              skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner)
+                logger.debug("%.2f finished", (idx + 1) * 100.0 / len(aligned_urls))
+                logger.debug("Currently skipped URLs (min occ., docalign, bicleaner): (%d, %d, %d)",
+                             skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner)
 
             if occurrences < min_occurrences:
                 skipped_bc_min_occ += 1
@@ -363,7 +363,7 @@ def main(args):
                 src_url_tokens = src_urls_statistics[src_url]["tokens"]
                 trg_url_tokens = trg_urls_statistics[trg_url]["tokens"]
             except KeyError:
-                logging.warning("src URL (%s) or trg URL (%s) not in aligned URLs", src_url, trg_url)
+                logger.warning("src URL (%s) or trg URL (%s) not in aligned URLs", src_url, trg_url)
 
                 continue
 
@@ -381,7 +381,7 @@ def main(args):
                 score = -1.0
 
                 if process_docalign:
-                    logging.warning("Docalign score not found for URLs: ('%s', '%s')", src_url, trg_url)
+                    logger.warning("Docalign score not found for URLs: ('%s', '%s')", src_url, trg_url)
 
             # We want to avoid scientific notation
             score = round(score, 4)
@@ -407,10 +407,10 @@ def main(args):
 
             total_printed_urls += 1
 
-        logging.info("Total skipped URLs (min occ., docalign, bicleaner): (%d, %d, %d)",
-                     skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner)
+        logger.info("Total skipped URLs (min occ., docalign, bicleaner): (%d, %d, %d)",
+                    skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner)
 
-    logging.info("Total printed URLs: %d", total_printed_urls)
+    logger.info("Total printed URLs: %d", total_printed_urls)
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -450,10 +450,12 @@ def initialization():
     return args
 
 if __name__ == "__main__":
+    global logger
+
     args = initialization()
 
-    utils.set_up_logging(level=logging.INFO if args.quiet else logging.DEBUG)
+    logger = utils.set_up_logging_logger(logger, level=logging.INFO if args.quiet else logging.DEBUG)
 
-    logging.debug("Arguments processed: {}".format(str(args)))
+    logger.debug("Arguments processed: {}".format(str(args)))
 
     main(args)

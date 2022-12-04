@@ -47,7 +47,7 @@ logging.getLogger("matplotlib").setLevel(logging.WARNING)
 logging.getLogger("PIL.PngImagePlugin").setLevel(logging.WARNING)
 
 # Logging
-logger = logging
+logger = logging.getLogger("parallel_urls_classifier")
 logger_verbose = {"tokens": logging}
 
 def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
@@ -1018,7 +1018,7 @@ def cli():
     args = initialization()
 
     # Logging
-    logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=logging.DEBUG if args.verbose else logging.INFO)
+    logger = utils.set_up_logging_logger(logger, level=logging.DEBUG if args.verbose else logging.INFO)
 
     logger.debug("Arguments processed: {}".format(str(args))) # First logging message should be the processed arguments
 
