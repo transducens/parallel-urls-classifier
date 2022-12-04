@@ -42,7 +42,7 @@ def get_same_case(s, reference, apply=True):
         global _get_same_case_warning_only_once
 
         if not _get_same_case_warning_only_once:
-            logging.warning("Different lengths: can't apply the same case: returning without changes:"
+            logging.warning("Different lengths: can't apply the same case: returning without changes: "
                             "this message will be displayed only once")
 
             _get_same_case_warning_only_once = True

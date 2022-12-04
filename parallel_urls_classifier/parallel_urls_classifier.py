@@ -287,7 +287,7 @@ def main(args):
 
         max_length_tokens = 512
     if max_tokens and max_tokens < max_length_tokens:
-        logger.warning("The specified max_tokens has to be greater or equal that the max length tokens of the model:"
+        logger.warning("The specified max_tokens has to be greater or equal that the max length tokens of the model: "
                        "changing value from %d to %d", max_tokens, max_length_tokens)
 
         max_tokens = max_length_tokens

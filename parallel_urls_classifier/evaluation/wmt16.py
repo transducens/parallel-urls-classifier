@@ -369,8 +369,8 @@ def main(args):
     logging.info("GS entries: %d from %d", len(src_gs), gs_entries)
 
     if len(src_gs) != gs_entries:
-        logging.info("Not all the GS entries were processed: this is expected if you calculate the final evaluation later."
-                     "Be aware that the calculated metrics will be valid for the current provided domain of the data, but not"
+        logging.info("Not all the GS entries were processed: this is expected if you calculate the final evaluation later. "
+                     "Be aware that the calculated metrics will be valid for the current provided domain of the data, but not "
                      "for all the data: you will need to calculate the metrics separately later using the TP, FP, TN and FN")
 
     if other_lang_docs:

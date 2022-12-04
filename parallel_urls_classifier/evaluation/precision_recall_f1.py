@@ -67,7 +67,7 @@ def main(args):
     logging.info("Provided parallel and non-parallel URL pairs: %d, %d", parallel_urls, non_parallel_urls)
 
     if tp + fn != len(gs_pairs):
-        logging.warning("Not all pairs from GS were classified in the provided data, so metrics might not be trustworthy:"
+        logging.warning("Not all pairs from GS were classified in the provided data, so metrics might not be trustworthy: "
                         "only %d of %d pairs were provided", tp + fn, len(gs_pairs))
 
     logging.info("tp, tn: %d, %d", tp, tn)

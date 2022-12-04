@@ -34,7 +34,7 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
         if _occurrences_warning_only_once and _occurrences_warning_already_done:
             pass
         else:
-            logger.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer"
+            logger.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer "
                            "(re-segmentation might increase the number of occurrences) or different versions of the documents were provided: %s\t%s",
                            occurrences, src_nolines, trg_nolines, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
 
@@ -138,7 +138,7 @@ def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens,
         if _tokens_score_warning_only_once and _src_tokens_warning_already_done:
             pass
         else:
-            logger.warning("aligned_src_tokens > src_url_tokens: %d > %d: this might be possible if some preprocessing was applied with Bifixer"
+            logger.warning("aligned_src_tokens > src_url_tokens: %d > %d: this might be possible if some preprocessing was applied with Bifixer "
                            "or different versions of the documents were provided: %s\t%s",
                            aligned_src_tokens, src_url_tokens, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
 
@@ -151,7 +151,7 @@ def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens,
         if _tokens_score_warning_only_once and _trg_tokens_warning_already_done:
             pass
         else:
-            logger.warning("aligned_trg_tokens > trg_url_tokens: %d > %d: this might be possible if some preprocessing was applied with Bifixer"
+            logger.warning("aligned_trg_tokens > trg_url_tokens: %d > %d: this might be possible if some preprocessing was applied with Bifixer "
                            "or different versions of the documents were provided: %s\t%s",
                            aligned_trg_tokens, trg_url_tokens, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
 
@@ -414,8 +414,8 @@ def main(args):
             nolines_score, occurrences_score = get_doc_nolines_score(src_url_nolines, trg_url_nolines, occurrences=occurrences,
                                                                      src_url=src_url, trg_url=trg_url)
             nolines_and_occurences_score_f1 = 2 * ((nolines_score * occurrences_score) / (nolines_score + occurrences_score)) if not np.isclose(nolines_score + occurrences_score, 0.0) else 0.0
-            aligned_src_tokens = aligned_urls[src_url]["src_tokens"]
-            aligned_trg_tokens = aligned_urls[trg_url]["trg_tokens"]
+            aligned_src_tokens = aligned_urls[url]["src_tokens"]
+            aligned_trg_tokens = aligned_urls[url]["trg_tokens"]
             tokens_score = get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens, aligned_trg_tokens, src_url=src_url, trg_url=trg_url)
 
             try:

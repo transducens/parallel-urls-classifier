@@ -325,8 +325,8 @@ class MaxTokensCollate:
             self._current_batch.append([sequence, target])
 
         if more_max_tokens_processed and last_batch:
-            logger.warning("Specified max_tokens have been exceeded: edge case where we had some element in the auxiliary"
-                           "storage because of the previous iteration but we hit the last batch and has to be processed:"
+            logger.warning("Specified max_tokens have been exceeded: edge case where we had some element in the auxiliary "
+                           "storage because of the previous iteration but we hit the last batch and has to be processed: "
                            "this might cause an OOM if using GPU: %d extra tokens", self._current_tokens - self._max_tokens)
 
             if len(self._current_batch) != 2:

@@ -88,8 +88,8 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         preprocess_cmd = shlex.split(preprocess_cmd)
 
     def process_sentence(idx, idx_fd, url_line, sentences_line, level, ref=None):
-        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level,
-                                             add_handlers=False) # https://github.com/joblib/joblib/issues/1017
+        logging.getLogger("parallel_urls_classifier").handlers = []
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
         url_line = url_line.strip().replace('\t', ' ')
         sentences_line = sentences_line.strip()
         _results = {} if ref is None else ref
@@ -129,8 +129,8 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         return _results
 
     def process(idx, url_file, sentences_file, level, ref=None):
-        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level,
-                                             add_handlers=False) # https://github.com/joblib/joblib/issues/1017
+        logging.getLogger("parallel_urls_classifier").handlers = []
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
         _results = {} if ref is None else ref
         current_read_docs = 0
 
@@ -183,7 +183,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
 
         for idx, r in enumerate(_results, 1):
             if results.keys().isdisjoint(r.keys()):
-                logger.warning("Files url.gz and sentences.gz #%d: there are URLs which have already been processed:"
+                logger.warning("Files url.gz and sentences.gz #%d: there are URLs which have already been processed: "
                                "results are going to be updated", idx)
 
             results.update(r)
