@@ -17,6 +17,7 @@ import numpy as np
 
 _occurrences_warning_only_once = True
 _occurrences_warning_already_done = False
+logger = logging.getLogger("parallel_urls_classifier")
 
 def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None, trg_url=None):
     global _occurrences_warning_only_once
@@ -450,8 +451,6 @@ def initialization():
     return args
 
 if __name__ == "__main__":
-    global logger
-
     args = initialization()
 
     logger = utils.set_up_logging_logger(logger, level=logging.INFO if args.quiet else logging.DEBUG)
