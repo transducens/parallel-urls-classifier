@@ -34,14 +34,14 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
         if _occurrences_warning_only_once and _occurrences_warning_already_done:
             pass
         else:
-            logger.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer "
-                           "(re-segmentation might increase the number of occurrences): %s    %s",
+            logger.warning("Occurrences > min(src_nolines, trg_nolines): %d > min(%d, %d): this might be possible if --ignore_segmentation was not set in Bifixer"
+                           "(re-segmentation might increase the number of occurrences) or different versions of the documents were provided: %s\t%s",
                            occurrences, src_nolines, trg_nolines, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
 
             _occurrences_warning_already_done = True
 
             if _occurrences_warning_only_once:
-                logger.warning("Previous warning will only be shown once: you can modify '_occurrences_warning_only_once' for changing this behavior")
+                logger.warning("Previous warning will only be shown once: you can modify '_occurrences_warning_only_once' in order to change this behavior")
 
     def top_margin(x):
         # WMT16 numbers in order to know how to select a good margin:
@@ -122,6 +122,48 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
         occurrences_score = min(occurrences, min_doc_nolines) / min_doc_nolines * 100.0 if min_doc_nolines > 0 else 0.0 # Domain: [0, 100]
 
     return nolines_score, occurrences_score
+
+_tokens_score_warning_only_once = True
+_src_tokens_warning_already_done = False
+_trg_tokens_warning_already_done = False
+def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens, aligned_trg_tokens, src_url=None, trg_url=None):
+    global _tokens_score_warning_only_once
+    global _src_tokens_warning_already_done
+    global _trg_tokens_warning_already_done
+
+    aligned_tokens = min(src_url_tokens, aligned_src_tokens) + min(trg_url_tokens, aligned_trg_tokens)
+
+    # Checks
+    if aligned_src_tokens > src_url_tokens:
+        if _tokens_score_warning_only_once and _src_tokens_warning_already_done:
+            pass
+        else:
+            logger.warning("aligned_src_tokens > src_url_tokens: %d > %d: this might be possible if some preprocessing was applied with Bifixer"
+                           "or different versions of the documents were provided: %s\t%s"
+                           aligned_src_tokens, src_url_tokens, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
+
+            _src_tokens_warning_already_done = True
+
+            if _tokens_score_warning_only_once:
+                logger.warning("Previous warning will only be shown once: you can modify '_tokens_score_warning_only_once' in order to change this behavior")
+
+    if aligned_trg_tokens > trg_url_tokens:
+        if _tokens_score_warning_only_once and _trg_tokens_warning_already_done:
+            pass
+        else:
+            logger.warning("aligned_trg_tokens > trg_url_tokens: %d > %d: this might be possible if some preprocessing was applied with Bifixer"
+                           "or different versions of the documents were provided: %s\t%s"
+                           aligned_trg_tokens, trg_url_tokens, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
+
+            _trg_tokens_warning_already_done = True
+
+            if _tokens_score_warning_only_once:
+                logger.warning("Previous warning will only be shown once: you can modify '_tokens_score_warning_only_once' in order to change this behavior")
+
+    # Get score
+    tokens_score = aligned_tokens / (src_url_tokens + trg_url_tokens)
+
+    return tokens_score
 
 def main(args):
     min_occurrences = args.min_occurrences
@@ -374,7 +416,7 @@ def main(args):
             nolines_and_occurences_score_f1 = 2 * ((nolines_score * occurrences_score) / (nolines_score + occurrences_score)) if not np.isclose(nolines_score + occurrences_score, 0.0) else 0.0
             aligned_src_tokens = aligned_urls[src_url]["src_tokens"]
             aligned_trg_tokens = aligned_urls[trg_url]["trg_tokens"]
-            tokens_score = (aligned_src_tokens + aligned_trg_tokens) / (src_url_tokens + trg_url_tokens)
+            tokens_score = get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens, aligned_trg_tokens, src_url=src_url, trg_url=trg_url)
 
             try:
                 score = docalign_url_scores[k]

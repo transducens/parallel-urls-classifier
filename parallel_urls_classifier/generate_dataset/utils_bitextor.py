@@ -77,7 +77,7 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
     return results
 
 _log_read_docs = 10000
-def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess_cmd=None, n_jobs=1):
+def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess_cmd=None, n_jobs=1, parallelize_sentences_instead=False):
     # Download NLTK model if not available
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
@@ -86,52 +86,64 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     if preprocess_cmd:
         preprocess_cmd = shlex.split(preprocess_cmd)
 
-    def process(idx, url_file, sentences_file, level):
-        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
+    def process_sentence(idx, idx_fd, url_line, sentences_line, level, ref):
+        if parallelize_sentences_instead:
+            logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
 
-        _results = {}
+        _results = ref
+        url_line = url_line.strip().replace('\t', ' ')
+        sentences_line = sentences_line.strip()
+
+        if url_line in _results:
+            logger.warning("URL already processed: skipping: %s", url_line)
+
+            return False
+        else:
+            _results[url_line] = {}
+
+        # URL should not be the same twice
+        sentences_line = base64.b64decode(sentences_line).strip()
+
+        if preprocess_cmd:
+            # Apply preprocess to text
+
+            cmd = subprocess.Popen(preprocess_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            sentences_line, err = cmd.communicate(sentences_line)
+            rtn_code = cmd.returncode
+
+            if rtn_code:
+                logger.error("Files url.gz and sentences.gz #%d,%d: preprocess cmd returning code != 0: %d", idx, idx_fd, rtn_code)
+
+            if err:
+                logger.warning("Files url.gz and sentences.gz #%d,%d: preprocess cmd printed content from stderr: %s",
+                                idx, idx_fd, err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
+
+        sentences_line = sentences_line.decode('utf-8', errors="backslashreplace").strip().split('\n')
+
+        # Get statistics
+
+        _results[url_line]["nolines"] = len(sentences_line)
+        _results[url_line]["tokens"] = sum([len(_tokenize(sentence.strip())) for sentence in sentences_line])
+
+        if (idx_fd % _log_read_docs) == 0:
+            logger.debug("Files url.gz and sentences.gz #%d: documents read: %d", idx, idx_fd)
+
+        return True
+
+    def process(idx, url_file, sentences_file, level, ref):
+        if not parallelize_sentences_instead:
+            logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
+
+        _results = ref if parallelize_sentences_instead else {}
         current_read_docs = 0
 
         with utils.open_xz_or_gzip_or_plain(url_file) as url_fd, utils.open_xz_or_gzip_or_plain(sentences_file) as sentences_fd:
-            for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1):
-                url_line = url_line.strip().replace('\t', ' ')
-                sentences_line = sentences_line.strip()
+            _sentences_results = \
+                joblib.Parallel(n_jobs=1 if not parallelize_sentences_instead else n_jobs)( \
+                joblib.delayed(process_sentence)(idx, idx_fd, url_line, sentences_line, level, _results) \
+                    for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1))
 
-                if url_line in _results:
-                    logger.warning("URL already processed: skipping: %s", url_line)
-
-                    continue
-                else:
-                    _results[url_line] = {}
-
-                # URL should not be the same twice
-                sentences_line = base64.b64decode(sentences_line).strip()
-
-                if preprocess_cmd:
-                    # Apply preprocess to text
-
-                    cmd = subprocess.Popen(preprocess_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    sentences_line, err = cmd.communicate(sentences_line)
-                    rtn_code = cmd.returncode
-
-                    if rtn_code:
-                        logger.error("Files url.gz and sentences.gz #%d,%d: preprocess cmd returning code != 0: %d", idx, idx_fd, rtn_code)
-
-                    if err:
-                        logger.warning("Files url.gz and sentences.gz #%d,%d: preprocess cmd printed content from stderr: %s",
-                                       idx, idx_fd, err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
-
-                sentences_line = sentences_line.decode('utf-8', errors="backslashreplace").strip().split('\n')
-
-                # Get statistics
-
-                _results[url_line]["nolines"] = len(sentences_line)
-                _results[url_line]["tokens"] = [len(_tokenize(sentence.strip())) for sentence in sentences_line]
-
-                current_read_docs += 1
-
-                if (current_read_docs % _log_read_docs) == 0:
-                    logger.debug("Files url.gz and sentences.gz #%d: documents read: %d", idx, current_read_docs)
+            current_read_docs += sum(_sentences_results)
 
         logger.debug("Files url.gz and sentences.gz #%d: total documents read: %d", idx, current_read_docs)
 
@@ -144,20 +156,23 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     if n_jobs < 1:
         logger.warning("Using all CPUs - %d", abs(n_jobs + 1))
 
-    _results = joblib.Parallel(n_jobs=n_jobs)(joblib.delayed(process)(idx, url_file, sentences_file, logger.level) \
-        for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
+    _results = \
+        joblib.Parallel(n_jobs=1 if parallelize_sentences_instead else n_jobs)( \
+        joblib.delayed(process)(idx, url_file, sentences_file, logger.level, results) \
+            for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
 
-    for idx, r in enumerate(_results, 1):
-        intersection = sorted(set(results.keys()).intersection(r.keys()))
+    if not parallelize_sentences_instead:
+        for idx, r in enumerate(_results, 1):
+            intersection = sorted(set(results.keys()).intersection(r.keys()))
 
-        for intersection_url in intersection:
-            if results[intersection_url] != r[intersection_url]:
-                logger.warning("Files url.gz and sentences.gz #%d: %d elements, which are different, will be"
-                               "updated because are duplicated: %s", idx, len(intersection), intersection_url)
+            for intersection_url in intersection:
+                if results[intersection_url] != r[intersection_url]:
+                    logger.warning("Files url.gz and sentences.gz #%d: %d elements, which are different, will be"
+                                "updated because are duplicated: %s", idx, len(intersection), intersection_url)
 
-        results.update(r)
+            results.update(r)
 
-        logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
+            logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
 
     return results
 
