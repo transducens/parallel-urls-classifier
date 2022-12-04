@@ -77,7 +77,8 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
     return results
 
 _log_read_docs = 10000
-def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess_cmd=None, n_jobs=1, parallelize_sentences_instead=False):
+def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess_cmd=None, n_jobs=1, parallelize=True,
+                                          parallelize_sentences_instead=False):
     # Download NLTK model if not available
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
@@ -86,10 +87,18 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     if preprocess_cmd:
         preprocess_cmd = shlex.split(preprocess_cmd)
 
-    def process_sentence(idx, idx_fd, url_line, sentences_line, level):
-        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level, add_handlers=False)
+    def process_sentence(idx, idx_fd, url_line, sentences_line, level, ref=None):
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level,
+                                             add_handlers=False) # https://github.com/joblib/joblib/issues/1017
         url_line = url_line.strip().replace('\t', ' ')
         sentences_line = sentences_line.strip()
+        _results = {} if ref is None else ref
+
+        if url_line in _results:
+            logger.warning("Files url.gz and sentences.gz #%d,%d: URL already processed: skipping: %s", idx, idx_fd, url_line)
+
+            return _results
+
         _results[url_line] = {}
         sentences_line = base64.b64decode(sentences_line).strip()
 
@@ -119,26 +128,36 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
 
         return _results
 
-    def process(idx, url_file, sentences_file, level):
-        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level, add_handlers=False)
-        _results = {}
+    def process(idx, url_file, sentences_file, level, ref=None):
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level,
+                                             add_handlers=False) # https://github.com/joblib/joblib/issues/1017
+        _results = {} if ref is None else ref
         current_read_docs = 0
 
         with utils.open_xz_or_gzip_or_plain(url_file) as url_fd, utils.open_xz_or_gzip_or_plain(sentences_file) as sentences_fd:
-            if parallelize_sentences_instead:
+            if parallelize and parallelize_sentences_instead:
                 _sentences_results = \
-                    joblib.Parallel(n_jobs=1 if not parallelize_sentences_instead else n_jobs)( \
+                    joblib.Parallel(n_jobs=n_jobs)( \
                     joblib.delayed(process_sentence)(idx, idx_fd, url_line, sentences_line, level) \
                         for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1))
 
                 for r in _sentences_results:
-                    current_read_docs += len(r)
-                    _results.update(r)
+                    if len(r.keys()) > 0:
+                        if len(r.keys()) > 1:
+                            raise Exception(f"Unexpected length: {len(r.keys())}")
+
+                        k = list(r.keys())[0]
+
+                        if k in _results:
+                            logger.warning("Files url.gz and sentences.gz #%d: URL already processed: skipping: %s", idx, k)
+                        else:
+                            current_read_docs += len(r)
+                            _results.update(r)
             else:
                 for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1):
-                    r = process_sentence(idx, idx_fd, url_line, sentences_line, level)
-                    current_read_docs += len(r)
-                    _results.update(r)
+                    process_sentence(idx, idx_fd, url_line, sentences_line, level, _results)
+
+                current_read_docs += len(_results)
 
         logger.debug("Files url.gz and sentences.gz #%d: total documents read: %d", idx, current_read_docs)
 
@@ -151,11 +170,9 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     if n_jobs < 1:
         logger.warning("Using all CPUs - %d", abs(n_jobs + 1))
 
-    if parallelize_sentences_instead:
+    if not parallelize or parallelize_sentences_instead:
         for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1):
-            r = process(idx, url_file, sentences_file, logger.level)
-
-            results.update(r)
+            process(idx, url_file, sentences_file, logger.level, results)
 
             logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
     else:
@@ -165,6 +182,10 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                 for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
 
         for idx, r in enumerate(_results, 1):
+            if results.keys().isdisjoint(r.keys()):
+                logger.warning("Files url.gz and sentences.gz #%d: there are URLs which have already been processed:"
+                               "results are going to be updated", idx)
+
             results.update(r)
 
             logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
