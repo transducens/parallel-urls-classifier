@@ -86,21 +86,11 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     if preprocess_cmd:
         preprocess_cmd = shlex.split(preprocess_cmd)
 
-    def process_sentence(idx, idx_fd, url_line, sentences_line, level, ref):
+    def process_sentence(idx, idx_fd, url_line, sentences_line, level):
         logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level, add_handlers=False)
-
-        _results = ref
         url_line = url_line.strip().replace('\t', ' ')
         sentences_line = sentences_line.strip()
-
-        if url_line in _results:
-            logger.warning("URL already processed: skipping: %s", url_line)
-
-            return False
-        else:
-            _results[url_line] = {}
-
-        # URL should not be the same twice
+        _results[url_line] = {}
         sentences_line = base64.b64decode(sentences_line).strip()
 
         if preprocess_cmd:
@@ -127,25 +117,28 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         if (idx_fd % _log_read_docs) == 0:
             logger.debug("Files url.gz and sentences.gz #%d: documents read: %d", idx, idx_fd)
 
-        return True
+        return _results
 
-    def process(idx, url_file, sentences_file, level, ref):
+    def process(idx, url_file, sentences_file, level):
         logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level, add_handlers=False)
-
-        _results = ref if parallelize_sentences_instead else {}
+        _results = {}
         current_read_docs = 0
 
         with utils.open_xz_or_gzip_or_plain(url_file) as url_fd, utils.open_xz_or_gzip_or_plain(sentences_file) as sentences_fd:
             if parallelize_sentences_instead:
                 _sentences_results = \
                     joblib.Parallel(n_jobs=1 if not parallelize_sentences_instead else n_jobs)( \
-                    joblib.delayed(process_sentence)(idx, idx_fd, url_line, sentences_line, level, _results) \
+                    joblib.delayed(process_sentence)(idx, idx_fd, url_line, sentences_line, level) \
                         for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1))
 
-                current_read_docs += sum(_sentences_results)
+                for r in _sentences_results:
+                    current_read_docs += len(r)
+                    _results.update(r)
             else:
                 for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1):
-                    current_read_docs += process_sentence(idx, idx_fd, url_line, sentences_line, level, _results)
+                    r = process_sentence(idx, idx_fd, url_line, sentences_line, level)
+                    current_read_docs += len(r)
+                    _results.update(r)
 
         logger.debug("Files url.gz and sentences.gz #%d: total documents read: %d", idx, current_read_docs)
 
@@ -160,21 +153,18 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
 
     if parallelize_sentences_instead:
         for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1):
-            process(idx, url_file, sentences_file, logger.level, results)
+            r = process(idx, url_file, sentences_file, logger.level)
+
+            results.update(r)
+
+            logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
     else:
         _results = \
             joblib.Parallel(n_jobs=n_jobs)( \
-            joblib.delayed(process)(idx, url_file, sentences_file, logger.level, results) \
+            joblib.delayed(process)(idx, url_file, sentences_file, logger.level) \
                 for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
 
         for idx, r in enumerate(_results, 1):
-            intersection = sorted(set(results.keys()).intersection(r.keys()))
-
-            for intersection_url in intersection:
-                if results[intersection_url] != r[intersection_url]:
-                    logger.warning("Files url.gz and sentences.gz #%d: %d elements, which are different, will be"
-                                "updated because are duplicated: %s", idx, len(intersection), intersection_url)
-
             results.update(r)
 
             logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
