@@ -87,7 +87,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         preprocess_cmd = shlex.split(preprocess_cmd)
 
     def process_sentence(idx, idx_fd, url_line, sentences_line, level, ref):
-        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level, add_handlers=False)
 
         _results = ref
         url_line = url_line.strip().replace('\t', ' ')
@@ -130,18 +130,22 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         return True
 
     def process(idx, url_file, sentences_file, level, ref):
-        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level, add_handlers=False)
 
         _results = ref if parallelize_sentences_instead else {}
         current_read_docs = 0
 
         with utils.open_xz_or_gzip_or_plain(url_file) as url_fd, utils.open_xz_or_gzip_or_plain(sentences_file) as sentences_fd:
-            _sentences_results = \
-                joblib.Parallel(n_jobs=1 if not parallelize_sentences_instead else n_jobs)( \
-                joblib.delayed(process_sentence)(idx, idx_fd, url_line, sentences_line, level, _results) \
-                    for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1))
+            if parallelize_sentences_instead:
+                _sentences_results = \
+                    joblib.Parallel(n_jobs=1 if not parallelize_sentences_instead else n_jobs)( \
+                    joblib.delayed(process_sentence)(idx, idx_fd, url_line, sentences_line, level, _results) \
+                        for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1))
 
-            current_read_docs += sum(_sentences_results)
+                current_read_docs += sum(_sentences_results)
+            else:
+                for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1):
+                    current_read_docs += process_sentence(idx, idx_fd, url_line, sentences_line, level, _results)
 
         logger.debug("Files url.gz and sentences.gz #%d: total documents read: %d", idx, current_read_docs)
 
@@ -160,7 +164,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     else:
         _results = \
             joblib.Parallel(n_jobs=n_jobs)( \
-            joblib.delayed(process)(idx, url_file, sentences_file, logger.level) \
+            joblib.delayed(process)(idx, url_file, sentences_file, logger.level, results) \
                 for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
 
         for idx, r in enumerate(_results, 1):

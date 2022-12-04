@@ -139,7 +139,7 @@ def get_current_allocated_memory_size():
     return size_in_bytes
 
 def set_up_logging_logger(logger, filename=None, level=logging.INFO, format="[%(asctime)s] [%(name)s] [%(levelname)s] [%(module)s:%(lineno)d] %(message)s",
-                          display_when_file=False):
+                          display_when_file=False, add_handlers=True):
     handlers = [
         logging.StreamHandler()
     ]
@@ -157,7 +157,8 @@ def set_up_logging_logger(logger, filename=None, level=logging.INFO, format="[%(
     for h in handlers:
         h.setFormatter(formatter)
 
-        logger.addHandler(h)
+        if add_handlers:
+            logger.addHandler(h)
 
     logger.setLevel(level)
 
