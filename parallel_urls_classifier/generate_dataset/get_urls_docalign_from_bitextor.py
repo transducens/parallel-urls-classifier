@@ -141,6 +141,7 @@ def main(args):
     raw_preprocess_cmd = args.raw_preprocess_cmd
     docalign_threshold = args.docalign_threshold
     process_docalign = True if docalign_mt_matches_files else False
+    n_jobs = args.n_jobs
 
     if not docalign_mt_matches_files:
         docalign_mt_matches_files = []
@@ -216,9 +217,11 @@ def main(args):
 
     # Get number of lines per document/URL
     src_urls_statistics = \
-        utils_bitextor.get_statistics_from_url_and_sentences(src_url_files, src_sentences_files, preprocess_cmd=src_sentences_preprocess_cmd)
+        utils_bitextor.get_statistics_from_url_and_sentences(src_url_files, src_sentences_files, preprocess_cmd=src_sentences_preprocess_cmd,
+                                                             n_jobs=n_jobs)
     trg_urls_statistics = \
-        utils_bitextor.get_statistics_from_url_and_sentences(trg_url_files, trg_sentences_files, preprocess_cmd=trg_sentences_preprocess_cmd)
+        utils_bitextor.get_statistics_from_url_and_sentences(trg_url_files, trg_sentences_files, preprocess_cmd=trg_sentences_preprocess_cmd,
+                                                             n_jobs=n_jobs)
 
     logging.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_statistics), len(trg_urls_statistics))
 
@@ -311,8 +314,8 @@ def main(args):
         logging.info("Processing raw.gz file")
 
         aligned_urls = utils_bitextor.get_statistics_from_raw(raw_file, raw_file_src_url_idx, raw_file_trg_url_idx,
-                                                              raw_file_src_text_idx, raw_file_trg_text_idx
-                                                              bicleaner_idx=raw_file_bicleaner_idx)
+                                                              raw_file_src_text_idx, raw_file_trg_text_idx,
+                                                              bicleaner_idx=raw_file_bicleaner_idx, preprocess_cmd=raw_preprocess_cmd)
 
         logging.info("Unique different paired URLs: %d", len(aligned_urls))
 
@@ -433,6 +436,8 @@ def initialization():
     parser.add_argument('--raw-preprocess-cmd',
                         help="Preprocess command to apply to the src and trg alignments."
                              "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
+    parser.add_argument('--n-jobs', type=int, default=-1
+                        help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
 
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
     parser.add_argument('--bicleaner-threshold', type=float, default=0.0,

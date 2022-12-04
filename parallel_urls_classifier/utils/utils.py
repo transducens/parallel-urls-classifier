@@ -439,3 +439,16 @@ def use_cuda(force_cpu=False):
     use_cuda = torch.cuda.is_available()
 
     return True if use_cuda and not force_cpu else False
+
+def check_nltk_model(model_path, model, download=True, quiet=False):
+    import nltk
+
+    try:
+        nltk.data.find(model_path)
+    except LookupError:
+        logger.info("NLTK model not available: %s", model)
+
+        if download:
+            logger.info("Downloading model: %s", model)
+
+            nltk.download(model, quiet=quiet)
