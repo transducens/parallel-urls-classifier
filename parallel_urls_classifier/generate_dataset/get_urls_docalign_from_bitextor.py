@@ -436,8 +436,7 @@ def initialization():
     parser.add_argument('--raw-preprocess-cmd',
                         help="Preprocess command to apply to the src and trg alignments."
                              "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
-    parser.add_argument('--n-jobs', type=int, default=-1
-                        help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
+    parser.add_argument('--n-jobs', type=int, default=-1, help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
 
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
     parser.add_argument('--bicleaner-threshold', type=float, default=0.0,

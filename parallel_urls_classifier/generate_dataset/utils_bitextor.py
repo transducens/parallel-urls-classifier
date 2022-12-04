@@ -136,10 +136,12 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
 
         return _results
 
-    if n_jobs < 1:
+    if n_jobs == 0:
         logging.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
 
         n_jobs = 1
+    if n_jobs < 1:
+        logging.warning("Using all CPUs - %d", n_jobs + 1)
 
     _results = joblib.Parallel(n_jobs=n_jobs)(joblib.delayed(process)(idx, url_file, sentences_file, logging.getLogger().level) \
         for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
