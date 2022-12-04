@@ -139,7 +139,7 @@ def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens,
             pass
         else:
             logger.warning("aligned_src_tokens > src_url_tokens: %d > %d: this might be possible if some preprocessing was applied with Bifixer"
-                           "or different versions of the documents were provided: %s\t%s"
+                           "or different versions of the documents were provided: %s\t%s",
                            aligned_src_tokens, src_url_tokens, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
 
             _src_tokens_warning_already_done = True
@@ -152,7 +152,7 @@ def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens,
             pass
         else:
             logger.warning("aligned_trg_tokens > trg_url_tokens: %d > %d: this might be possible if some preprocessing was applied with Bifixer"
-                           "or different versions of the documents were provided: %s\t%s"
+                           "or different versions of the documents were provided: %s\t%s",
                            aligned_trg_tokens, trg_url_tokens, src_url if src_url else "src_url_not_provided", trg_url if trg_url else "trg_url_not_provided")
 
             _trg_tokens_warning_already_done = True

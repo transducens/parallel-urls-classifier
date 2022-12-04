@@ -87,8 +87,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         preprocess_cmd = shlex.split(preprocess_cmd)
 
     def process_sentence(idx, idx_fd, url_line, sentences_line, level, ref):
-        if parallelize_sentences_instead:
-            logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
 
         _results = ref
         url_line = url_line.strip().replace('\t', ' ')
@@ -131,8 +130,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         return True
 
     def process(idx, url_file, sentences_file, level, ref):
-        if not parallelize_sentences_instead:
-            logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level)
 
         _results = ref if parallelize_sentences_instead else {}
         current_read_docs = 0
@@ -156,12 +154,15 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     if n_jobs < 1:
         logger.warning("Using all CPUs - %d", abs(n_jobs + 1))
 
-    _results = \
-        joblib.Parallel(n_jobs=1 if parallelize_sentences_instead else n_jobs)( \
-        joblib.delayed(process)(idx, url_file, sentences_file, logger.level, results) \
-            for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
+    if parallelize_sentences_instead:
+        for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1):
+            process(idx, url_file, sentences_file, logger.level, results)
+    else:
+        _results = \
+            joblib.Parallel(n_jobs=n_jobs)( \
+            joblib.delayed(process)(idx, url_file, sentences_file, logger.level) \
+                for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
 
-    if not parallelize_sentences_instead:
         for idx, r in enumerate(_results, 1):
             intersection = sorted(set(results.keys()).intersection(r.keys()))
 
