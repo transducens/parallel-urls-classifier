@@ -150,7 +150,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                         k = list(r.keys())[0]
 
                         if k in _results:
-                            if _sentences_results[k] != _results[k]:
+                            if r[k] != _results[k]:
                                 logger.warning("Files url.gz and sentences.gz #%d: URL already processed: different values: skipping: %s", idx, k)
                         else:
                             current_read_docs += len(r)
