@@ -185,7 +185,6 @@ def main(args):
     docalign_threshold = args.docalign_threshold
     process_docalign = True if docalign_mt_matches_files else False
     n_jobs = args.n_jobs
-    parallelize_sentences_instead_of_files = args.parallelize_sentences_instead_of_files
 
     if not docalign_mt_matches_files:
         docalign_mt_matches_files = []
@@ -262,10 +261,10 @@ def main(args):
     # Get number of lines per document/URL
     src_urls_statistics = \
         utils_bitextor.get_statistics_from_url_and_sentences(src_url_files, src_sentences_files, preprocess_cmd=src_sentences_preprocess_cmd,
-                                                             n_jobs=n_jobs, parallelize_sentences_instead=parallelize_sentences_instead_of_files)
+                                                             n_jobs=n_jobs)
     trg_urls_statistics = \
         utils_bitextor.get_statistics_from_url_and_sentences(trg_url_files, trg_sentences_files, preprocess_cmd=trg_sentences_preprocess_cmd,
-                                                             n_jobs=n_jobs, parallelize_sentences_instead=parallelize_sentences_instead_of_files)
+                                                             n_jobs=n_jobs)
 
     logger.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_statistics), len(trg_urls_statistics))
 
@@ -481,9 +480,6 @@ def initialization():
                         help="Preprocess command to apply to the src and trg alignments."
                              "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
     parser.add_argument('--n-jobs', type=int, default=-1, help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
-    parser.add_argument('--parallelize-sentences-instead-of-files', action='store_true',
-                        help="By default, parallelization is applied at file level, but can be also applied at sentence level "
-                             "(it might generate different results since sentence level parallelization may update duplicated URL entries)")
 
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
     parser.add_argument('--bicleaner-threshold', type=float, default=0.0,
