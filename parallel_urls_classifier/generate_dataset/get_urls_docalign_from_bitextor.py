@@ -358,7 +358,8 @@ def main(args):
 
         aligned_urls = utils_bitextor.get_statistics_from_raw(raw_file, raw_file_src_url_idx, raw_file_trg_url_idx,
                                                               raw_file_src_text_idx, raw_file_trg_text_idx,
-                                                              bicleaner_idx=raw_file_bicleaner_idx, preprocess_cmd=raw_preprocess_cmd)
+                                                              bicleaner_idx=raw_file_bicleaner_idx, preprocess_cmd=raw_preprocess_cmd,
+                                                              n_jobs=n_jobs)
 
         logger.info("Unique different paired URLs: %d", len(aligned_urls))
 

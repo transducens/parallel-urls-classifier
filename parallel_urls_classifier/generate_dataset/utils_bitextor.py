@@ -18,60 +18,78 @@ import joblib
 _tokenize = lambda s: tokenizer.tokenize(s, check_gaps=False, tokenizer="word_tokenize")
 logger = logging.getLogger("parallel_urls_classifier")
 
-def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, bicleaner_idx=None, preprocess_cmd=None):
+def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, bicleaner_idx=None, preprocess_cmd=None,
+                            n_jobs=1):
     results = {}
 
     if preprocess_cmd:
         preprocess_cmd = shlex.split(preprocess_cmd)
 
+    def process(idx, line):
+        logging.getLogger("parallel_urls_classifier").handlers = []
+        logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
+
+        line = line.split('\t')
+        line[-1] = line[-1].rstrip('\n')
+        src_url = line[src_url_idx]
+        trg_url = line[trg_url_idx]
+        src_text = line[src_text_idx]
+        trg_text = line[trg_text_idx]
+        bicleaner = float(line[bicleaner_idx]) if bicleaner_idx is not None else -1.0
+        url = f"{src_url}\t{trg_url}"
+        pair = f"{src_text}\t{trg_text}"
+
+        if preprocess_cmd:
+            # Apply preprocess to src and trg text
+
+            cmd = subprocess.Popen(preprocess_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            pair, err = cmd.communicate(pair.encode())
+            rtn_code = cmd.returncode
+            pair = pair.decode('utf-8', errors="backslashreplace").rstrip('\n')
+
+            if rtn_code:
+                logger.error("Preprocess cmd returning code != 0: %d", rtn_code)
+
+            if err:
+                logger.warning("Preprocess cmd printed content from stderr: %s",
+                                err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
+
+        pair = pair.split('\t')
+
+        if len(pair) != 2:
+            raise Exception(f"Pair #{idx} doesn't have 2 elements but {len(pair)}: pair: {str(pair)}")
+
+        len_src_tokens = len(_tokenize(pair[0].strip()))
+        len_trg_tokens = len(_tokenize(pair[1].strip()))
+
+        return {
+            "pair": url,
+            "bicleaner": bicleaner,
+            "len_src_tokens": len_src_tokens,
+            "len_trg_tokens": len_trg_tokens,
+        }
+
     with utils.open_xz_or_gzip_or_plain(raw_file) as fd:
-        for line in fd:
-            line = line.split('\t')
-            line[-1] = line[-1].rstrip('\n')
-            src_url = line[src_url_idx]
-            trg_url = line[trg_url_idx]
-            src_text = line[src_text_idx]
-            trg_text = line[trg_text_idx]
-            bicleaner = float(line[bicleaner_idx]) if bicleaner_idx is not None else -1.0
-            url = f"{src_url}\t{trg_url}"
-            pair = f"{src_text}\t{trg_text}"
+        _results = \
+            joblib.Parallel(n_jobs=n_jobs)( \
+            joblib.delayed(process)(idx, line) for idx, line in enumerate(fd, 1))
 
-            if preprocess_cmd:
-                # Apply preprocess to src and trg text
-
-                cmd = subprocess.Popen(preprocess_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                pair, err = cmd.communicate(pair.encode())
-                rtn_code = cmd.returncode
-                pair = pair.decode('utf-8', errors="backslashreplace").rstrip('\n')
-
-                if rtn_code:
-                    logger.error("Preprocess cmd returning code != 0: %d", rtn_code)
-
-                if err:
-                    logger.warning("Preprocess cmd printed content from stderr: %s",
-                                   err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
-
-            pair = pair.split('\t')
-
-            if len(pair) != 2:
-                raise Exception(f"Pair doesn't have 2 elements but {len(pair)}: pair: {str(pair)}")
-
-            len_src_tokens = len(_tokenize(pair[0].strip()))
-            len_trg_tokens = len(_tokenize(pair[1].strip()))
+        for r in _results:
+            url = r["pair"]
 
             try:
                 if bicleaner_idx is not None:
-                    results[url]["bicleaner_sum"] += bicleaner
+                    results[url]["bicleaner_sum"] += r["bicleaner"]
 
                 results[url]["occurrences"] += 1
-                results[url]["src_tokens"] += len_src_tokens
-                results[url]["trg_tokens"] += len_trg_tokens
+                results[url]["src_tokens"] += r["len_src_tokens"]
+                results[url]["trg_tokens"] += r["len_trg_tokens"]
             except KeyError:
                 results[url] = {
                     "occurrences": 1,
-                    "bicleaner_sum": bicleaner,
-                    "src_tokens": len_src_tokens,
-                    "trg_tokens": len_trg_tokens,
+                    "bicleaner_sum": r["bicleaner"],
+                    "src_tokens": r["len_src_tokens"],
+                    "trg_tokens": r["len_trg_tokens"],
                 }
 
     return results
@@ -90,6 +108,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     def process_document(idx, idx_fd, url_line, sentences_line, level, ref=None):
         logging.getLogger("parallel_urls_classifier").handlers = []
         logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
+
         url_line = url_line.strip().replace('\t', ' ')
         sentences_line = sentences_line.strip()
         _results = {}
@@ -132,6 +151,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     def process(idx, url_file, sentences_file, level, ref=None):
         logging.getLogger("parallel_urls_classifier").handlers = []
         logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
+
         _results = {} if ref is None else ref
         current_read_docs = 0
 
