@@ -25,7 +25,7 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
     if preprocess_cmd:
         preprocess_cmd = shlex.split(preprocess_cmd)
 
-    def process(idx, line):
+    def process(idx, line, level):
         logging.getLogger("parallel_urls_classifier").handlers = []
         logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
 
@@ -54,13 +54,25 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
                 logger.warning("Preprocess cmd printed content from stderr: %s",
                                 err.decode('utf-8', errors="backslashreplace").rstrip('\n'))
 
-        pair = pair.split('\t')
+        _pair = pair.split('\n')
+        len_src_tokens = 0
+        len_trg_tokens = 0
 
-        if len(pair) != 2:
-            raise Exception(f"Pair #{idx} doesn't have 2 elements but {len(pair)}: pair: {str(pair)}")
+        if len(_pair) > 1:
+            if preprocess_cmd:
+                logger.warning("Pair #%d returned more than 1 entry: %d entries: this might be possible if Bifixer "
+                               "was executed without --ignore_segmentation", idx, len(_pair))
+            else:
+                raise Exception(f"Pair #{idx} contains more than 1 entry: {len(_pair)} entries: bug?: {str(_pair)}")
 
-        len_src_tokens = len(_tokenize(pair[0].strip()))
-        len_trg_tokens = len(_tokenize(pair[1].strip()))
+        for idx_entry, pair in enumerate(_pair):
+            pair = pair.split('\t')
+
+            if len(pair) != 2:
+                raise Exception(f"Pair #{idx},{idx_entry} doesn't have 2 elements but {len(pair)}: {str(pair)}")
+
+            len_src_tokens += len(_tokenize(pair[0].strip()))
+            len_trg_tokens += len(_tokenize(pair[1].strip()))
 
         return {
             "pair": url,
@@ -72,7 +84,7 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
     with utils.open_xz_or_gzip_or_plain(raw_file) as fd:
         _results = \
             joblib.Parallel(n_jobs=n_jobs)( \
-            joblib.delayed(process)(idx, line) for idx, line in enumerate(fd, 1))
+            joblib.delayed(process)(idx, line, logger.level) for idx, line in enumerate(fd, 1))
 
         for r in _results:
             url = r["pair"]
