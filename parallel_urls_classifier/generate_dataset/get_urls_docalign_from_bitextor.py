@@ -268,6 +268,7 @@ def main(args):
                                                              n_jobs=n_jobs)
 
     logger.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_statistics), len(trg_urls_statistics))
+    logger.info("Number of URLs that have been skipped (src, trg): (%d, %d)", len(src_urls_skipped), len(trg_urls_skipped))
 
     # Print header
     sys.stdout.write("src_url\ttrg_url")
