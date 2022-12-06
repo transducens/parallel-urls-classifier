@@ -15,7 +15,7 @@ import parallel_urls_classifier.generate_dataset.utils_bitextor as utils_bitexto
 
 import numpy as np
 
-_occurrences_warning_only_once = True
+_occurrences_warning_only_once = False
 _occurrences_warning_already_done = False
 logger = logging.getLogger("parallel_urls_classifier")
 
@@ -123,7 +123,7 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
 
     return nolines_score, occurrences_score
 
-_tokens_score_warning_only_once = True
+_tokens_score_warning_only_once = False
 _src_tokens_warning_already_done = False
 _trg_tokens_warning_already_done = False
 def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens, aligned_trg_tokens, src_url=None, trg_url=None):
