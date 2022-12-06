@@ -117,7 +117,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     if preprocess_cmd:
         preprocess_cmd = shlex.split(preprocess_cmd)
 
-    def process_document(idx, idx_fd, url_line, sentences_line, level, ref=None):
+    def process_document(idx, idx_fd, url_line, sentences_line, level, ref=None, ref_skipped=None):
         logging.getLogger("parallel_urls_classifier").handlers = []
         logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
 
@@ -125,6 +125,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         sentences_line = sentences_line.strip()
         _results = {}
         _results[url_line] = {}
+        _skipped = set()
         sentences_line = base64.b64decode(sentences_line).strip()
 
         if preprocess_cmd:
@@ -155,16 +156,22 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
             if url_line in ref:
                 if _results[url_line] != ref[url_line]:
                     logger.warning("Files url.gz and sentences.gz #%d,%d: URL already processed: different values: skipping: %s", idx, idx_fd, url_line)
+
+                    _skipped.add(url_line)
+
+                    if ref_skipped is not None:
+                        ref_skipped.update(_skipped)
             else:
                 ref[url_line] = _results[url_line]
 
-        return _results
+        return _results, _skipped
 
-    def process(idx, url_file, sentences_file, level, ref=None):
+    def process(idx, url_file, sentences_file, level, ref=None, ref_skipped=None):
         logging.getLogger("parallel_urls_classifier").handlers = []
         logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
 
         _results = {} if ref is None else ref
+        _skipped = set() if ref_skipped is None else ref_skipped
         current_read_docs = 0
 
         with utils.open_xz_or_gzip_or_plain(url_file) as url_fd, utils.open_xz_or_gzip_or_plain(sentences_file) as sentences_fd:
@@ -184,18 +191,20 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                         if k in _results:
                             if r[k] != _results[k]:
                                 logger.warning("Files url.gz and sentences.gz #%d: URL already processed: different values: skipping: %s", idx, k)
+
+                                _skipped.add(k)
                         else:
                             current_read_docs += len(r)
                             _results.update(r)
             else:
                 for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1):
-                    process_document(idx, idx_fd, url_line, sentences_line, level, _results)
+                    process_document(idx, idx_fd, url_line, sentences_line, level, ref=_results, ref_skipped=_skipped)
 
                 current_read_docs += len(_results)
 
         logger.debug("Files url.gz and sentences.gz #%d: total documents read: %d", idx, current_read_docs)
 
-        return _results
+        return _results, _skipped
 
     if n_jobs == 0:
         logger.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
@@ -204,27 +213,35 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     if n_jobs < 1:
         logger.warning("Using all CPUs - %d", abs(n_jobs + 1))
 
+    skipped = set()
+
     if not parallelize or not parallelize_files_instead:
         for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1):
-            process(idx, url_file, sentences_file, logger.level, results)
+            process(idx, url_file, sentences_file, logger.level, ref=results, ref_skipped=skipped)
 
             logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
     else:
-        _results = \
+        _results, _skipped = \
             joblib.Parallel(n_jobs=n_jobs)( \
             joblib.delayed(process)(idx, url_file, sentences_file, logger.level) \
                 for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1))
 
-        for idx, r in enumerate(_results, 1):
+        for idx, (r, s) in enumerate(zip(_results, _skipped), 1):
             if results.keys().isdisjoint(r.keys()):
                 logger.warning("Files url.gz and sentences.gz #%d: there are URLs which have already been processed: "
                                "results are going to be updated", idx)
 
             results.update(r)
+            skipped.update(s)
 
             logger.debug("Files url.gz and sentences.gz #%d: unique documents accumulated: %d", idx, len(results))
 
-    return results
+        # Update skipped pairs with the combinations of the results
+        for idx1 in range(len(_results)):
+            for idx2 in range(idx1 + 1, len(_results)):
+                skipped.update(set(results[idx1]).intersection(results[idx2]))
+
+    return results, skipped
 
 def get_urls_from_idxs(url_file, idxs):
     idxs_sorted = sorted(idxs)

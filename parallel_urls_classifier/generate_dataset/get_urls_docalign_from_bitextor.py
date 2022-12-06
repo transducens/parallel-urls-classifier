@@ -185,6 +185,7 @@ def main(args):
     docalign_threshold = args.docalign_threshold
     process_docalign = True if docalign_mt_matches_files else False
     n_jobs = args.n_jobs
+    ignore_duplicated_urls = args.ignore_duplicated_urls
 
     if not docalign_mt_matches_files:
         docalign_mt_matches_files = []
@@ -259,10 +260,10 @@ def main(args):
     total_possible_printed_urls = 0
 
     # Get number of lines per document/URL
-    src_urls_statistics = \
+    src_urls_statistics, src_urls_skipped = \
         utils_bitextor.get_statistics_from_url_and_sentences(src_url_files, src_sentences_files, preprocess_cmd=src_sentences_preprocess_cmd,
                                                              n_jobs=n_jobs)
-    trg_urls_statistics = \
+    trg_urls_statistics, trg_urls_skipped = \
         utils_bitextor.get_statistics_from_url_and_sentences(trg_url_files, trg_sentences_files, preprocess_cmd=trg_sentences_preprocess_cmd,
                                                              n_jobs=n_jobs)
 
@@ -323,7 +324,7 @@ def main(args):
 
             logger.debug("Number of aligned URLs from '%s': %d", docalign_mt_matches_file, len(src_urls))
 
-            for score, src_url, trg_url in zip(scores, src_urls, trg_urls):
+            for idx, (score, src_url, trg_url) in enumerate(zip(scores, src_urls, trg_urls), 1):
                 try:
                     docalign_src_urls[src_url] += 1
                 except KeyError:
@@ -335,13 +336,22 @@ def main(args):
 
                 k = hash(f"{src_url}\t{trg_url}")
                 docalign_url_scores[k] = score
-                src_url_nolines = src_urls_statistics[src_url]["nolines"]
-                trg_url_nolines = trg_urls_statistics[trg_url]["nolines"]
-                src_url_tokens = src_urls_statistics[src_url]["tokens"]
-                trg_url_tokens = trg_urls_statistics[trg_url]["tokens"]
-                nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
 
                 if not raw_file:
+                    if ignore_duplicated_urls:
+                        if src_url in src_urls_skipped:
+                            logger.debug("Src URL #%d ignored: %s", idx, src_url)
+                        if trg_url in trg_urls_skipped:
+                            logger.debug("Trg URL #%d ignored: %s", idx, trg_url)
+
+                        continue
+
+                    src_url_nolines = src_urls_statistics[src_url]["nolines"]
+                    trg_url_nolines = trg_urls_statistics[trg_url]["nolines"]
+                    src_url_tokens = src_urls_statistics[src_url]["tokens"]
+                    trg_url_tokens = trg_urls_statistics[trg_url]["tokens"]
+                    nolines_score, _ = get_doc_nolines_score(src_url_nolines, trg_url_nolines)
+
                     # We want to avoid scientific notation
                     score = round(score, 4)
                     nolines_score = round(nolines_score, 4)
@@ -408,6 +418,14 @@ def main(args):
                 trg_url_tokens = trg_urls_statistics[trg_url]["tokens"]
             except KeyError:
                 logger.warning("src URL (%s) or trg URL (%s) not in aligned URLs", src_url, trg_url)
+
+                continue
+
+            if ignore_duplicated_urls:
+                if src_url in src_urls_skipped:
+                    logger.debug("Pair #%d: src URL ignored: %s", idx, src_url)
+                if trg_url in trg_urls_skipped:
+                    logger.debug("Pair #%d: trg URL ignored: %s", idx, trg_url)
 
                 continue
 
@@ -482,6 +500,10 @@ def initialization():
                              "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
     parser.add_argument('--n-jobs', type=int, default=-1, help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
 
+    parser.add_argument('--ignore-duplicated-urls', action='store_true',
+                        help="Ignore src and trg duplicated URLs. This should avoid errors with duplicated URLs when .raw.gz file is "
+                             "processed since when there are duplicated URLs, we can't be sure which document is the one which appears "
+                             "in the .raw.gz file (results might even be from all the duplicated URLs for a spcific pair)")
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
     parser.add_argument('--bicleaner-threshold', type=float, default=0.0,
                         help="Bicleaner threshold. The threshold is applied to the avg scores for all the sentences of the document")
