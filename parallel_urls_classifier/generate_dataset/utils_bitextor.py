@@ -239,7 +239,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         # Update skipped pairs with the combinations of the results
         for idx1 in range(len(_results)):
             for idx2 in range(idx1 + 1, len(_results)):
-                skipped.update(set(results[idx1]).intersection(results[idx2]))
+                skipped.update(set(_results[idx1].keys()).intersection(_results[idx2].keys()))
 
     return results, skipped
 
