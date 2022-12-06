@@ -21,13 +21,31 @@ _tokenize = lambda s: tokenizer.tokenize(s, check_gaps=False, tokenizer="word_to
 logger = logging.getLogger("parallel_urls_classifier")
 
 def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, bicleaner_idx=None, preprocess_cmd=None,
-                            n_jobs=1):
+                            parallelize=True, n_jobs=1):
     results = {}
 
     if preprocess_cmd:
         preprocess_cmd = shlex.split(preprocess_cmd)
 
-    def process(idx, line, level):
+    def update_ref(results, r):
+        url = r["pair"]
+
+        try:
+            if bicleaner_idx is not None:
+                results[url]["bicleaner_sum"] += r["bicleaner"]
+
+            results[url]["occurrences"] += 1
+            results[url]["src_tokens"] += r["len_src_tokens"]
+            results[url]["trg_tokens"] += r["len_trg_tokens"]
+        except KeyError:
+            results[url] = {
+                "occurrences": 1,
+                "bicleaner_sum": r["bicleaner"],
+                "src_tokens": r["len_src_tokens"],
+                "trg_tokens": r["len_trg_tokens"],
+            }
+
+    def process(idx, line, level, ref=None):
         logging.getLogger("parallel_urls_classifier").handlers = []
         logger = utils.set_up_logging_logger(logging.getLogger("parallel_urls_classifier"), level=level) # https://github.com/joblib/joblib/issues/1017
 
@@ -79,45 +97,40 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
         if (idx % _log_read_pairs) == 0:
             logger.debug("File raw.gz: pairs read: %d", idx)
 
-        return {
+        results = {
             "pair": url,
             "bicleaner": bicleaner,
             "len_src_tokens": len_src_tokens,
             "len_trg_tokens": len_trg_tokens,
         }
 
-    if n_jobs == 0:
-        logger.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
+        if ref is not None:
+            update_ref(ref, results)
 
-        n_jobs = 1
-    if n_jobs < 1:
-        if n_jobs == -1:
-            logger.warning("Using all CPUs")
-        else:
-            logger.warning("Using all CPUs minus %d", abs(n_jobs + 1))
+        return results
+
+    if parallelize:
+        if n_jobs == 0:
+            logger.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
+
+            n_jobs = 1
+        if n_jobs < 1:
+            if n_jobs == -1:
+                logger.warning("Using all CPUs")
+            else:
+                logger.warning("Using all CPUs minus %d", abs(n_jobs + 1))
 
     with utils.open_xz_or_gzip_or_plain(raw_file) as fd:
-        _results = \
-            joblib.Parallel(n_jobs=n_jobs)( \
-            joblib.delayed(process)(idx, line, logger.level) for idx, line in enumerate(fd, 1))
+        if parallelize:
+            _results = \
+                joblib.Parallel(n_jobs=n_jobs)( \
+                joblib.delayed(process)(idx, line, logger.level) for idx, line in enumerate(fd, 1))
 
-        for r in _results:
-            url = r["pair"]
-
-            try:
-                if bicleaner_idx is not None:
-                    results[url]["bicleaner_sum"] += r["bicleaner"]
-
-                results[url]["occurrences"] += 1
-                results[url]["src_tokens"] += r["len_src_tokens"]
-                results[url]["trg_tokens"] += r["len_trg_tokens"]
-            except KeyError:
-                results[url] = {
-                    "occurrences": 1,
-                    "bicleaner_sum": r["bicleaner"],
-                    "src_tokens": r["len_src_tokens"],
-                    "trg_tokens": r["len_trg_tokens"],
-                }
+            for r in _results:
+                update_ref(results, r)
+        else:
+            for idx, line in enumerate(fd, 1):
+                process(idx, line, logger.level, ref=results)
 
     return results
 
@@ -222,15 +235,16 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
 
         return _results, _skipped
 
-    if n_jobs == 0:
-        logger.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
+    if parallelize:
+        if n_jobs == 0:
+            logger.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
 
-        n_jobs = 1
-    if n_jobs < 1:
-        if n_jobs == -1:
-            logger.warning("Using all CPUs")
-        else:
-            logger.warning("Using all CPUs minus %d", abs(n_jobs + 1))
+            n_jobs = 1
+        if n_jobs < 1:
+            if n_jobs == -1:
+                logger.warning("Using all CPUs")
+            else:
+                logger.warning("Using all CPUs minus %d", abs(n_jobs + 1))
 
     skipped = set()
 
