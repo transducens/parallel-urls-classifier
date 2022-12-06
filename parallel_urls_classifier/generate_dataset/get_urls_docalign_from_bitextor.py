@@ -490,20 +490,20 @@ def initialization():
                         help="Preprocess command to apply to the trg sentences."
                              "The provided command has to read sentences from stdin and print to stdout")
     parser.add_argument('--raw-file', help=".rwa.gz file. If not provided, only docalign will be taken into account")
-    parser.add_argument('--raw-file-src-url-idx', type=int, default=0, help=".raw.gz file src URL idx")
-    parser.add_argument('--raw-file-trg-url-idx', type=int, default=1, help=".raw.gz file trg URL idx")
-    parser.add_argument('--raw-file-src-text-idx', type=int, default=2, help=".raw.gz file text URL idx")
-    parser.add_argument('--raw-file-trg-text-idx', type=int, default=3, help=".raw.gz file text URL idx")
-    parser.add_argument('--raw-file-bicleaner-idx', type=int, default=None, help=".raw.gz file bicleaner idx")
+    parser.add_argument('--raw-file-src-url-idx', type=int, default=0, help="raw.gz file src URL idx")
+    parser.add_argument('--raw-file-trg-url-idx', type=int, default=1, help="raw.gz file trg URL idx")
+    parser.add_argument('--raw-file-src-text-idx', type=int, default=2, help="raw.gz file text URL idx")
+    parser.add_argument('--raw-file-trg-text-idx', type=int, default=3, help="raw.gz file text URL idx")
+    parser.add_argument('--raw-file-bicleaner-idx', type=int, default=None, help="raw.gz file bicleaner idx")
     parser.add_argument('--raw-preprocess-cmd',
                         help="Preprocess command to apply to the src and trg alignments."
                              "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
     parser.add_argument('--n-jobs', type=int, default=-1, help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
 
     parser.add_argument('--ignore-duplicated-urls', action='store_true',
-                        help="Ignore src and trg duplicated URLs. This should avoid errors with duplicated URLs when .raw.gz file is "
+                        help="Ignore src and trg duplicated URLs. This should avoid errors with duplicated URLs when raw.gz file is "
                              "processed since when there are duplicated URLs, we can't be sure which document is the one which appears "
-                             "in the .raw.gz file (results might even be from all the duplicated URLs for a spcific pair)")
+                             "in the raw.gz file (results might even be from all the duplicated URLs for a spcific pair)")
     parser.add_argument('--min-occurrences', type=int, default=0, help="Min. occurrences of URLs pairs")
     parser.add_argument('--bicleaner-threshold', type=float, default=0.0,
                         help="Bicleaner threshold. The threshold is applied to the avg scores for all the sentences of the document")

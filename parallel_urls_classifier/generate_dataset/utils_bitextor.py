@@ -15,6 +15,8 @@ import parallel_urls_classifier.tokenizer as tokenizer
 
 import joblib
 
+_log_read_docs = 10000 # url.gz and sentences.gz
+_log_read_pairs = 10000 # raw.gz
 _tokenize = lambda s: tokenizer.tokenize(s, check_gaps=False, tokenizer="word_tokenize")
 logger = logging.getLogger("parallel_urls_classifier")
 
@@ -74,12 +76,25 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
             len_src_tokens += len(_tokenize(pair[0].strip()))
             len_trg_tokens += len(_tokenize(pair[1].strip()))
 
+        if (idx % _log_read_pairs) == 0:
+            logger.debug("File raw.gz: pairs read: %d", idx)
+
         return {
             "pair": url,
             "bicleaner": bicleaner,
             "len_src_tokens": len_src_tokens,
             "len_trg_tokens": len_trg_tokens,
         }
+
+    if n_jobs == 0:
+        logger.warning("Updating n_jobs: from %d to %d", n_jobs, 1)
+
+        n_jobs = 1
+    if n_jobs < 1:
+        if n_jobs == -1:
+            logger.warning("Using all CPUs")
+        else:
+            logger.warning("Using all CPUs minus %d", abs(n_jobs + 1))
 
     with utils.open_xz_or_gzip_or_plain(raw_file) as fd:
         _results = \
@@ -106,7 +121,6 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
 
     return results
 
-_log_read_docs = 10000
 def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess_cmd=None, n_jobs=1, parallelize=True,
                                           parallelize_files_instead=False):
     # Download NLTK model if not available
