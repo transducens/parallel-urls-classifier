@@ -176,12 +176,14 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
 
         with utils.open_xz_or_gzip_or_plain(url_file) as url_fd, utils.open_xz_or_gzip_or_plain(sentences_file) as sentences_fd:
             if parallelize and not parallelize_files_instead:
-                _sentences_results = \
+                _sentences_results, _sentences_skipped = \
                     joblib.Parallel(n_jobs=n_jobs)( \
                     joblib.delayed(process_document)(idx, idx_fd, url_line, sentences_line, level) \
                         for idx_fd, (url_line, sentences_line) in enumerate(zip(url_fd, sentences_fd), 1))
 
-                for r in _sentences_results:
+                for r, s in zip(_sentences_results, _sentences_skipped):
+                    _skipped.update(s)
+
                     if len(r.keys()) > 0:
                         if len(r.keys()) > 1:
                             raise Exception(f"Unexpected length: {len(r.keys())}")
