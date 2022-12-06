@@ -340,12 +340,19 @@ def main(args):
 
                 if not raw_file:
                     if ignore_duplicated_urls:
+                        _skip = False
+
                         if src_url in src_urls_skipped:
                             logger.debug("Src URL #%d ignored: %s", idx, src_url)
+
+                            _skip = True
                         if trg_url in trg_urls_skipped:
                             logger.debug("Trg URL #%d ignored: %s", idx, trg_url)
 
-                        continue
+                            _skip = True
+
+                        if _skip:
+                            continue
 
                     src_url_nolines = src_urls_statistics[src_url]["nolines"]
                     trg_url_nolines = trg_urls_statistics[trg_url]["nolines"]
@@ -377,6 +384,7 @@ def main(args):
         skipped_bc_docalign = 0
         skipped_bc_min_occ = 0
         skipped_bc_bicleaner = 0
+        skipped_bc_duplicated = 0
         aligned_tokens = {}
 
         for idx, (url, data) in enumerate(aligned_urls.items()):
@@ -386,8 +394,8 @@ def main(args):
 
             if (idx + 1) % 10000 == 0:
                 logger.debug("%.2f finished", (idx + 1) * 100.0 / len(aligned_urls))
-                logger.debug("Currently skipped URLs (min occ., docalign, bicleaner): (%d, %d, %d)",
-                             skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner)
+                logger.debug("Currently skipped URLs (min occ., docalign, bicleaner, duplicated): (%d, %d, %d, %d)",
+                             skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner, skipped_bc_duplicated)
 
             if occurrences < min_occurrences:
                 skipped_bc_min_occ += 1
@@ -423,12 +431,21 @@ def main(args):
                 continue
 
             if ignore_duplicated_urls:
+                _skip = False
+
                 if src_url in src_urls_skipped:
                     logger.debug("Pair #%d: src URL ignored: %s", idx, src_url)
+
+                    _skip = True
                 if trg_url in trg_urls_skipped:
                     logger.debug("Pair #%d: trg URL ignored: %s", idx, trg_url)
 
-                continue
+                    _skip = True
+
+                if _skip:
+                    skipped_bc_duplicated += 1
+
+                    continue
 
             score = 0.0
             nolines_score, occurrences_score = get_doc_nolines_score(src_url_nolines, trg_url_nolines, occurrences=occurrences,
@@ -470,8 +487,8 @@ def main(args):
 
             total_printed_urls += 1
 
-        logger.info("Total skipped URLs (min occ., docalign, bicleaner): (%d, %d, %d)",
-                    skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner)
+        logger.info("Total skipped URLs (min occ., docalign, bicleaner, duplicated): (%d, %d, %d, %d)",
+                    skipped_bc_min_occ, skipped_bc_docalign, skipped_bc_bicleaner, skipped_bc_duplicated)
 
     logger.info("Total printed URLs: %d", total_printed_urls)
 
