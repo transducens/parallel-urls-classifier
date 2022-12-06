@@ -121,16 +121,24 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
                 logger.warning("Using all CPUs minus %d", abs(n_jobs + 1))
 
     with utils.open_xz_or_gzip_or_plain(raw_file) as fd:
+        total_pairs_read = 0
+
         if parallelize:
             _results = \
                 joblib.Parallel(n_jobs=n_jobs)( \
                 joblib.delayed(process)(idx, line, logger.level) for idx, line in enumerate(fd, 1))
+
+            total_pairs_read = len(_results)
 
             for r in _results:
                 update_ref(results, r)
         else:
             for idx, line in enumerate(fd, 1):
                 process(idx, line, logger.level, ref=results)
+
+            total_pairs_read = idx
+
+        logger.debug("File raw.gz: total pairs read: %d", total_pairs_read)
 
     return results
 
