@@ -15,13 +15,16 @@ import parallel_urls_classifier.tokenizer as tokenizer
 
 import joblib
 
-_log_read_docs = 10000 # url.gz and sentences.gz
-_log_read_pairs = 10000 # raw.gz
+_log_read_docs = 10000 # url.gz and sentences.gz files
+_log_read_pairs = 10000 # segalign files
 _tokenize = lambda s: tokenizer.tokenize(s, check_gaps=False, tokenizer="word_tokenize")
 logger = logging.getLogger("parallel_urls_classifier")
 
-def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, bicleaner_idx=None, preprocess_cmd=None,
-                            parallelize=True, n_jobs=1):
+def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, preprocess_cmd=None,
+                                 parallelize=True, n_jobs=1):
+    # Download NLTK model if not available
+    utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
+
     results = {}
 
     if preprocess_cmd:
@@ -31,16 +34,12 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
         url = r["pair"]
 
         try:
-            if bicleaner_idx is not None:
-                results[url]["bicleaner_sum"] += r["bicleaner"]
-
             results[url]["occurrences"] += 1
             results[url]["src_tokens"] += r["len_src_tokens"]
             results[url]["trg_tokens"] += r["len_trg_tokens"]
         except KeyError:
             results[url] = {
                 "occurrences": 1,
-                "bicleaner_sum": r["bicleaner"],
                 "src_tokens": r["len_src_tokens"],
                 "trg_tokens": r["len_trg_tokens"],
             }
@@ -55,7 +54,6 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
         trg_url = line[trg_url_idx]
         src_text = line[src_text_idx]
         trg_text = line[trg_text_idx]
-        bicleaner = float(line[bicleaner_idx]) if bicleaner_idx is not None else -1.0
         url = f"{src_url}\t{trg_url}"
         pair = f"{src_text}\t{trg_text}"
 
@@ -95,11 +93,10 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
             len_trg_tokens += len(_tokenize(pair[1].strip()))
 
         if (idx % _log_read_pairs) == 0:
-            logger.debug("File raw.gz: pairs read: %d", idx)
+            logger.debug("Segalign file: pairs read: %d", idx)
 
         results = {
             "pair": url,
-            "bicleaner": bicleaner,
             "len_src_tokens": len_src_tokens,
             "len_trg_tokens": len_trg_tokens,
         }
@@ -120,7 +117,7 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
             else:
                 logger.warning("Using all CPUs minus %d", abs(n_jobs + 1))
 
-    with utils.open_xz_or_gzip_or_plain(raw_file) as fd:
+    with utils.open_xz_or_gzip_or_plain(segalign_file) as fd:
         total_pairs_read = 0
 
         if parallelize:
@@ -138,7 +135,7 @@ def get_statistics_from_raw(raw_file, src_url_idx, trg_url_idx, src_text_idx, tr
 
             total_pairs_read = idx
 
-        logger.debug("File raw.gz: total pairs read: %d", total_pairs_read)
+        logger.debug("Segalign file: total pairs read: %d", total_pairs_read)
 
     return results
 
@@ -161,7 +158,8 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         _results = {}
         _results[url_line] = {}
         _skipped = set()
-        sentences_line = base64.b64decode(sentences_line).strip()
+        sentences_line = base64.b64decode(sentences_line).strip(b'\n').split(b'\n')
+        sentences_line = b'\n'.join(map(lambda s: s.split(b'\t')[0], sentences_line)) # Get 1st column of text
 
         if preprocess_cmd:
             # Apply preprocess to text
