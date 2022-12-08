@@ -182,7 +182,12 @@ def main(args):
     trg_sentences_preprocess_cmd = args.trg_sentences_preprocess_cmd
     segalign_preprocess_cmd = args.segalign_preprocess_cmd
     docalign_threshold = args.docalign_threshold
-    n_jobs = args.n_jobs
+    n_jobs = args.n_jobs # Experiments without preprocess_cmd: {  0: 5:45,  1: 6.17,  2: 3.00,  3: 2.08,  4: 1.37,  5: 1.20,
+                         #                                        6: 1.07,  7: 1.01,  8: 0.54,  9: 0.47, 10: 0.51, 11: 0.48,
+                         #                                       12: 0.45, 13: 0.36, 14: 0.35, 15: 0.34, 16: 0.33, 17: 0.31,
+                         #                                       18: 0.30, 19: 0.31, 20: 0.31, 21: 0.30, 22: 0.30, 23: 0.29,
+                         #                                       24: 0.28, 25: 0.28, 26: 0.29, 27: 0.30, 28: 0.30, 29: 0.32,
+                         #                                       30: 0.33, 31: 0.32, 32: 0.35 }
     ignore_duplicated_urls = args.ignore_duplicated_urls
     parallelize = n_jobs != 0
 
@@ -540,7 +545,7 @@ def initialization():
     parser.add_argument('--segalign-preprocess-cmd',
                         help="Preprocess command to apply to the src and trg alignments. "
                              "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
-    parser.add_argument('--n-jobs', type=int, default=-1,
+    parser.add_argument('--n-jobs', type=int, default=24,
                         help="Number of parallel jobs to use (-n means to use all CPUs - n + 1). If 0 is provided, parallelization is disabled")
 
     parser.add_argument('--ignore-duplicated-urls', action='store_true',
