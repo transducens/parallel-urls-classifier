@@ -267,7 +267,7 @@ def main(args):
     get_transient_shards_and_batches_info_from_path("segalign", segalign_files, segalign_shard_batches)
 
     # Get reverse index for the segalign files and the sharding data
-    for file, shard_batches in segalign_shard_batches:
+    for file, shard_batches in segalign_shard_batches.items():
         shard, (src_batch, trg_batch) = shard_batches
 
         if shard not in segalign_shard_batches_rev:
@@ -284,18 +284,20 @@ def main(args):
     total_printed_urls = 0
     total_possible_printed_urls = 0
     processed_docalign_files = set()
-    processed_segalign_files = set() # subset of processed_docalign_files
+    processed_segalign_files = set() # subset of processed_docalign_files (sharding data)
 
     # Get number of lines per document/URL
+    logger.debug("Processing src url.gz and sentences.gz files")
     src_urls_statistics, src_urls_skipped = \
         utils_bitextor.get_statistics_from_url_and_sentences(src_url_files, src_sentences_files, preprocess_cmd=src_sentences_preprocess_cmd,
                                                              n_jobs=n_jobs)
+    logger.debug("Processing trg url.gz and sentences.gz files")
     trg_urls_statistics, trg_urls_skipped = \
         utils_bitextor.get_statistics_from_url_and_sentences(trg_url_files, trg_sentences_files, preprocess_cmd=trg_sentences_preprocess_cmd,
                                                              n_jobs=n_jobs)
 
     logger.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_statistics), len(trg_urls_statistics))
-    logger.info("Number of URLs that have been skipped (src, trg): (%d, %d)", len(src_urls_skipped), len(trg_urls_skipped))
+    logger.info("Number of URLs that have been detected as duplicated (src, trg): (%d, %d)", len(src_urls_skipped), len(trg_urls_skipped))
 
     # Print header
     sys.stdout.write("src_url\ttrg_url\tdocalign_score")
@@ -401,11 +403,12 @@ def main(args):
             logger.info("Processing segalign file #%d: %s", idx, segalign_file)
 
             # Segalign files shouldn't have been post processed and the data should be the same that content from sentences.gz
-            aligned_urls = utils_bitextor.get_statistics_from_segalign(segalign_file, segalign_file_src_url_idx, segalign_file_trg_url_idx,
-                                                                       segalign_file_src_text_idx, segalign_file_trg_text_idx,
+            aligned_urls = utils_bitextor.get_statistics_from_segalign(segalign_file, segalign_files_src_url_idx, segalign_files_trg_url_idx,
+                                                                       segalign_files_src_text_idx, segalign_files_trg_text_idx,
                                                                        preprocess_cmd=segalign_preprocess_cmd, n_jobs=n_jobs)
 
             logger.info("Unique different URL pairs: %d", len(aligned_urls))
+            logger.debug("Documents with 0 sentences aligned: %d", len(src_urls) - len(aligned_urls))
 
             skipped_bc_docalign = 0
             skipped_bc_min_occ = 0
@@ -506,12 +509,9 @@ def main(args):
 
     logger.info("Total printed URLs: %d", total_printed_urls)
 
-    if not processed_segalign_files.issubset(processed_docalign_files):
-        logger.error("Processed segalign files set is expected to be a subset of the processed docalign files set")
-
     diff_segalign_docalign_files = set(segalign_files).difference(processed_segalign_files)
 
-    if len(diff_segalign_docalign) != 0:
+    if len(diff_segalign_docalign_files) != 0:
         for diff_segalign_docalign_file in diff_segalign_docalign_files:
             logger.error("Segalign file not processed: %s", diff_segalign_docalign_file)
 

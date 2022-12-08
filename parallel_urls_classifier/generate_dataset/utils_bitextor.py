@@ -145,6 +145,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
     results = {}
+    skipped = set()
 
     if preprocess_cmd:
         preprocess_cmd = shlex.split(preprocess_cmd)
@@ -187,13 +188,14 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
 
         if ref is not None:
             if url_line in ref:
-                if _results[url_line] != ref[url_line]:
-                    logger.warning("Files url.gz and sentences.gz #%d,%d: URL already processed: different values: skipping: %s", idx, idx_fd, url_line)
+                # We don't check if _results[url_line] != ref[url_line] because the segalign might have multiple alignments of the same sentences
+                logger.warning("Files url.gz and sentences.gz #%d,%d: URL already processed: different values: skipping: %s",
+                               idx, idx_fd, url_line)
 
-                    _skipped.add(url_line)
+                _skipped.add(url_line)
 
-                    if ref_skipped is not None:
-                        ref_skipped.update(_skipped)
+                if ref_skipped is not None:
+                    ref_skipped.update(_skipped)
             else:
                 ref[url_line] = _results[url_line]
 
@@ -224,10 +226,11 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                         k = list(r.keys())[0]
 
                         if k in _results:
-                            if r[k] != _results[k]:
-                                logger.warning("Files url.gz and sentences.gz #%d: URL already processed: different values: skipping: %s", idx, k)
+                            # We don't check if r[k] != _results[k] because the segalign might have multiple alignments of the same sentences
 
-                                _skipped.add(k)
+                            logger.warning("Files url.gz and sentences.gz #%d: URL already processed: different values: skipping: %s", idx, k)
+
+                            _skipped.add(k)
                         else:
                             current_read_docs += len(r)
                             _results.update(r)
@@ -251,8 +254,6 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                 logger.warning("Using all CPUs")
             else:
                 logger.warning("Using all CPUs minus %d", abs(n_jobs + 1))
-
-    skipped = set()
 
     if not parallelize or not parallelize_files_instead:
         for idx, (url_file, sentences_file) in enumerate(zip(url_files, sentences_files), 1):
