@@ -189,7 +189,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
         if ref is not None:
             if url_line in ref:
                 # We don't check if _results[url_line] != ref[url_line] because the segalign might have multiple alignments of the same sentences
-                logger.warning("Files url.gz and sentences.gz #%d,%d: URL already processed: different values: skipping: %s",
+                logger.warning("Files url.gz and sentences.gz #%d,%d: URL already processed: skipping: %s",
                                idx, idx_fd, url_line)
 
                 _skipped.add(url_line)
@@ -228,7 +228,7 @@ def get_statistics_from_url_and_sentences(url_files, sentences_files, preprocess
                         if k in _results:
                             # We don't check if r[k] != _results[k] because the segalign might have multiple alignments of the same sentences
 
-                            logger.warning("Files url.gz and sentences.gz #%d: URL already processed: different values: skipping: %s", idx, k)
+                            logger.warning("Files url.gz and sentences.gz #%d: URL already processed: skipping: %s", idx, k)
 
                             _skipped.add(k)
                         else:

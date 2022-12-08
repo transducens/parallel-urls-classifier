@@ -184,6 +184,7 @@ def main(args):
     docalign_threshold = args.docalign_threshold
     n_jobs = args.n_jobs
     ignore_duplicated_urls = args.ignore_duplicated_urls
+    parallelize = n_jobs != 0
 
     if not segalign_files:
         segalign_files = []
@@ -290,11 +291,11 @@ def main(args):
     logger.debug("Processing src url.gz and sentences.gz files")
     src_urls_statistics, src_urls_skipped = \
         utils_bitextor.get_statistics_from_url_and_sentences(src_url_files, src_sentences_files, preprocess_cmd=src_sentences_preprocess_cmd,
-                                                             n_jobs=n_jobs)
+                                                             parallelize=parallelize, n_jobs=n_jobs)
     logger.debug("Processing trg url.gz and sentences.gz files")
     trg_urls_statistics, trg_urls_skipped = \
         utils_bitextor.get_statistics_from_url_and_sentences(trg_url_files, trg_sentences_files, preprocess_cmd=trg_sentences_preprocess_cmd,
-                                                             n_jobs=n_jobs)
+                                                             parallelize=parallelize, n_jobs=n_jobs)
 
     logger.info("Number of URLs (src, trg): (%d, %d)", len(src_urls_statistics), len(trg_urls_statistics))
     logger.info("Number of URLs that have been detected as duplicated (src, trg): (%d, %d)", len(src_urls_skipped), len(trg_urls_skipped))
@@ -405,7 +406,8 @@ def main(args):
             # Segalign files shouldn't have been post processed and the data should be the same that content from sentences.gz
             aligned_urls = utils_bitextor.get_statistics_from_segalign(segalign_file, segalign_files_src_url_idx, segalign_files_trg_url_idx,
                                                                        segalign_files_src_text_idx, segalign_files_trg_text_idx,
-                                                                       preprocess_cmd=segalign_preprocess_cmd, n_jobs=n_jobs)
+                                                                       preprocess_cmd=segalign_preprocess_cmd, parallelize=parallelize,
+                                                                       n_jobs=n_jobs)
 
             logger.info("Unique different URL pairs: %d", len(aligned_urls))
             logger.debug("Documents with 0 sentences aligned: %d", len(src_urls) - len(aligned_urls))
@@ -538,7 +540,8 @@ def initialization():
     parser.add_argument('--segalign-preprocess-cmd',
                         help="Preprocess command to apply to the src and trg alignments. "
                              "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
-    parser.add_argument('--n-jobs', type=int, default=-1, help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
+    parser.add_argument('--n-jobs', type=int, default=-1,
+                        help="Number of parallel jobs to use (-n means to use all CPUs - n + 1). If 0 is provided, parallelization is disabled")
 
     parser.add_argument('--ignore-duplicated-urls', action='store_true',
                         help="Ignore src and trg duplicated URLs. This should avoid errors with duplicated URLs when segalign files are "
