@@ -292,9 +292,8 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
         parallel_pairs_found -= positive_near_matches
 
     if not rule_1_1 and not disable_near_matchs:
-        expected_pairs_found = parallel_pairs_found
-
-    if expected_pairs_found != parallel_pairs_found:
+        pass
+    elif expected_pairs_found != parallel_pairs_found:
         logging.error("Unexpected GS pairs found: %d were expected, %d were found", expected_pairs_found, parallel_pairs_found)
 
     recall = tp / expected_pairs_found if expected_pairs_found != 0 else 1.0

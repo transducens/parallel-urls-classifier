@@ -109,7 +109,7 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
         m = top_margin(max_doc_nolines)
 
     # Score: the higher, the better
-    nolines_score = (1.0 - min(max(diff / m, 0.0), 1.0)) * 100.0 # Domain: [0, 100]; diff / m -> if 1, too much distance -> negative
+    nolines_score = (1.0 - min(max(diff / m, 0.0), 1.0)) # Domain: [0, 1]; diff / m -> if 1, too much distance -> negative
     occurrences_score = None
 
     if occurrences >= 0:
@@ -119,7 +119,8 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
         #    a=($8 > 100) ? 100 : $8;
         #    b=($8 <= 100) ? $9 : ($6 + a > 0) ? 2 * (($6 * a) / ($6 + a)): 0;
         #    print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7"\t"a"\t"b}' # if docalign and segalign files were provided
-        occurrences_score = min(occurrences, min_doc_nolines) / min_doc_nolines * 100.0 if min_doc_nolines > 0 else 0.0 # Domain: [0, 100]
+        # This score might not be as good as should be since Bleualign runs the gap filler feature, and this will lower the score
+        occurrences_score = min(occurrences, min_doc_nolines) / min_doc_nolines if min_doc_nolines > 0 else 0.0 # Domain: [0, 1]
 
     return nolines_score, occurrences_score
 
