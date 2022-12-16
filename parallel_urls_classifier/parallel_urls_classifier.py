@@ -780,6 +780,8 @@ def main(args):
 
         # Get best dev and train result (check out best_values_minimize and best_values_maximize if you modify these values)
         dev_target = dev_macro_f1 # Might be acc, loss, ...
+                                  # We prefer macro over micro F1:
+                                  #  https://datascience.stackexchange.com/questions/15989/micro-average-vs-macro-average-performance-in-a-multiclass-classification-settin#comment42550_24051
         train_target = epoch_macro_f1 # It should be the same metric that dev_target
 
         if best_values_binary_func_comp(best_dev, dev_target) or (best_dev == dev_target and best_values_binary_func_comp(best_train, train_target)):

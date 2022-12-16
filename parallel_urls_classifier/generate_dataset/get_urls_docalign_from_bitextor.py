@@ -127,7 +127,8 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
 _tokens_score_warning_only_once = False
 _src_tokens_warning_already_done = False
 _trg_tokens_warning_already_done = False
-def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens, aligned_trg_tokens, src_url=None, trg_url=None):
+def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens, aligned_trg_tokens,
+                             src_url=None, trg_url=None, check=True):
     global _tokens_score_warning_only_once
     global _src_tokens_warning_already_done
     global _trg_tokens_warning_already_done
@@ -135,7 +136,18 @@ def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens,
     aligned_tokens = min(src_url_tokens, aligned_src_tokens) + min(trg_url_tokens, aligned_trg_tokens)
 
     # Checks
-    if aligned_src_tokens > src_url_tokens:
+    # Known problem: since Bleualign applies gap filler, this might lead to situations where the tokenization of the segalign sentences have
+    #  more tokens than expected, for instance:
+    #  - Src doc sentences: this is a sentence. . .\nthis is another sentence
+    #  - Trg doc sentences: a\nb
+    #  - Segalign: this is a sentence. . .\ta\nthis is another sentence\tb
+    #  - Src doc tokenized: this is a sentence. . .\nthis is another sentence
+    #  - Trg doc tokenized: a\nb
+    #  - Segalign tokenized: this is a sentence . . .\ta\nthis is another sentence\tb # Here is the problem!
+    #  Problem: The '.' has been tokenized in the segalign but not in the src doc because in the src doc has been detected as ellipsis, but
+    #   in the segalign has not been detected after apply gap filler
+
+    if check and aligned_src_tokens > src_url_tokens:
         if _tokens_score_warning_only_once and _src_tokens_warning_already_done:
             pass
         else:
@@ -148,7 +160,7 @@ def get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens,
             if _tokens_score_warning_only_once:
                 logger.warning("Previous warning will only be shown once: you can modify '_tokens_score_warning_only_once' in order to change this behavior")
 
-    if aligned_trg_tokens > trg_url_tokens:
+    if check and aligned_trg_tokens > trg_url_tokens:
         if _tokens_score_warning_only_once and _trg_tokens_warning_already_done:
             pass
         else:
@@ -174,6 +186,7 @@ def main(args):
     segalign_files_trg_url_idx = args.segalign_files_trg_url_idx
     segalign_files_src_text_idx = args.segalign_files_src_text_idx
     segalign_files_trg_text_idx = args.segalign_files_trg_text_idx
+    segalign_files_score_idx = args.segalign_files_score_idx
     docalign_mt_matches_files = args.docalign_mt_matches_files
     src_url_files = args.src_url_files
     trg_url_files = args.trg_url_files
@@ -313,6 +326,7 @@ def main(args):
     if segalign_files:
         sys.stdout.write("\tsegalign_src_and_trg_nolines\tsegalign_src_and_trg_nolines_score\tsegalign_and_docs_nolines_score_f1")
         sys.stdout.write("\tsrc_doc_alignment_tokens\ttrg_doc_alignment_tokens\ttokens_score")
+        sys.stdout.write("\tsrc_doc_alignment_tokens_weighted\ttrg_doc_alignment_tokens_weighted\ttokens_score_weighted")
 
     sys.stdout.write('\n')
 
@@ -412,8 +426,8 @@ def main(args):
             # Segalign files shouldn't have been post processed and the data should be the same that content from sentences.gz
             aligned_urls = utils_bitextor.get_statistics_from_segalign(segalign_file, segalign_files_src_url_idx, segalign_files_trg_url_idx,
                                                                        segalign_files_src_text_idx, segalign_files_trg_text_idx,
-                                                                       preprocess_cmd=segalign_preprocess_cmd, parallelize=parallelize,
-                                                                       n_jobs=n_jobs)
+                                                                       segalign_files_score_idx, preprocess_cmd=segalign_preprocess_cmd,
+                                                                       parallelize=parallelize, n_jobs=n_jobs)
 
             logger.info("Unique different URL pairs: %d", len(aligned_urls))
             logger.debug("Documents with 0 sentences aligned: %d", len(src_urls) - len(aligned_urls))
@@ -485,8 +499,12 @@ def main(args):
                                                     if not np.isclose(nolines_score + occurrences_score, 0.0) else 0.0
                 aligned_src_tokens = aligned_urls[url]["src_tokens"]
                 aligned_trg_tokens = aligned_urls[url]["trg_tokens"]
+                aligned_src_tokens_weighted = aligned_urls[url]["src_tokens_weighted"]
+                aligned_trg_tokens_weighted = aligned_urls[url]["trg_tokens_weighted"]
                 tokens_score = get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens, aligned_trg_tokens,
                                                         src_url=src_url, trg_url=trg_url)
+                tokens_score_weighted = get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens_weighted,
+                                                                 aligned_trg_tokens_weighted, check=False)
 
                 try:
                     score = docalign_url_scores[k]
@@ -501,11 +519,12 @@ def main(args):
                 occurrences_score = round(occurrences_score, 4)
                 nolines_and_occurences_score_f1 = round(nolines_and_occurences_score_f1, 4)
                 tokens_score = round(tokens_score, 4)
+                tokens_score_weighted = round(tokens_score_weighted, 4)
 
                 sys.stdout.write(f"{src_url}\t{trg_url}\t{score}")
                 sys.stdout.write(f"\t{src_url_nolines}\t{trg_url_nolines}\t{nolines_score}\t{src_url_tokens}\t{trg_url_tokens}")
                 sys.stdout.write(f"\t{occurrences}\t{occurrences_score}\t{nolines_and_occurences_score_f1}")
-                sys.stdout.write(f"\t{aligned_src_tokens}\t{aligned_trg_tokens}\t{tokens_score}")
+                sys.stdout.write(f"\t{aligned_src_tokens}\t{aligned_trg_tokens}\t{tokens_score}\t{tokens_score_weighted}")
                 sys.stdout.write('\n')
 
                 total_printed_urls += 1
@@ -541,8 +560,10 @@ def initialization():
     parser.add_argument('--segalign-files', nargs='*', help="Segalign files. If not provided, only docalign will be taken into account")
     parser.add_argument('--segalign-files-src-url-idx', type=int, default=0, help="Segalign files src URL idx")
     parser.add_argument('--segalign-files-trg-url-idx', type=int, default=1, help="Segalign files trg URL idx")
-    parser.add_argument('--segalign-files-src-text-idx', type=int, default=2, help="Segalign files text URL idx")
-    parser.add_argument('--segalign-files-trg-text-idx', type=int, default=3, help="Segalign files text URL idx")
+    parser.add_argument('--segalign-files-src-text-idx', type=int, default=2, help="Segalign files src text URL idx")
+    parser.add_argument('--segalign-files-trg-text-idx', type=int, default=3, help="Segalign files trg text URL idx")
+    parser.add_argument('--segalign-files-score-idx', type=int, default=4,
+                        help="Segalign files align score URL idx. The expected score domain is [0, 1]")
     parser.add_argument('--segalign-preprocess-cmd',
                         help="Preprocess command to apply to the src and trg alignments. "
                              "The provided command has to read pair of sentences separated by tab from stdin and print to stdout")
