@@ -20,8 +20,8 @@ _log_read_pairs = 10000 # segalign files
 _tokenize = lambda s: tokenizer.tokenize(s, check_gaps=False, tokenizer="word_tokenize")
 logger = logging.getLogger("parallel_urls_classifier")
 
-def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, align_score_idx,
-                                 preprocess_cmd=None, parallelize=True, n_jobs=1):
+def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, segalign_score_idx,
+                                 preprocess_cmd=None, parallelize=True, n_jobs=1, segalign_files_bicleaner_score_idx=None):
     # Download NLTK model if not available
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
@@ -32,22 +32,35 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
 
     def update_ref(results, r):
         url = r["pair"]
+        bicleaner_score = r["bicleaner_score"]
 
         try:
             results[url]["occurrences"] += 1
-            results[url]["align_score"].append(r["align_score"])
+            results[url]["segalign_score"].append(r["segalign_score"])
             results[url]["src_tokens"] += r["len_src_tokens"]
             results[url]["trg_tokens"] += r["len_trg_tokens"]
-            results[url]["src_tokens_weighted"] += r["len_src_tokens_weighted"]
-            results[url]["trg_tokens_weighted"] += r["len_trg_tokens_weighted"]
+            results[url]["src_tokens_weighted_segalign"] += r["len_src_tokens_weighted_segalign"]
+            results[url]["trg_tokens_weighted_segalign"] += r["len_trg_tokens_weighted_segalign"]
+
+            if bicleaner_score is not None:
+                results[url]["bicleaner_score"].append(bicleaner_score)
+                results[url]["src_tokens_weighted_bicleaner"] += r["len_src_tokens_weighted_bicleaner"]
+                results[url]["trg_tokens_weighted_bicleaner"] += r["len_trg_tokens_weighted_bicleaner"]
+                results[url]["src_tokens_weighted_segalign_and_bicleaner"] += r["len_src_tokens_weighted_segalign_and_bicleaner"]
+                results[url]["trg_tokens_weighted_segalign_and_bicleaner"] += r["len_trg_tokens_weighted_segalign_and_bicleaner"]
         except KeyError:
             results[url] = {
                 "occurrences": 1,
-                "align_score": [r["align_score"]],
+                "segalign_score": [r["segalign_score"]],
+                "bicleaner_score": [bicleaner_score] if bicleaner_score is not None else [],
                 "src_tokens": r["len_src_tokens"],
                 "trg_tokens": r["len_trg_tokens"],
-                "src_tokens_weighted": r["len_src_tokens_weighted"],
-                "trg_tokens_weighted": r["len_trg_tokens_weighted"],
+                "src_tokens_weighted_segalign": r["len_src_tokens_weighted_segalign"],
+                "trg_tokens_weighted_segalign": r["len_trg_tokens_weighted_segalign"],
+                "src_tokens_weighted_segalign": r["len_src_tokens_weighted_bicleaner"],
+                "trg_tokens_weighted_segalign": r["len_trg_tokens_weighted_bicleaner"],
+                "src_tokens_weighted_segalign_and_bicleaner": r["len_src_tokens_weighted_segalign_and_bicleaner"],
+                "trg_tokens_weighted_segalign_and_bicleaner": r["len_trg_tokens_weighted_segalign_and_bicleaner"],
             }
 
     def process(idx, line, level, ref=None):
@@ -60,7 +73,8 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
         trg_url = line[trg_url_idx]
         src_text = line[src_text_idx]
         trg_text = line[trg_text_idx]
-        align_score = float(line[align_score_idx]) # Expected: [0, 1]
+        segalign_score = float(line[segalign_score_idx]) # Expected: [0, 1]
+        bicleaner_score = float(line[segalign_files_bicleaner_score_idx]) if segalign_files_bicleaner_score_idx is not None else None
         url = f"{src_url}\t{trg_url}"
         pair = f"{src_text}\t{trg_text}"
 
@@ -90,10 +104,14 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
             else:
                 raise Exception(f"Pair #{idx} contains more than 1 entry: {len(_pair)} entries: bug?: {str(_pair)}")
 
-        if align_score < 0.0 or align_score > 1.0:
-            logger.error("Unexpected segalign score: %f not in [0, 1]: clipping value: %s", align_score, pair)
+        if segalign_score < 0.0 or segalign_score > 1.0:
+            logger.error("Unexpected segalign score: %f not in [0, 1]: clipping value: %s", segalign_score, pair)
 
-            align_score = max(min(align_score, 1.0), 0.0)
+            segalign_score = max(min(segalign_score, 1.0), 0.0)
+        if bicleaner_score < 0.0 or bicleaner_score > 1.0:
+            logger.error("Unexpected bicleaner score: %f not in [0, 1]: clipping value: %s", bicleaner_score, pair)
+
+            bicleaner_score = max(min(bicleaner_score, 1.0), 0.0)
 
         for idx_entry, pair in enumerate(_pair):
             pair = pair.split('\t')
@@ -104,19 +122,36 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
             len_src_tokens += len(_tokenize(pair[0].strip()))
             len_trg_tokens += len(_tokenize(pair[1].strip()))
 
-        len_src_tokens_weighted = float(len_src_tokens) * align_score
-        len_trg_tokens_weighted = float(len_trg_tokens) * align_score
+        len_src_tokens_weighted_segalign = float(len_src_tokens) * segalign_score
+        len_trg_tokens_weighted_segalign = float(len_trg_tokens) * segalign_score
+        len_src_tokens_weighted_bicleaner = None
+        len_trg_tokens_weighted_bicleaner = None
+        len_src_tokens_weighted_segalign_and_bicleaner = None
+        len_trg_tokens_weighted_segalign_and_bicleaner = None
+
+        if bicleaner_score is not None:
+            len_src_tokens_weighted_bicleaner = float(len_src_tokens) * bicleaner_score
+            len_trg_tokens_weighted_bicleaner = float(len_trg_tokens) * bicleaner_score
+
+            # Max. value will be twice the original value:
+            len_src_tokens_weighted_segalign_and_bicleaner = float(len_src_tokens) * (segalign_score + bicleaner_score)
+            len_trg_tokens_weighted_segalign_and_bicleaner = float(len_trg_tokens) * (segalign_score + bicleaner_score)
 
         if (idx % _log_read_pairs) == 0:
             logger.debug("Segalign file: pairs read: %d", idx)
 
         results = {
             "pair": url,
-            "align_score": align_score,
+            "segalign_score": segalign_score,
+            "bicleaner_score": bicleaner_score,
             "len_src_tokens": len_src_tokens,
             "len_trg_tokens": len_trg_tokens,
-            "len_src_tokens_weighted": len_src_tokens_weighted,
-            "len_trg_tokens_weighted": len_trg_tokens_weighted,
+            "len_src_tokens_weighted_segalign": len_src_tokens_weighted_segalign,
+            "len_trg_tokens_weighted_segalign": len_trg_tokens_weighted_segalign,
+            "len_src_tokens_weighted_bicleaner": len_src_tokens_weighted_bicleaner,
+            "len_trg_tokens_weighted_bicleaner": len_trg_tokens_weighted_bicleaner,
+            "len_src_tokens_weighted_segalign_and_bicleaner": len_src_tokens_weighted_segalign_and_bicleaner,
+            "len_trg_tokens_weighted_segalign_and_bicleaner": len_trg_tokens_weighted_segalign_and_bicleaner,
         }
 
         if ref is not None:
