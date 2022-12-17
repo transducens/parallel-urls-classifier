@@ -57,8 +57,8 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
                 "trg_tokens": r["len_trg_tokens"],
                 "src_tokens_weighted_segalign": r["len_src_tokens_weighted_segalign"],
                 "trg_tokens_weighted_segalign": r["len_trg_tokens_weighted_segalign"],
-                "src_tokens_weighted_segalign": r["len_src_tokens_weighted_bicleaner"],
-                "trg_tokens_weighted_segalign": r["len_trg_tokens_weighted_bicleaner"],
+                "src_tokens_weighted_bicleaner": r["len_src_tokens_weighted_bicleaner"],
+                "trg_tokens_weighted_bicleaner": r["len_trg_tokens_weighted_bicleaner"],
                 "src_tokens_weighted_segalign_and_bicleaner": r["len_src_tokens_weighted_segalign_and_bicleaner"],
                 "trg_tokens_weighted_segalign_and_bicleaner": r["len_trg_tokens_weighted_segalign_and_bicleaner"],
             }
@@ -74,7 +74,7 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
         src_text = line[src_text_idx]
         trg_text = line[trg_text_idx]
         segalign_score = float(line[segalign_score_idx]) # Expected: [0, 1]
-        bicleaner_score = float(line[segalign_files_bicleaner_score_idx]) if segalign_files_bicleaner_score_idx is not None else None
+        bicleaner_score = float(line[segalign_files_bicleaner_score_idx]) if segalign_files_bicleaner_score_idx is not None else None # Expected: [0, 1]
         url = f"{src_url}\t{trg_url}"
         pair = f"{src_text}\t{trg_text}"
 

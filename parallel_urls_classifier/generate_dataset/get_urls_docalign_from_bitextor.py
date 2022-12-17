@@ -109,6 +109,7 @@ def get_doc_nolines_score(src_nolines, trg_nolines, occurrences=-1, src_url=None
         m = top_margin(max_doc_nolines)
 
     # Score: the higher, the better
+    # This score might not be as good as should be due to, for instance, boilerplate removal (it might be different for each direction)
     nolines_score = (1.0 - min(max(diff / m, 0.0), 1.0)) # Domain: [0, 1]; diff / m -> if 1, too much distance -> negative
     occurrences_score = None
 
@@ -503,25 +504,26 @@ def main(args):
                                                                         src_url=src_url, trg_url=trg_url)
                 nolines_and_occurences_score_f1 = 2 * ((nolines_score * occurrences_score) / (nolines_score + occurrences_score)) \
                                                     if not np.isclose(nolines_score + occurrences_score, 0.0) else 0.0
-                aligned_src_tokens = aligned_urls[url]["src_tokens"]
-                aligned_trg_tokens = aligned_urls[url]["trg_tokens"]
-                aligned_src_tokens_weighted_segalign = aligned_urls[url]["src_tokens_weighted_segalign"]
-                aligned_trg_tokens_weighted_segalign = aligned_urls[url]["trg_tokens_weighted_segalign"]
+                aligned_src_tokens = data["src_tokens"]
+                aligned_trg_tokens = data["trg_tokens"]
+                aligned_src_tokens_weighted_segalign = data["src_tokens_weighted_segalign"]
+                aligned_trg_tokens_weighted_segalign = data["trg_tokens_weighted_segalign"]
                 tokens_score = get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens, aligned_trg_tokens,
                                                         src_url=src_url, trg_url=trg_url)
                 tokens_score_weighted_segalign = get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens_weighted_segalign,
                                                                           aligned_trg_tokens_weighted_segalign, check=False)
 
                 if segalign_files_bicleaner_score_idx is not None:
-                    aligned_src_tokens_weighted_bicleaner = aligned_urls[url]["src_tokens_weighted_bicleaner"]
-                    aligned_trg_tokens_weighted_bicleaner = aligned_urls[url]["trg_tokens_weighted_bicleaner"]
-                    aligned_src_tokens_weighted_segalign_and_bicleaner = aligned_urls[url]["src_tokens_weighted_segalign_and_bicleaner"]
-                    aligned_trg_tokens_weighted_segalign_and_bicleaner = aligned_urls[url]["trg_tokens_weighted_segalign_and_bicleaner"]
+                    aligned_src_tokens_weighted_bicleaner = data["src_tokens_weighted_bicleaner"]
+                    aligned_trg_tokens_weighted_bicleaner = data["trg_tokens_weighted_bicleaner"]
+                    aligned_src_tokens_weighted_segalign_and_bicleaner = data["src_tokens_weighted_segalign_and_bicleaner"]
+                    aligned_trg_tokens_weighted_segalign_and_bicleaner = data["trg_tokens_weighted_segalign_and_bicleaner"]
                     tokens_score_weighted_bicleaner = get_aligned_tokens_score(src_url_tokens, trg_url_tokens, aligned_src_tokens_weighted_bicleaner,
                                                                                aligned_trg_tokens_weighted_bicleaner, check=False)
                     tokens_score_weighted_segalign_and_bicleaner = get_aligned_tokens_score(src_url_tokens, trg_url_tokens,
                                                                                             aligned_src_tokens_weighted_segalign_and_bicleaner * 0.5,
-                                                                                            aligned_trg_tokens_weighted_segalign_and_bicleaner * 0.5, check=False)
+                                                                                            aligned_trg_tokens_weighted_segalign_and_bicleaner * 0.5,
+                                                                                            check=False)
 
                 try:
                     score = docalign_url_scores[k]
