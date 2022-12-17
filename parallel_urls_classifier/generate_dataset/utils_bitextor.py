@@ -108,10 +108,6 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
             logger.error("Unexpected segalign score: %f not in [0, 1]: clipping value: %s", segalign_score, pair)
 
             segalign_score = max(min(segalign_score, 1.0), 0.0)
-        if bicleaner_score < 0.0 or bicleaner_score > 1.0:
-            logger.error("Unexpected bicleaner score: %f not in [0, 1]: clipping value: %s", bicleaner_score, pair)
-
-            bicleaner_score = max(min(bicleaner_score, 1.0), 0.0)
 
         for idx_entry, pair in enumerate(_pair):
             pair = pair.split('\t')
@@ -130,6 +126,11 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
         len_trg_tokens_weighted_segalign_and_bicleaner = None
 
         if bicleaner_score is not None:
+            if bicleaner_score < 0.0 or bicleaner_score > 1.0:
+                logger.error("Unexpected bicleaner score: %f not in [0, 1]: clipping value: %s", bicleaner_score, pair)
+
+                bicleaner_score = max(min(bicleaner_score, 1.0), 0.0)
+
             len_src_tokens_weighted_bicleaner = float(len_src_tokens) * bicleaner_score
             len_trg_tokens_weighted_bicleaner = float(len_trg_tokens) * bicleaner_score
 
