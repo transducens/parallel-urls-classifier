@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=bicleaner_ai
-#SBATCH --gres=gpu:5
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=4G
 #SBATCH -e slurm-%j-apply_bifixer_and_bicleaner_to_segalign.err
@@ -51,7 +51,7 @@ else
       ' \
         f="{}'$SUFFIX_BICLEANER'.gz"; \
         if [[ -f "$f" ]]; then \
-          echo "File already exists: $f"; \
+          >&2 echo "File already exists: $f"; \
         else \
           >&2 echo "Output file: $f";
           zcat {} \
@@ -60,6 +60,6 @@ else
         fi; \
         nolines1=$(zcat "{}" | wc -l); \
         nolines2=$(zcat "$f" | wc -l); \
-        if [[ "$nolines1" != "$nolines2" ]]; then echo "$nolines1 vs $nolines2 : {}"; fi \
+        if [[ "$nolines1" != "$nolines2" ]]; then >&2 echo "$nolines1 vs $nolines2 : {}"; fi \
       '
 fi
