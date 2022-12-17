@@ -22,9 +22,14 @@ if [[ ! -d "$BICLEANER_AI_MODEL_PATH" ]]; then
 fi
 
 SUFFIX_BICLEANER=".bicleaner_scores_after_bifixer"
+OUTPUT_FILE="{}$SUFFIX_BICLEANER"
 
 if [[ "$SEGALIGN_GLOB" == "-" ]]; then
   EVAL_CMD="cat"
+
+  OUTPUT_FILE="$PWD/$(date +%Y%m%d%H%M%S%N)$SUFFIX_BICLEANER"
+
+  >&2 echo "Output file: $OUTPUT_FILE[.*]"
 else
   EVAL_CMD="ls $SEGALIGN_GLOB"
 fi
@@ -32,7 +37,7 @@ fi
 eval "$EVAL_CMD" \
   | xargs -I{} -P1 bash -c \
     ' \
-      f="{}'$SUFFIX_BICLEANER'.gz"; \
+      f="'$OUTPUT_FILE'.gz"; \
       if [[ -f "$f" ]]; then \
         echo "File already exists: $f"; \
       else \
