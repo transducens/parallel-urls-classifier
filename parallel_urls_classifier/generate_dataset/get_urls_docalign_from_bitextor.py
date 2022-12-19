@@ -13,8 +13,6 @@ sys.path.insert(0, f"{cdir}/../..")
 import parallel_urls_classifier.utils.utils as utils
 import parallel_urls_classifier.generate_dataset.utils_bitextor as utils_bitextor
 
-import numpy as np
-
 _occurrences_warning_only_once = False
 _occurrences_warning_already_done = False
 logger = logging.getLogger("parallel_urls_classifier")
@@ -501,9 +499,8 @@ def main(args):
 
                 score = 0.0
                 nolines_score, occurrences_score = get_doc_nolines_score(src_url_nolines, trg_url_nolines, occurrences=occurrences,
-                                                                        src_url=src_url, trg_url=trg_url)
-                nolines_and_occurences_score_f1 = 2 * ((nolines_score * occurrences_score) / (nolines_score + occurrences_score)) \
-                                                    if not np.isclose(nolines_score + occurrences_score, 0.0) else 0.0
+                                                                         src_url=src_url, trg_url=trg_url)
+                nolines_and_occurences_score_f1 = utils_bitextor.get_f1(nolines_score, occurrences_score)
                 aligned_src_tokens = data["src_tokens"]
                 aligned_trg_tokens = data["trg_tokens"]
                 aligned_src_tokens_weighted_segalign = data["src_tokens_weighted_segalign"]

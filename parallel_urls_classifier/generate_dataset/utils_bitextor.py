@@ -14,11 +14,15 @@ import parallel_urls_classifier.utils.utils as utils
 import parallel_urls_classifier.tokenizer as tokenizer
 
 import joblib
+import numpy as np
 
 _log_read_docs = 10000 # url.gz and sentences.gz files
 _log_read_pairs = 10000 # segalign files
 _tokenize = lambda s: tokenizer.tokenize(s, check_gaps=False, tokenizer="word_tokenize")
 logger = logging.getLogger("parallel_urls_classifier")
+
+def get_f1(score_1, score_2):
+    return 2 * ((score_1 * score_2) / (score_1 + score_2)) if not np.isclose(score_1 + score_2, 0.0) else 0.0
 
 def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, segalign_score_idx,
                                  preprocess_cmd=None, parallelize=True, n_jobs=1, segalign_files_bicleaner_score_idx=None):
@@ -134,9 +138,10 @@ def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_te
             len_src_tokens_weighted_bicleaner = float(len_src_tokens) * bicleaner_score
             len_trg_tokens_weighted_bicleaner = float(len_trg_tokens) * bicleaner_score
 
-            # Max. value will be twice the original value:
-            len_src_tokens_weighted_segalign_and_bicleaner = float(len_src_tokens) * (segalign_score + bicleaner_score)
-            len_trg_tokens_weighted_segalign_and_bicleaner = float(len_trg_tokens) * (segalign_score + bicleaner_score)
+            # Use F1 of the previous segalign and bicleaner scores for weighting the src and trg tokens
+            segalign_bicleaner_score_f1 = get_f1(segalign_score, bicleaner_score)
+            len_src_tokens_weighted_segalign_and_bicleaner = float(len_src_tokens) * segalign_bicleaner_score_f1
+            len_trg_tokens_weighted_segalign_and_bicleaner = float(len_trg_tokens) * segalign_bicleaner_score_f1
 
         if (idx % _log_read_pairs) == 0:
             logger.debug("Segalign file: pairs read: %d", idx)
