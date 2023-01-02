@@ -24,6 +24,12 @@ logger = logging.getLogger("parallel_urls_classifier")
 def get_f1(score_1, score_2):
     return 2 * ((score_1 * score_2) / (score_1 + score_2)) if not np.isclose(score_1 + score_2, 0.0) else 0.0
 
+# TODO replace get_f1 by get_harmonic_mean
+def get_harmonic_mean(values):
+  s = sum([1.0 / v if not (v == 0 or np.isclose(v, 0.0)) else 0.0 for v in values])
+
+  return len(values) / s if not np.isclose(s, 0.0) else 0.0
+
 def get_statistics_from_segalign(segalign_file, src_url_idx, trg_url_idx, src_text_idx, trg_text_idx, segalign_score_idx,
                                  preprocess_cmd=None, parallelize=True, n_jobs=1, segalign_files_bicleaner_score_idx=None):
     # Download NLTK model if not available

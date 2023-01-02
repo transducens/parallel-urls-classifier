@@ -12,6 +12,7 @@ sys.path.insert(0, f"{cdir}/../..")
 
 import parallel_urls_classifier.generate_dataset.negative_samples_generator as nsg
 import parallel_urls_classifier.utils.utils as utils
+import parallel_urls_classifier.preprocess as preprocess
 
 import numpy as np
 from tldextract import extract
@@ -155,7 +156,8 @@ def main(args):
     for idx, url_pair in enumerate(input_file_parallel_urls):
         url_pair = url_pair.strip().split('\t')
 
-        assert len(url_pair) == 2, f"The provided line does not have 2 tab-separated values (line #{idx + 1})"
+        if len(url_pair) != 2:
+            raise Exception(f"The provided line does not have 2 tab-separated values but {len(url_pair)} (line #{idx + 1})")
 
         if len(url_pair[0]) == 0 or len(url_pair[1]) == 0:
             logging.warning("Skipping line #%d because there are empty values", idx + 1)
@@ -168,8 +170,7 @@ def main(args):
 
             continue
 
-        url_pair[0] = urllib.parse.unquote(url_pair[0], errors="backslashreplace")
-        url_pair[1] = urllib.parse.unquote(url_pair[1], errors="backslashreplace")
+        url_pair = preprocess.preprocess_url(url_pair, separator='/', remove_protocol=False, tokenization=False)
         src_subdomain, src_domain, src_tld = extract(url_pair[0])
         trg_subdomain, trg_domain, trg_tld = extract(url_pair[1])
         domains = (src_domain, trg_domain) # We are grouping by domain
