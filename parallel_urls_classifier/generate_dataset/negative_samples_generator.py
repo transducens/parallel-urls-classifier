@@ -15,6 +15,8 @@ from parallel_urls_classifier.tokenizer import tokenize
 from parallel_urls_classifier.generate_dataset.word_freqs_double_linked import WordFreqDistDoubleLinked
 import parallel_urls_classifier.utils.utils as utils
 
+import joblib
+
 def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_per_url=10, min_replacements=1,
                                             src_monolingual_file='', trg_monolingual_file='', side="both"):
     """
@@ -143,7 +145,6 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
     if remove_percentage < 0.0 or remove_percentage > 1.0:
         raise Exception(f"0.0 <= remove_percentage <= 1.0: {remove_percentage}")
 
-    parallel_urls_dict = {}
     urls = set()
 
     def run(tokenized_src_url, tokenized_trg_url):
@@ -176,6 +177,9 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
     parallel_urls_dict = {}
     urls = set()
 
+    # TODO this method is very time and memory-consuming due to the combinations...
+
+    """
     for src_pair, trg_pair in itertools.combinations(parallel_urls, r=2):
         src_url = src_pair[0]
         trg_url = trg_pair[1]
@@ -188,9 +192,24 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
         metric1 = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
         metric2 = len(set(src_url).intersection(set(trg_url)))
         parallel_urls_dict[src_url][trg_url] = (metric1, metric2)
+    """
+
+    def get_metrics(src_url, trg_url):
+        tokenized_src_url = tokenize(src_url)
+        tokenized_trg_url = tokenize(trg_url)
+        metric1 = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
+        metric2 = len(set(src_url).intersection(set(trg_url)))
+
+        return trg_url, (metric1, metric2)
 
     for src_url in parallel_urls_dict:
-        sorted_trg_parallel_urls_dict = sorted(parallel_urls_dict[src_url].items(), key=lambda item: (item[1][0], item[1][1]), reverse=True)
+        # TODO parametrize n_jobs
+        _results = \
+            joblib.Parallel(n_jobs=25)( \
+            joblib.delayed(get_metrics)(src_url, pair[1]) for pair in parallel_urls if src_url != pair[1])
+
+        #sorted_trg_parallel_urls_dict = sorted(parallel_urls_dict[src_url].items(), key=lambda item: (item[1][0], item[1][1]), reverse=True)
+        sorted_trg_parallel_urls_dict = sorted(_results, key=lambda item: (item[1][0], item[1][1]), reverse=True)
 
         for idx, (trg_url, metrics) in enumerate(sorted_trg_parallel_urls_dict):
             if idx >= limit_max_alignments_per_url:

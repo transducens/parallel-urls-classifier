@@ -23,6 +23,8 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
     no_non_parallel_domains = 0
     last_perc_shown = -1
 
+    # TODO replace call to unary_generator with yield in nsg module with a limit of, for instance, 50000 samples in order to avoid OOM errors (it will be needed to pass the fd to the nsg methods instead of write here the result!)
+
     with open(non_parallel_filename, "a") as f:
         for idx, domain in enumerate(target_domains):
             parallel_urls_domain = list(parallel_urls[domain]) # WARNING: you will need to set PYTHONHASHSEED if you want deterministic results across different executions
@@ -46,7 +48,6 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
 
 def get_unary_generator(generator, limit_max_alignments_per_url=10, extra_kwargs={}):
     return lambda data: generator(data, limit_max_alignments_per_url=limit_max_alignments_per_url, **extra_kwargs)
-
 
 def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2,
                   negative_samples_generator=["random"], max_negative_samples_alignments=10, other_args={},
@@ -79,12 +80,14 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
     logging.info("Total domains (positive samples): %d", no_parallel_domains)
 
-    with open(non_parallel_filename, "w") as f:
-        # Create file and remove content if exists
-        pass
-
     # Generate negative samples
     for idx, generator in enumerate(negative_samples_generator, 1):
+        non_parallel_filename_gen = f"{non_parallel_filename}.gen{idx}"
+
+        with open(non_parallel_filename_gen, "w") as f:
+            # Create file and remove content if exists
+            pass
+
         if generator != "none":
             extra_kwargs = {}
 
@@ -111,10 +114,10 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
             # Create negative samples -> same domain and get all combinations (store non-parallel URLs)
             no_non_parallel_urls, no_non_parallel_domains = \
-                store_negative_samples(parallel_urls, non_parallel_filename, target_domains, unary_generator, logging_cte=logging_cte)
+                store_negative_samples(parallel_urls, non_parallel_filename_gen, target_domains, unary_generator, logging_cte=logging_cte)
 
-            logging.info("Generator %d: total URLs for '%s' (negative samples): %d", idx, non_parallel_filename, no_non_parallel_urls)
-            logging.info("Generator %d: total domains for '%s' (negative samples): %d", idx, non_parallel_filename, no_non_parallel_domains)
+            logging.info("Generator %d: total URLs for '%s' (negative samples): %d", idx, non_parallel_filename_gen, no_non_parallel_urls)
+            logging.info("Generator %d: total domains for '%s' (negative samples): %d", idx, non_parallel_filename_gen, no_non_parallel_domains)
         else:
             logging.debug("Generator %d: skip negative samples generation", idx)
 
