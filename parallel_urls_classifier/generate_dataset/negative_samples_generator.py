@@ -174,6 +174,9 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
     return list(urls)
 
 def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments_per_url=10, append_metric=False):
+    # Download NLTK model if not available
+    utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
+
     parallel_urls_dict = {}
     urls = set()
 
@@ -202,11 +205,13 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
         return trg_url, (metric1, metric2)
 
-    for src_url in parallel_urls_dict:
+    #for src_url in parallel_urls_dict:
+    for idx_pair, parallel_urls_pair in enumerate(parallel_urls):
+        src_url = parallel_urls_pair[0]
         # TODO parametrize n_jobs
         _results = \
             joblib.Parallel(n_jobs=25)( \
-            joblib.delayed(get_metrics)(src_url, pair[1]) for pair in parallel_urls if src_url != pair[1])
+            joblib.delayed(get_metrics)(src_url, parallel_urls_pair2[1]) for idx_pair2, parallel_urls_pair2 in enumerate(parallel_urls) if idx_pair != idx_pair2)
 
         #sorted_trg_parallel_urls_dict = sorted(parallel_urls_dict[src_url].items(), key=lambda item: (item[1][0], item[1][1]), reverse=True)
         sorted_trg_parallel_urls_dict = sorted(_results, key=lambda item: (item[1][0], item[1][1]), reverse=True)
