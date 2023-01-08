@@ -5,6 +5,7 @@ import random
 import logging
 import argparse
 import urllib.parse
+import contextlib
 
 cdir = os.path.dirname(os.path.realpath(__file__))
 
@@ -23,9 +24,7 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
     no_non_parallel_domains = 0
     last_perc_shown = -1
 
-    # TODO replace call to unary_generator with yield in nsg module with a limit of, for instance, 50000 samples in order to avoid OOM errors (it will be needed to pass the fd to the nsg methods instead of write here the result!)
-
-    with open(non_parallel_filename, "a") as f:
+    with open(non_parallel_filename, 'a') as f:
         for idx, domain in enumerate(target_domains):
             parallel_urls_domain = list(parallel_urls[domain]) # WARNING: you will need to set PYTHONHASHSEED if you want deterministic results across different executions
             negative_samples = unary_generator(parallel_urls_domain)
@@ -51,16 +50,21 @@ def get_unary_generator(generator, limit_max_alignments_per_url=10, extra_kwargs
 
 def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel_filename, logging_cte=2,
                   negative_samples_generator=["random"], max_negative_samples_alignments=10, other_args={},
-                  generate_positive_samples=True):
+                  generate_positive_samples=True, process_even_if_files_exist=False, n_jobs=1):
     no_parallel_urls = 0
     no_parallel_domains = len(target_domains)
     last_perc_shown = -1
+    write_positive_samples = process_even_if_files_exist or not utils.exists(parallel_filename)
+    positive_samples_cm = open(parallel_filename, 'w') if write_positive_samples else contextlib.nullcontext()
+
+    if not write_positive_samples:
+        logging.warning("Positive samples will not be generated since already exist, but statistics will be displayed: %s", parallel_filename)
 
     # Store parallel URLs
-    with open(parallel_filename, 'w') as f: # File will be created even if 'generate_positive_samples' -> easier scripting later
+    with positive_samples_cm as f: # File will be created even if 'generate_positive_samples' -> easier scripting later
         for idx, domain in enumerate(target_domains):
             for url1, url2 in parallel_urls[domain]:
-                if generate_positive_samples:
+                if generate_positive_samples and write_positive_samples:
                     f.write(f"{url1}\t{url2}\n")
 
                 no_parallel_urls += 1
@@ -83,8 +87,14 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
     # Generate negative samples
     for idx, generator in enumerate(negative_samples_generator, 1):
         non_parallel_filename_gen = f"{non_parallel_filename}.gen{idx}"
+        write_negative_samples = process_even_if_files_exist or not utils.exists(non_parallel_filename_gen)
 
-        with open(non_parallel_filename_gen, "w") as f:
+        if not write_negative_samples:
+            logging.warning("Negative samples (generator %d) will not be generated since already exist: %s", idx, non_parallel_filename_gen)
+
+            continue
+
+        with open(non_parallel_filename_gen, 'w') as f:
             # Create file and remove content if exists
             pass
 
@@ -95,6 +105,7 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
                 negative_samples_generator_f = nsg.get_negative_samples_random
             elif generator == "bow-overlapping-metric":
                 negative_samples_generator_f = nsg.get_negative_samples_intersection_metric
+                extra_kwargs["n_jobs"] = n_jobs
             elif generator == "remove-random-tokens":
                 negative_samples_generator_f = nsg.get_negative_samples_remove_random_tokens
             elif generator == "replace-freq-words":
@@ -133,6 +144,8 @@ def main(args):
     train_perc, dev_perc, test_perc = args.sets_percentage
     src_freq_file = args.src_freq_file
     trg_freq_file = args.trg_freq_file
+    process_even_if_files_exist = args.process_even_if_files_exist
+    n_jobs = args.n_jobs
 
     other_args = {"src_freq_file": src_freq_file,
                   "trg_freq_file": trg_freq_file}
@@ -237,10 +250,14 @@ def main(args):
 
     assert len(train_domains) + len(dev_domains) + len(test_domains) == len(parallel_urls.keys()), "Not all the domains have been set to a set"
 
-    common_kwargs = {"negative_samples_generator": negative_samples_generator,
-                     "max_negative_samples_alignments": max_negative_samples_alignments,
-                     "generate_positive_samples": generate_positive_samples,
-                     "other_args": other_args}
+    common_kwargs = {
+        "negative_samples_generator": negative_samples_generator,
+        "max_negative_samples_alignments": max_negative_samples_alignments,
+        "generate_positive_samples": generate_positive_samples,
+        "other_args": other_args,
+        "process_even_if_files_exist": process_even_if_files_exist,
+        "n_jobs": n_jobs,
+    }
 
     if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
         logging.warning("Some set has been detected to contain 0 domains (train, dev, test: %d, %d, %d): merging all the domains")
@@ -283,7 +300,10 @@ def initialization():
     parser.add_argument('--sets-percentage', type=float, nargs=3, default=[0.8, 0.1, 0.1], help="Train, dev and test percentages")
     parser.add_argument('--src-freq-file', help="Src monolingual freq dictionary. Used if 'replace-freq-words' is in --generator-technique. Expected format: occurrences<tab>word")
     parser.add_argument('--trg-freq-file', help="Src monolingual freq dictionary. Used if 'replace-freq-words' is in --generator-technique. Expected format: occurrences<tab>word")
+    parser.add_argument('--process-even-if-files-exist', action='store_true', help="When output files exist, they are not generated. If set, they will be generated even if the files exist")
 
+    parser.add_argument('--n-jobs', type=int, default=24,
+                        help="Number of parallel jobs to use (-n means to use all CPUs - n + 1). If 0 is provided, parallelization is disabled")
     parser.add_argument('--force-non-deterministic', action='store_true', help="If PYTHONHASHSEED is not set, it will be set in order to obtain deterministic results. If this flag is set, this action will not be done")
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (fully guaranteed if you also set PYTHONHASHSEED envvar). Set a negative number in order to disable this feature")
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")

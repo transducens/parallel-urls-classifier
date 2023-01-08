@@ -173,50 +173,43 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
 
     return list(urls)
 
-def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments_per_url=10, append_metric=False):
+def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments_per_url=10, append_metric=False, n_jobs=1, apply_resource_forward=True):
     # Download NLTK model if not available
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
     parallel_urls_dict = {}
     urls = set()
+    tokenized_urls_storage = {"src": {}, "trg": {}}
 
-    # TODO this method is very time and memory-consuming due to the combinations...
+    def get_metrics(src_url, trg_url, idx_pair):
+        if idx_pair == 0:
+            resource_idx_src_url = utils.get_idx_resource(src_url) if apply_resource_forward else 0
+            resource_idx_trg_url = utils.get_idx_resource(trg_url) if apply_resource_forward else 0
+            tokenized_src_url = tokenize(src_url[resource_idx_src_url:])
+            tokenized_trg_url = tokenize(trg_url[resource_idx_trg_url:])
+        else:
+            tokenized_src_url = tokenized_urls_storage["src"][src_url]
+            tokenized_trg_url = tokenized_urls_storage["trg"][trg_url]
 
-    """
-    for src_pair, trg_pair in itertools.combinations(parallel_urls, r=2):
-        src_url = src_pair[0]
-        trg_url = trg_pair[1]
-
-        if src_url not in parallel_urls_dict:
-            parallel_urls_dict[src_url] = {}
-
-        tokenized_src_url = tokenize(src_url)
-        tokenized_trg_url = tokenize(trg_url)
-        metric1 = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
-        metric2 = len(set(src_url).intersection(set(trg_url)))
-        parallel_urls_dict[src_url][trg_url] = (metric1, metric2)
-    """
-
-    def get_metrics(src_url, trg_url):
-        tokenized_src_url = tokenize(src_url)
-        tokenized_trg_url = tokenize(trg_url)
         metric1 = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
         metric2 = len(set(src_url).intersection(set(trg_url)))
 
-        return trg_url, (metric1, metric2)
+        return trg_url, (metric1, metric2), (tokenized_src_url, tokenized_trg_url)
 
-    #for src_url in parallel_urls_dict:
     for idx_pair, parallel_urls_pair in enumerate(parallel_urls):
         src_url = parallel_urls_pair[0]
-        # TODO parametrize n_jobs
         _results = \
-            joblib.Parallel(n_jobs=25)( \
-            joblib.delayed(get_metrics)(src_url, parallel_urls_pair2[1]) for idx_pair2, parallel_urls_pair2 in enumerate(parallel_urls) if idx_pair != idx_pair2)
+            joblib.Parallel(n_jobs=n_jobs)( \
+            joblib.delayed(get_metrics)(src_url, parallel_urls_pair2[1], idx_pair) for idx_pair2, parallel_urls_pair2 in enumerate(parallel_urls) if idx_pair != idx_pair2)
 
-        #sorted_trg_parallel_urls_dict = sorted(parallel_urls_dict[src_url].items(), key=lambda item: (item[1][0], item[1][1]), reverse=True)
+        if idx_pair == 0:
+            for _, _, (_tokenized_src_url, _tokenized_trg_url) in _results:
+                tokenized_urls_storage["src"] = _tokenized_src_url
+                tokenized_urls_storage["trg"] = _tokenized_trg_url
+
         sorted_trg_parallel_urls_dict = sorted(_results, key=lambda item: (item[1][0], item[1][1]), reverse=True)
 
-        for idx, (trg_url, metrics) in enumerate(sorted_trg_parallel_urls_dict):
+        for idx, (trg_url, metrics), _ in enumerate(sorted_trg_parallel_urls_dict):
             if idx >= limit_max_alignments_per_url:
                 break
 
