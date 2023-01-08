@@ -147,7 +147,7 @@ def main(args):
     src_freq_file = args.src_freq_file
     trg_freq_file = args.trg_freq_file
     process_even_if_files_exist = args.process_even_if_files_exist
-    n_jobs = args.n_jobs
+    n_jobs = 1 if args.n_jobs == 0 else args.n_jobs
 
     other_args = {"src_freq_file": src_freq_file,
                   "trg_freq_file": trg_freq_file}
@@ -278,13 +278,13 @@ def main(args):
         dev_max_idx = train_max_idx + int(dev_perc * len(all_parallel_urls))
         test_max_idx = len(all_parallel_urls)
 
-        store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50, **common_kwargs)
-        store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100, **common_kwargs)
-        store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100, **common_kwargs)
+        store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=5, **common_kwargs)
+        store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=10, **common_kwargs)
+        store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=10, **common_kwargs)
     else:
-        store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=50, **common_kwargs)
-        store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=100, **common_kwargs)
-        store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=100, **common_kwargs)
+        store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=5, **common_kwargs)
+        store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=10, **common_kwargs)
+        store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=10, **common_kwargs)
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -305,7 +305,7 @@ def initialization():
     parser.add_argument('--process-even-if-files-exist', action='store_true', help="When output files exist, they are not generated. If set, they will be generated even if the files exist")
 
     parser.add_argument('--n-jobs', type=int, default=24,
-                        help="Number of parallel jobs to use (-n means to use all CPUs - n + 1). If 0 is provided, parallelization is disabled")
+                        help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
     parser.add_argument('--force-non-deterministic', action='store_true', help="If PYTHONHASHSEED is not set, it will be set in order to obtain deterministic results. If this flag is set, this action will not be done")
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (fully guaranteed if you also set PYTHONHASHSEED envvar). Set a negative number in order to disable this feature")
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")

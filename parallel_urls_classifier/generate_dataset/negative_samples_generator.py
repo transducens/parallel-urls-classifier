@@ -189,7 +189,6 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
     # Download NLTK model if not available
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
-    parallel_urls_dict = {}
     urls = set()
 
     def tokenize_urls(src_url, trg_url):
