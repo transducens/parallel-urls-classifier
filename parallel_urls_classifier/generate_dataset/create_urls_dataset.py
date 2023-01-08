@@ -32,13 +32,14 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
             for src_url, trg_url in negative_samples:
                 f.write(f"{src_url}\t{trg_url}\n")
 
-            finished_perc = (idx + 1) * 100.0 / no_parallel_domains
+            _finished_perc = (idx + 1) * 100.0 / no_parallel_domains
+            finished_perc = int(_finished_perc)
 
             # Show every 0.02%
-            if int(finished_perc * 100.0) % logging_cte == 0 and int(finished_perc * 100.0) != last_perc_shown:
+            if finished_perc % logging_cte == 0 and finished_perc != last_perc_shown:
                 logging.info("%.2f %% of negative samples generated (%d out of %d domains were already processed): %d negative samples loaded",
-                            finished_perc, idx + 1, no_parallel_domains, no_non_parallel_urls)
-                last_perc_shown = int(finished_perc * 100.0)
+                             _finished_perc, idx + 1, no_parallel_domains, no_non_parallel_urls)
+                last_perc_shown = finished_perc
 
             no_non_parallel_domains += 1 if len(negative_samples) != 0 else 0
             no_non_parallel_urls += len(negative_samples)
@@ -69,13 +70,14 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
                 no_parallel_urls += 1
 
-            finished_perc = (idx + 1) * 100.0 / no_parallel_domains
+            _finished_perc = (idx + 1) * 100.0 / no_parallel_domains
+            finished_perc = int(_finished_perc)
 
             # Show every (logging_cte / 100) %
-            if int(finished_perc * 100.0) % logging_cte == 0 and int(finished_perc * 100.0) != last_perc_shown:
+            if finished_perc % logging_cte == 0 and finished_perc != last_perc_shown:
                 logging.info("%.2f %% of positive samples generated (%d out of %d domains were already processed): %d positive samples loaded",
-                            finished_perc, idx + 1, no_parallel_domains, no_parallel_urls)
-                last_perc_shown = int(finished_perc * 100.0)
+                             _finished_perc, idx + 1, no_parallel_domains, no_parallel_urls)
+                last_perc_shown = finished_perc
 
     if generate_positive_samples:
         logging.info("Total URLs (positive samples): stored in '%s': %d", parallel_filename, no_parallel_urls)
@@ -86,7 +88,7 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
     # Generate negative samples
     for idx, generator in enumerate(negative_samples_generator, 1):
-        non_parallel_filename_gen = f"{non_parallel_filename}.gen{idx}"
+        non_parallel_filename_gen = f"{non_parallel_filename}.generator_{generator}"
         write_negative_samples = process_even_if_files_exist or not utils.exists(non_parallel_filename_gen)
 
         if not write_negative_samples:
@@ -100,12 +102,12 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
         if generator != "none":
             extra_kwargs = {}
+            extra_kwargs["n_jobs"] = n_jobs
 
             if generator == "random":
                 negative_samples_generator_f = nsg.get_negative_samples_random
             elif generator == "bow-overlapping-metric":
                 negative_samples_generator_f = nsg.get_negative_samples_intersection_metric
-                extra_kwargs["n_jobs"] = n_jobs
             elif generator == "remove-random-tokens":
                 negative_samples_generator_f = nsg.get_negative_samples_remove_random_tokens
             elif generator == "replace-freq-words":

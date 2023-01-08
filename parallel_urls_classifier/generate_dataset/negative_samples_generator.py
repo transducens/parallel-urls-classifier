@@ -18,7 +18,8 @@ import parallel_urls_classifier.utils.utils as utils
 import joblib
 
 def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_per_url=10, min_replacements=1,
-                                            src_monolingual_file='', trg_monolingual_file='', side="both"):
+                                            src_monolingual_file='', trg_monolingual_file='', side="both",
+                                            n_jobs=1):
     """
     Original function from https://github.com/bitextor/bicleaner-ai/blob/master/bicleaner_ai/training.py
     """
@@ -114,34 +115,42 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
         return tokenized_src_url, tokenized_trg_url
 
     side_priority = ("trg", "src", "both") # Priority for modifying src, trg or both URLs -> the priority is important since it will depend on 'limit_max_alignments_per_url'
-    _side = side
 
-    for src_url, trg_url in parallel_urls:
+    def process(src_url, trg_url, idx):
         hit = False
+        _side = side
 
-        for idx in range(limit_max_alignments_per_url):
-            if side == "all":
-                _side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
+        if side == "all":
+            _side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
 
-            _src_url, _trg_url = apply_function_to_negative_sample_tokenized_urls(
-                src_url, trg_url,
-                lambda s, t: run(s, t, side=_side, min_replacements=min_replacements),
-                "replace_freq_words")
+        _src_url, _trg_url = apply_function_to_negative_sample_tokenized_urls(
+            src_url, trg_url,
+            lambda s, t: run(s, t, side=_side, min_replacements=min_replacements),
+            "replace_freq_words")
 
-            if src_url != _src_url or trg_url != _trg_url:
-                hit = True
+        if src_url != _src_url or trg_url != _trg_url:
+            hit = True
 
-                urls.add((_src_url, _trg_url))
+            return _src_url, _trg_url, hit, idx
 
-        if not hit:
-            logging.warning("Couldn't find words with the same frequency: couldn't generate negative sample for the provided URLs: ('%s', '%s')",
-                            str(src_url), str(trg_url))
+        return src_url, trg_url, hit, f"{side}/{_side}"
+
+    _results = \
+        joblib.Parallel(n_jobs=n_jobs)( \
+        joblib.delayed(process)(src_url, trg_url, idx) for src_url, trg_url in parallel_urls for idx in range(limit_max_alignments_per_url))
+
+    for _src_url, _trg_url, hit, side_strategy in _results:
+        if hit:
+            urls.add((_src_url, _trg_url))
+        else:
+            logging.warning("Couldn't find words with the same frequency: couldn't generate negative sample for the provided URLs with the side '%s': ('%s', '%s')",
+                            side_strategy, str(_src_url), str(_trg_url))
 
     common_last_checks(urls, parallel_urls)
 
     return list(urls)
 
-def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignments_per_url=10, remove_percentage=0.5):
+def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignments_per_url=10, remove_percentage=0.5, n_jobs=1):
     if remove_percentage < 0.0 or remove_percentage > 1.0:
         raise Exception(f"0.0 <= remove_percentage <= 1.0: {remove_percentage}")
 
@@ -163,17 +172,20 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
 
         return tokenized_src_url, tokenized_trg_url
 
-    for src_url, trg_url in parallel_urls:
-        for _ in range(limit_max_alignments_per_url):
-            _src_url, _trg_url = apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, run, "remove_random_tokens")
+    _results = \
+        joblib.Parallel(n_jobs=n_jobs)( \
+        joblib.delayed(apply_function_to_negative_sample_tokenized_urls)(src_url, trg_url, run, "remove_random_tokens") \
+            for src_url, trg_url in parallel_urls for _ in range(limit_max_alignments_per_url))
 
-            urls.add((_src_url, _trg_url))
+    for _src_url, _trg_url in _results:
+        urls.add((_src_url, _trg_url))
 
     common_last_checks(urls, parallel_urls)
 
     return list(urls)
 
-def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments_per_url=10, append_metric=False, n_jobs=1, apply_resource_forward=True):
+def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments_per_url=10, append_metric=False, n_jobs=1,
+                                             apply_resource_forward=True):
     # Download NLTK model if not available
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
@@ -221,8 +233,44 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
     return list(urls)
 
-def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
-    return random_combinations(parallel_urls, limit_max_alignments_per_url=limit_max_alignments_per_url)
+def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10, n_jobs=1):
+    #idxs = range(len(parallel_urls))
+    urls = set()
+
+    def get_random_trg_urls(idx1):
+        _urls = set()
+        max_alignments_per_url = limit_max_alignments_per_url
+        sample_idxs = random.sample(range(len(parallel_urls)), limit_max_alignments_per_url) # https://joblib.readthedocs.io/en/latest/auto_examples/parallel_random_state.html
+
+        for sort_idx2, idx2 in enumerate(sample_idxs, 1):
+            if idx1 == idx2:
+                # Skip parallel URLs
+                max_alignments_per_url += 1
+
+                continue
+
+            if sort_idx2 > max_alignments_per_url:
+                break
+
+            src_pair = parallel_urls[idx1]
+            trg_pair = parallel_urls[idx2]
+            src_url = src_pair[0]
+            trg_url = trg_pair[1]
+
+            _urls.add((src_url, trg_url))
+
+        return _urls
+
+    _results = \
+        joblib.Parallel(n_jobs=n_jobs)( \
+        joblib.delayed(get_random_trg_urls)(idx) for idx in range(len(parallel_urls)))
+
+    for _r in _results:
+        urls.update(_r)
+
+    common_last_checks(urls, parallel_urls)
+
+    return list(urls)
 
 _long_warning_raised = False
 
@@ -245,39 +293,6 @@ def common_last_checks(negative_samples_set, parallel_urls_set):
                             "you have provided >1 pair of URLs where are >1 translation for the same document): %d", urls_overlap)
 
             _long_warning_raised = True
-
-def random_combinations(parallel_urls, limit_max_alignments_per_url=10, binary_callback=None, **kwargs):
-    idxs2 = list(range(len(parallel_urls)))
-    urls = set()
-
-    for idx1 in range(len(parallel_urls)):
-        max_alignments_per_url = limit_max_alignments_per_url
-
-        random.shuffle(idxs2)
-
-        for sort_idx2, idx2 in enumerate(idxs2):
-            if idx1 >= idx2:
-                # Skip parallel URLs and pairs which have been already seen before (get only combinations)
-                max_alignments_per_url += 1
-                continue
-
-            if sort_idx2 >= max_alignments_per_url:
-                # Try to avoid very large combinations
-                break
-
-            src_pair = parallel_urls[idx1]
-            trg_pair = parallel_urls[idx2]
-            src_url = src_pair[0]
-            trg_url = trg_pair[1]
-
-            if binary_callback:
-                src_url, trg_url = binary_callback(src_url, trg_url, **kwargs)
-
-            urls.add((src_url, trg_url))
-
-    common_last_checks(urls, parallel_urls)
-
-    return list(urls)
 
 def show_info_from_fd(fd, generator, generator_kwargs=None, sample_size=None, print_size=None, print_results=True):
     urls = []
@@ -347,27 +362,19 @@ def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, str
 
     return src_url_again, trg_url_again
 
-def get_position_idxs_random(l, percentage=0.5, min_elements=1, reverse=True, max_tries=50):
-    idxs = []
-
+def get_position_idxs_random(l, percentage=0.5, min_elements=1, reverse=True):
     if percentage < 0.0:
         percentage = 0.0
 
         logging.warning("Percentage set to 0.0")
+    elif percentage > 1.0:
+        percentage = 1.0
 
-    idxs = [idx for idx in range(len(l)) if random.random() <= percentage]
-    count = 1
+        logging.warning("Percentage set to 1.0")
 
-    # We want a distribution with the percentage specified, so we need to re-generate the indexes if needed
-    # If we wanted not to generate a distribution with the specified percentage, there are more efficient ways to do it (e.g. iterate through the indexes and add if random < percentage)
-    while len(idxs) < min_elements and count < max_tries:
-        idxs = [idx for idx in range(len(l)) if random.random() <= percentage]
-        count += 1
-
-    if len(idxs) < min_elements:
-        logging.warning("Couldn't generate a random distribution of indexes: returning last generated result: %s", str(idxs))
-
-    if reverse:
-        idxs = reversed(idxs)
+    k = random.normalvariate(mu=len(l) * percentage, sigma=len(l) * percentage / 3.0) # 99.8 % likelihood of obtaining in-domain index in relation with the provided percentage and length of l
+                                                                                      # https://en.wikipedia.org/wiki/Normal_distribution#/media/File:Standard_deviation_diagram_micro.svg
+    k = min(max(round(k), min_elements), len(l))
+    idxs = sorted(random.sample(range(len(l)), k), reverse=reverse)
 
     return idxs
