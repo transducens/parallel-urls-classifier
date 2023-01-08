@@ -209,7 +209,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
         sorted_trg_parallel_urls_dict = sorted(_results, key=lambda item: (item[1][0], item[1][1]), reverse=True)
 
-        for idx, (trg_url, metrics), _ in enumerate(sorted_trg_parallel_urls_dict):
+        for idx, (trg_url, metrics, _) in enumerate(sorted_trg_parallel_urls_dict):
             if idx >= limit_max_alignments_per_url:
                 break
 
