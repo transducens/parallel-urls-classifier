@@ -240,7 +240,8 @@ def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10, 
     def get_random_trg_urls(idx1):
         _urls = set()
         max_alignments_per_url = limit_max_alignments_per_url
-        sample_idxs = random.sample(range(len(parallel_urls)), limit_max_alignments_per_url) # https://joblib.readthedocs.io/en/latest/auto_examples/parallel_random_state.html
+        k = min(limit_max_alignments_per_url, len(parallel_urls))
+        sample_idxs = random.sample(range(len(parallel_urls)), k) # https://joblib.readthedocs.io/en/latest/auto_examples/parallel_random_state.html
 
         for sort_idx2, idx2 in enumerate(sample_idxs, 1):
             if idx1 == idx2:
