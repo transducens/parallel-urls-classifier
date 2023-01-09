@@ -18,44 +18,41 @@ logger = logging.getLogger("parallel_urls_classifier")
 logger_tokens = logging.getLogger("parallel_urls_classifier.tokens")
 
 def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_context_manager,
-                         tasks_weights=None, criteria=None):
+                         tasks_weights=None, criteria=None, device=None):
     results = {"_internal": {"total_loss": None}}
 
     # Inputs and outputs
     labels = {}
     urls = inputs_and_outputs["urls"]
-    device = urls.device
     attention_mask = inputs_and_outputs["attention_mask"]
 
-    if criteria:
-        labels["urls_classification"] = inputs_and_outputs["labels"]
+    def apply_mlm():
+        # "Mask" labels and mask URLs
+        #  https://discuss.huggingface.co/t/bertformaskedlm-s-loss-and-scores-how-the-loss-is-computed/607/2
+        _urls, _labels = transformers.DataCollatorForLanguageModeling(tokenizer, mlm_probability=0.15)\
+                            .torch_mask_tokens(urls.clone().cpu().detach())
+        _urls = _urls.to(device)
+
+        return _urls, _labels
 
     with amp_context_manager:
         model_outputs = None
 
+        if "urls_classification" in tasks:
+            if criteria:
+                labels["urls_classification"] = inputs_and_outputs["labels"]
         if "mlm" in tasks:
-            # "Mask" labels and mask URLs
-            #  https://discuss.huggingface.co/t/bertformaskedlm-s-loss-and-scores-how-the-loss-is-computed/607/2
-            _urls, _labels = transformers.DataCollatorForLanguageModeling(tokenizer, mlm_probability=0.15)\
-                                .torch_mask_tokens(urls.clone().cpu().detach())
-            _urls = _urls.to(device)
-
-            if utils.use_cuda(): # TODO should force_cpu be propagated?
-                # Free up GPU memory: avoid to allocate twice the necessary GPU memory
-                # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
-                del urls
-                torch.cuda.empty_cache()
-
+            _urls, _labels = apply_mlm()
             urls = _urls
 
             if criteria:
                 labels["mlm"] = _labels.to(device)
-        elif "language-detection" in tasks:
+        if "language-detection" in tasks:
             if criteria:
                 labels["language-detection"] = inputs_and_outputs["labels_task_language_detection"]
             # TODO handle url_tokens_task_language_detection and url_attention_mask_task_language_detection
-            # TODO can we avoid to have different versions of the input in GPU? Should we avoid to use .to(device) and do it in-place instead of when batch is being loaded?
             # TODO handle data of this task in the dataloader
+            # TODO apply MLM to lang detection task input
 
         for head_task in tasks:
             model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
@@ -142,13 +139,14 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
             # Batch is under construction using max_tokens...
             continue
 
-        for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, device):
+        for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, None):
             labels = inputs_and_outputs["labels"]
             total_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
             total_tokens_with_padding += sum([len(urls) for urls in inputs_and_outputs["urls"]])
 
             # Inference
-            results = inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_context_manager, criteria=criteria)
+            results = inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_context_manager, criteria=criteria,
+                                           device=device)
 
             # Tasks
             loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?

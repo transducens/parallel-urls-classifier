@@ -619,14 +619,14 @@ def main(args):
             model.zero_grad()
 
             # Process in block_size blocks in order to avoid OOM errors, but use batch_size for update the model
-            for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, device):
+            for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, None):
                 labels = inputs_and_outputs["labels"]
                 total_train_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
                 total_train_tokens_with_padding += sum([len(urls) for urls in inputs_and_outputs["urls"]])
 
                 # Inference
                 results = inference_with_heads(model, all_tasks, tokenizer, inputs_and_outputs, amp_context_manager,
-                                               criteria=criteria, tasks_weights=auxiliary_tasks_weights)
+                                               criteria=criteria, tasks_weights=auxiliary_tasks_weights, device=device)
 
                 # Main task
                 outputs_argmax = results["urls_classification"]["outputs_argmax"]
