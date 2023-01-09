@@ -199,9 +199,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
         return tokenized_src_url, tokenized_trg_url
 
-    tokenized_urls = \
-        joblib.Parallel(n_jobs=n_jobs)( \
-        joblib.delayed(tokenize_urls)(src_url, trg_url) for src_url, trg_url in parallel_urls)
+    tokenized_urls = [tokenize_urls(src_url, trg_url) for src_url, trg_url in parallel_urls]
 
     def get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url):
         tokenized_src_url = tokenized_urls[idx_pair_src_url][0]
