@@ -392,7 +392,10 @@ def get_idx_resource(url, url_has_protocol=True):
 def get_data_from_batch(batch, block_size, device):
     urls = batch["url_tokens"]
     attention_mask = batch["url_attention_mask"]
-    labels = batch["label"]
+    labels = batch["labels"]
+
+    # Tasks
+    task_language_detection = "labels_task_language_detection" in batch
 
     # Split in batch_size batches
     start = 0
@@ -411,6 +414,10 @@ def get_data_from_batch(batch, block_size, device):
                 "urls": _urls,
                 "attention_mask": _attention_mask,
             }
+
+            if task_language_detection:
+                for feature in ("labels_task_language_detection", "url_tokens_task_language_detection", "url_attention_mask_task_language_detection"):
+                    inputs_and_outputs[feature] = batch[feature][start:end].to(device)
 
             yield inputs_and_outputs
 

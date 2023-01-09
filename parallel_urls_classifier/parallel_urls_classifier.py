@@ -300,13 +300,23 @@ def main(args):
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
     all_tasks_kwargs = {}
-    all_tasks_kwargs["urls_classification"] = {"num_labels": num_labels}
+    all_tasks_kwargs["urls_classification"] = {
+        "num_labels": num_labels,
+    }
     total_auxiliary_tasks = 0
 
     if "mlm" in auxiliary_tasks:
         all_tasks_kwargs["mlm"] = {}
 
         logger.info("Using auxiliary task: mlm")
+
+        total_auxiliary_tasks += 1
+    elif "language-detection" in auxiliary_tasks:
+        all_tasks_kwargs["language-detection"] = {
+            "num_labels": 2, # We will have 2 outputs: 1st will be the language detection of all the data and 2nd the urls_classification task and 1st output "multiplication"
+        }
+
+        logger.info("Using auxiliary task: language-detection")
 
         total_auxiliary_tasks += 1
 
@@ -492,10 +502,12 @@ def main(args):
                 criterion = nn.MSELoss()
             else:
                 # Binary classification
-                criterion = nn.CrossEntropyLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized (i.e. don't apply softmax)
+                criterion = nn.CrossEntropyLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized (i.e. softmax hasn't been applied)
                 # TODO change to BCELoss? bceloss vs crossentropyloss -> BCELoss seems to fit here
         elif head_task == "mlm":
             criterion = nn.CrossEntropyLoss()
+        elif head_task == "language-detection":
+            criterion = nn.CrossEntropyLoss() # We don't want BCELoss since it applies softmax, and we want to apply sigmoid to each output before normalization
         else:
             raise Exception(f"Unknown head task: {head_task}")
 
@@ -974,7 +986,7 @@ def initialization():
     parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")
     parser.add_argument('--stringify-instead-of-tokenization', action="store_true", help="Preprocess URLs applying custom stringify instead of tokenization")
     parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs while preprocessing")
-    parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm"], help="Tasks which will try to help to the main task (multitasking)")
+    parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm", "language-detection"], help="Tasks which will try to help to the main task (multitasking)")
     parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
     parser.add_argument('--remove-instead-of-truncate', action="store_true", help="Remove pairs of URLs which would need to be truncated (if not enabled, truncation will be applied). This option will be only applied to the training set")

@@ -39,10 +39,23 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
             _urls, _labels = transformers.DataCollatorForLanguageModeling(tokenizer, mlm_probability=0.15)\
                                 .torch_mask_tokens(urls.clone().cpu().detach())
             _urls = _urls.to(device)
+
+            if utils.use_cuda(): # TODO should force_cpu be propagated?
+                # Free up GPU memory: avoid to allocate twice the necessary GPU memory
+                # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
+                del urls
+                torch.cuda.empty_cache()
+
             urls = _urls
 
             if criteria:
                 labels["mlm"] = _labels.to(device)
+        elif "language-detection" in tasks:
+            if criteria:
+                labels["language-detection"] = inputs_and_outputs["labels_task_language_detection"]
+            # TODO handle url_tokens_task_language_detection and url_attention_mask_task_language_detection
+            # TODO can we avoid to have different versions of the input in GPU? Should we avoid to use .to(device) and do it in-place instead of when batch is being loaded?
+            # TODO handle data of this task in the dataloader
 
         for head_task in tasks:
             model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
@@ -79,6 +92,15 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                     loss *= loss_weight
 
                 results["mlm"] = {
+                    "outputs": outputs,
+                    "loss_detach": loss.cpu().detach() if criterion else None,
+                }
+            elif head_task == "language-detection":
+                if criterion:
+                    loss = criterion(outputs, labels[head_task])
+                    loss *= loss_weight
+
+                results["language-detection"] = {
                     "outputs": outputs,
                     "loss_detach": loss.cpu().detach() if criterion else None,
                 }
@@ -137,6 +159,10 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
                 # TODO propagate somehow? Statistics?
                 loss_mlm = results["mlm"]["loss_detach"]
                 outputs_mlm = results["mlm"]["outputs"].cpu()
+            elif "language-detection" in results:
+                # TODO propagate somehow? Statistics?
+                loss_language_detection = results["language-detection"]["loss_detach"]
+                outputs_language_detection = results["language-detection"]["outputs"].cpu()
 
             loss = results["_internal"]["total_loss"].cpu()
             loss = loss.cpu() / total_blocks_per_batch

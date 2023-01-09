@@ -274,7 +274,7 @@ class SmartBatchingCollate:
             "url_tokens": input_ids,
             "url_attention_mask": attention_mask,
         }
-        output["label"] = torch.tensor(targets)
+        output["labels"] = torch.tensor(targets)
 
         return output
 
@@ -343,7 +343,7 @@ class MaxTokensCollate:
                 "url_tokens": input_ids,
                 "url_attention_mask": attention_mask,
             }
-            output["label"] = torch.tensor(targets)
+            output["labels"] = torch.tensor(targets)
 
             # Reset variables
             self.reset_max_tokens_variables(last_or_first_batch=last_batch)
