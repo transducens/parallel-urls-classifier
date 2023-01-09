@@ -395,7 +395,7 @@ def get_data_from_batch(batch, block_size, device):
     labels = batch["labels"]
 
     # Tasks
-    task_language_detection = "labels_task_language_detection" in batch
+    task_language_identification = "labels_task_language_identification" in batch
 
     # Split in batch_size batches
     start = 0
@@ -415,8 +415,8 @@ def get_data_from_batch(batch, block_size, device):
                 "attention_mask": _attention_mask,
             }
 
-            if task_language_detection:
-                for feature in ("labels_task_language_detection", "url_tokens_task_language_detection", "url_attention_mask_task_language_detection"):
+            if task_language_identification:
+                for feature in ("labels_task_language_identification", "url_tokens_task_language_identification", "url_attention_mask_task_language_identification"):
                     inputs_and_outputs[feature] = batch[feature][start:end].to(device)
 
             yield inputs_and_outputs

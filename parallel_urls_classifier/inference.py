@@ -22,16 +22,15 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
     results = {"_internal": {"total_loss": None}}
 
     # Inputs and outputs
+    urls = {}
+    attention_mask = {}
     labels = {}
-    urls = inputs_and_outputs["urls"]
-    attention_mask = inputs_and_outputs["attention_mask"]
 
-    def apply_mlm():
+    def apply_mlm(_task):
         # "Mask" labels and mask URLs
         #  https://discuss.huggingface.co/t/bertformaskedlm-s-loss-and-scores-how-the-loss-is-computed/607/2
         _urls, _labels = transformers.DataCollatorForLanguageModeling(tokenizer, mlm_probability=0.15)\
-                            .torch_mask_tokens(urls.clone().cpu().detach())
-        _urls = _urls.to(device)
+                            .torch_mask_tokens(urls[_task].clone().cpu().detach())
 
         return _urls, _labels
 
@@ -39,27 +38,52 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
         model_outputs = None
 
         if "urls_classification" in tasks:
+            urls["urls_classification"] = inputs_and_outputs["urls"]
+            attention_mask["urls_classification"] = inputs_and_outputs["attention_mask"]
+
             if criteria:
                 labels["urls_classification"] = inputs_and_outputs["labels"]
-        if "mlm" in tasks:
-            _urls, _labels = apply_mlm()
-            urls = _urls
+        if "language-identification" in tasks:
+            urls["language-identification"] = inputs_and_outputs["urls_task_language_identification"]
+            attention_mask["language-identification"] = inputs_and_outputs["attention_mask_task_language_identification"]
 
             if criteria:
-                labels["mlm"] = _labels.to(device)
-        if "language-detection" in tasks:
-            if criteria:
-                labels["language-detection"] = inputs_and_outputs["labels_task_language_detection"]
-            # TODO handle url_tokens_task_language_detection and url_attention_mask_task_language_detection
+                labels["language-identification"] = inputs_and_outputs["labels_task_language_identification"]
             # TODO handle data of this task in the dataloader
-            # TODO apply MLM to lang detection task input
+            # TODO apply MLM to lang identification task input
+        if "mlm" in tasks:
+            # TODO support MLM in other tasks (e.g. language identification)?
+            if "urls_classification" not in tasks:
+                raise Exception("MLM uses the 'urls_classification' task but couldn't find it")
+
+            _urls, _labels = apply_mlm("urls_classification") # MLM task itself only uses the URLs from the main task
+                                                              #  (it might use the data from the other tasks, but it
+                                                              #   would be needed to run the task multiple times...)
+            urls["urls_classification"] = _urls # Replace since now there are masked tokens
+            urls["mlm"] = _urls
+            attention_mask["mlm"] = attention_mask["urls_classification"]
+
+            if criteria:
+                labels["mlm"] = _labels
 
         for head_task in tasks:
-            model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
+            if "mlm" in tasks and head_task not in ("mlm", "urls_classification"):
+                # Apply MLM to all the auxiliar tasks
+                _urls, _ = apply_mlm(head_task)
+                urls[head_task] = _urls
+
+            # Move to device
+            urls[head_task] = urls[head_task].to(device)
+            attention_mask[head_task] = attention_mask[head_task].to(device)
+            labels[head_task] = labels[head_task].to(device)
+
+            # Inference
+            model_outputs = model(head_task, urls[head_task], attention_mask[head_task]) # TODO can we avoid to run the base model multiple times if we have common input?
             outputs = model_outputs.logits # Get head result
             criterion = criteria[head_task] if criteria else None
             loss_weight = tasks_weights[head_task] if tasks_weights else 1.0
 
+            # Calcule loss
             if head_task == "urls_classification":
                 # Main task
 
@@ -92,12 +116,12 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                     "outputs": outputs,
                     "loss_detach": loss.cpu().detach() if criterion else None,
                 }
-            elif head_task == "language-detection":
+            elif head_task == "language-identification":
                 if criterion:
                     loss = criterion(outputs, labels[head_task])
                     loss *= loss_weight
 
-                results["language-detection"] = {
+                results["language-identification"] = {
                     "outputs": outputs,
                     "loss_detach": loss.cpu().detach() if criterion else None,
                 }
@@ -112,6 +136,14 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                     results["_internal"]["total_loss"] += loss
             else:
                 results["_internal"]["total_loss"] = None
+
+            # Move data to CPU (it will free up memory if device is cuda)
+            # TODO does this work as expected? Is it the inference slower?
+            urls[head_task] = urls[head_task].cpu()
+            attention_mask[head_task] = attention_mask[head_task].cpu()
+            labels[head_task] = labels[head_task].cpu()
+
+            torch.cuda.empty_cache() # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
 
     return results
 
@@ -157,10 +189,10 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
                 # TODO propagate somehow? Statistics?
                 loss_mlm = results["mlm"]["loss_detach"]
                 outputs_mlm = results["mlm"]["outputs"].cpu()
-            elif "language-detection" in results:
+            elif "language-identification" in results:
                 # TODO propagate somehow? Statistics?
-                loss_language_detection = results["language-detection"]["loss_detach"]
-                outputs_language_detection = results["language-detection"]["outputs"].cpu()
+                loss_language_identification = results["language-identification"]["loss_detach"]
+                outputs_language_identification = results["language-identification"]["outputs"].cpu()
 
             loss = results["_internal"]["total_loss"].cpu()
             loss = loss.cpu() / total_blocks_per_batch
