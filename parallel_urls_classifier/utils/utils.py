@@ -73,18 +73,27 @@ def apply_model(model, tokenizer, tokens, encode=False):
 
     return output
 
-def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False):
+def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
+                           auxiliary_tasks=[]):
     urls = []
     initial_urls = []
+
+    # Tasks
+    task_language_identification = "language-identification" in auxiliary_tasks
 
     for url in fd:
         url = url.strip().split('\t')
 
-        assert len(url) == 2, f"It was expected 2 URLs per line URLs"
+        if task_language_identification:
+            if len(url) != 4:
+                raise Exception("It was expected 4 values per line (src_url, trg_url, src_url_lang, trg_url_lang), "
+                                f"but got {len(url)} values")
+        else:
+            if len(url) != 2:
+                raise Exception(f"It was expected 2 values per line (src_url, trg_url), but got {len(url)} values")
 
         if f:
-            src_url = f(url[0])
-            trg_url = f(url[1])
+            src_url, trg_url = f(url[0]), f(url[1])
 
             if isinstance(src_url, list):
                 if len(src_url) != 1:
@@ -97,14 +106,14 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
 
                 trg_url = trg_url[0]
         else:
-            src_url = url[0]
-            trg_url = url[1]
+            src_url, trg_url = url[0], url[1]
 
         if tokenizer.sep_token in src_url or tokenizer.sep_token in trg_url:
             logger.warning("URLs skipped since they contain the separator token: ('%s', '%s')", src_url, trg_url)
 
             continue
 
+        # TODO if we add another version to "urls" with languages instead of use full diffrent version of the data?
         urls.append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
                                                                 #  (or other special tokens) since they are automatically added
                                                                 #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
@@ -416,7 +425,7 @@ def get_data_from_batch(batch, block_size, device):
             }
 
             if task_language_identification:
-                for feature in ("labels_task_language_identification", "url_tokens_task_language_identification", "url_attention_mask_task_language_identification"):
+                for feature in ("urls_task_language_identification", "attention_mask_task_language_identification", "labels_task_language_identification"):
                     inputs_and_outputs[feature] = batch[feature][start:end].to(device)
 
             yield inputs_and_outputs

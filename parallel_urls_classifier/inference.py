@@ -50,7 +50,6 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
             if criteria:
                 labels["language-identification"] = inputs_and_outputs["labels_task_language_identification"]
             # TODO handle data of this task in the dataloader
-            # TODO apply MLM to lang identification task input
         if "mlm" in tasks:
             # TODO support MLM in other tasks (e.g. language identification)?
             if "urls_classification" not in tasks:
