@@ -22,15 +22,15 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
     results = {"_internal": {"total_loss": None}}
 
     # Inputs and outputs
-    urls = {}
-    attention_mask = {}
+    urls = inputs_and_outputs["urls"]
+    attention_mask = inputs_and_outputs["attention_mask"]
     labels = {}
 
-    def apply_mlm(_task):
+    def apply_mlm():
         # "Mask" labels and mask URLs
         #  https://discuss.huggingface.co/t/bertformaskedlm-s-loss-and-scores-how-the-loss-is-computed/607/2
         _urls, _labels = transformers.DataCollatorForLanguageModeling(tokenizer, mlm_probability=0.15)\
-                            .torch_mask_tokens(urls[_task].clone().cpu().detach())
+                            .torch_mask_tokens(urls.clone().cpu().detach())
 
         return _urls, _labels
 
@@ -38,46 +38,31 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
         model_outputs = None
 
         if "urls_classification" in tasks:
-            urls["urls_classification"] = inputs_and_outputs["urls"]
-            attention_mask["urls_classification"] = inputs_and_outputs["attention_mask"]
-
             if criteria:
                 labels["urls_classification"] = inputs_and_outputs["labels"]
         if "language-identification" in tasks:
-            urls["language-identification"] = inputs_and_outputs["urls_task_language_identification"]
-            attention_mask["language-identification"] = inputs_and_outputs["attention_mask_task_language_identification"]
-
             if criteria:
+                # TODO where do I find "labels_task_language_identification"?
                 labels["language-identification"] = inputs_and_outputs["labels_task_language_identification"]
-            # TODO handle data of this task in the dataloader
         if "mlm" in tasks:
-            # TODO support MLM in other tasks (e.g. language identification)?
-            if "urls_classification" not in tasks:
-                raise Exception("MLM uses the 'urls_classification' task but couldn't find it")
+            # MLM is applied at the same time with all the other tasks
 
-            _urls, _labels = apply_mlm("urls_classification") # MLM task itself only uses the URLs from the main task
-                                                              #  (it might use the data from the other tasks, but it
-                                                              #   would be needed to run the task multiple times...)
-            urls["urls_classification"] = _urls # Replace since now there are masked tokens
-            urls["mlm"] = _urls
-            attention_mask["mlm"] = attention_mask["urls_classification"]
+            _urls, _labels = apply_mlm()
+            urls = _urls # Replace since now there are masked tokens
 
             if criteria:
                 labels["mlm"] = _labels
 
-        for head_task in tasks:
-            if "mlm" in tasks and head_task not in ("mlm", "urls_classification"):
-                # Apply MLM to all the auxiliar tasks
-                _urls, _ = apply_mlm(head_task)
-                urls[head_task] = _urls
+        # Move to device
+        urls = urls.to(device)
+        attention_mask = attention_mask.to(device)
 
+        for head_task in tasks:
             # Move to device
-            urls[head_task] = urls[head_task].to(device)
-            attention_mask[head_task] = attention_mask[head_task].to(device)
             labels[head_task] = labels[head_task].to(device)
 
             # Inference
-            model_outputs = model(head_task, urls[head_task], attention_mask[head_task]) # TODO can we avoid to run the base model multiple times if we have common input?
+            model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
             outputs = model_outputs.logits # Get head result
             criterion = criteria[head_task] if criteria else None
             loss_weight = tasks_weights[head_task] if tasks_weights else 1.0
@@ -138,11 +123,16 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
 
             # Move data to CPU (it will free up memory if device is cuda)
             # TODO does this work as expected? Is it the inference slower?
-            urls[head_task] = urls[head_task].cpu()
-            attention_mask[head_task] = attention_mask[head_task].cpu()
             labels[head_task] = labels[head_task].cpu()
 
             torch.cuda.empty_cache() # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
+
+        # Move data to CPU (it will free up memory if device is cuda)
+        # TODO does this work as expected? Is it the inference slower?
+        urls = urls.cpu()
+        attention_mask = attention_mask.cpu()
+
+        torch.cuda.empty_cache() # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
 
     return results
 

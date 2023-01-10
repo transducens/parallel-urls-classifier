@@ -425,7 +425,7 @@ def main(args):
                                                           remove_positional_data=remove_positional_data_from_resource,
                                                           separator=url_separator, lower=lower,
                                                           stringify_instead_of_tokenization=stringify_instead_of_tokenization),
-                    add_symmetric_samples=add_symmetric_samples)
+                    add_symmetric_samples=add_symmetric_samples, auxiliary_tasks=auxiliary_tasks)
 
         for batch_urls in batch:
             l.extend(batch_urls)
@@ -436,7 +436,8 @@ def main(args):
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,
                                                           separator=url_separator, lower=lower,
-                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization))
+                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization),
+                    auxiliary_tasks=auxiliary_tasks)
 
         for batch_urls in batch:
             l.extend(batch_urls)

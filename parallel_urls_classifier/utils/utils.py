@@ -113,15 +113,25 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
 
             continue
 
-        # TODO if we add another version to "urls" with languages instead of use full diffrent version of the data?
         urls.append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
                                                                 #  (or other special tokens) since they are automatically added
                                                                 #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
         initial_urls.append((url[0], url[1]))
 
+        if task_language_identification:
+            src_url_lang, trg_url_lang = url[2], url[3]
+
+            urls.append(f"{src_url_lang}{tokenizer.sep_token}{trg_url_lang}{tokenizer.sep_token}"
+                        f"{src_url}{tokenizer.sep_token}{trg_url}") # We first add the lang ids in order to avoid to lose them if
+                                                                    #  the URLs are too long
+
         if add_symmetric_samples:
             urls.append(f"{trg_url}{tokenizer.sep_token}{src_url}")
             initial_urls.append((url[1], url[0]))
+
+            if task_language_identification:
+                urls.append(f"{trg_url_lang}{tokenizer.sep_token}{src_url_lang}{tokenizer.sep_token}"
+                            f"{trg_url}{tokenizer.sep_token}{src_url}")
 
         if len(urls) >= batch_size:
             if return_urls:
@@ -403,9 +413,6 @@ def get_data_from_batch(batch, block_size, device):
     attention_mask = batch["url_attention_mask"]
     labels = batch["labels"]
 
-    # Tasks
-    task_language_identification = "labels_task_language_identification" in batch
-
     # Split in batch_size batches
     start = 0
     current_batch_size = labels.reshape(-1).shape[0]
@@ -423,10 +430,6 @@ def get_data_from_batch(batch, block_size, device):
                 "urls": _urls,
                 "attention_mask": _attention_mask,
             }
-
-            if task_language_identification:
-                for feature in ("urls_task_language_identification", "attention_mask_task_language_identification", "labels_task_language_identification"):
-                    inputs_and_outputs[feature] = batch[feature][start:end].to(device)
 
             yield inputs_and_outputs
 
