@@ -135,8 +135,11 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
 
         return src_url, trg_url, hit, f"{side}/{_side}"
 
+    # TODO fix random state: each process has different state
+    #  Use something similar to https://joblib.readthedocs.io/en/latest/auto_examples/parallel_random_state.html#fixing-the-random-state-to-obtain-deterministic-results
+    # TODO can we optimize the following line in the used methods?
     _results = \
-        joblib.Parallel(n_jobs=n_jobs)( \
+        joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
         joblib.delayed(process)(src_url, trg_url, idx) for src_url, trg_url in parallel_urls for idx in range(limit_max_alignments_per_url))
 
     for _src_url, _trg_url, hit, side_strategy in _results:
@@ -172,8 +175,10 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
 
         return tokenized_src_url, tokenized_trg_url
 
+    # TODO fix random state: each process has different state
+    #  Use something similar to https://joblib.readthedocs.io/en/latest/auto_examples/parallel_random_state.html#fixing-the-random-state-to-obtain-deterministic-results
     _results = \
-        joblib.Parallel(n_jobs=n_jobs)( \
+        joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
         joblib.delayed(apply_function_to_negative_sample_tokenized_urls)(src_url, trg_url, run, "remove_random_tokens") \
             for src_url, trg_url in parallel_urls for _ in range(limit_max_alignments_per_url))
 
@@ -199,20 +204,26 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
         return tokenized_src_url, tokenized_trg_url
 
-    tokenized_urls = [tokenize_urls(src_url, trg_url) for src_url, trg_url in parallel_urls]
+    tokenized_urls = \
+        joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
+        joblib.delayed(tokenize_urls)(src_url, trg_url) for src_url, trg_url in parallel_urls)
 
     def get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url):
-        tokenized_src_url = tokenized_urls[idx_pair_src_url][0]
-        tokenized_trg_url = tokenized_urls[idx_pair_trg_url][1]
-        metric1 = len(set(tokenized_src_url).intersection(set(tokenized_trg_url)))
-        metric2 = len(set(src_url).intersection(set(trg_url)))
+        tokenized_src_url = set(tokenized_urls[idx_pair_src_url][0])
+        tokenized_trg_url = set(tokenized_urls[idx_pair_trg_url][1])
+        src_url_set = set(src_url)
+        trg_url_set = set(trg_url)
+
+        # Apply Jaccard
+        metric1 = len(set.intersection(tokenized_src_url, tokenized_trg_url)) / len(set.union(tokenized_src_url, tokenized_trg_url))
+        metric2 = len(set.intersection(src_url_set, trg_url_set)) / len(set.union(src_url_set, trg_url_set))
 
         return trg_url, (metric1, metric2)
 
     for idx_pair_src_url, parallel_urls_pair in enumerate(parallel_urls):
         src_url, _ = parallel_urls_pair
         _results = \
-            joblib.Parallel(n_jobs=n_jobs)( \
+            joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
             joblib.delayed(get_metrics)(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url) \
                 for idx_pair_trg_url, (_, trg_url) in enumerate(parallel_urls) if idx_pair_src_url != idx_pair_trg_url)
         sorted_trg_parallel_urls_dict = sorted(_results, key=lambda item: (item[1][0], item[1][1]), reverse=True)
@@ -230,15 +241,14 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
     return list(urls)
 
-def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10, n_jobs=1):
-    #idxs = range(len(parallel_urls))
+def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
+    idxs = range(len(parallel_urls)) # Do not convert to list for performance reasons!
     urls = set()
 
-    def get_random_trg_urls(idx1):
-        _urls = set()
+    for idx in idxs:
         max_alignments_per_url = limit_max_alignments_per_url
         k = min(limit_max_alignments_per_url, len(parallel_urls))
-        sample_idxs = random.sample(range(len(parallel_urls)), k) # https://joblib.readthedocs.io/en/latest/auto_examples/parallel_random_state.html
+        sample_idxs = random.sample(idxs, k)
 
         for sort_idx2, idx2 in enumerate(sample_idxs, 1):
             if idx1 == idx2:
@@ -250,21 +260,10 @@ def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10, 
             if sort_idx2 > max_alignments_per_url:
                 break
 
-            src_pair = parallel_urls[idx1]
-            trg_pair = parallel_urls[idx2]
-            src_url = src_pair[0]
-            trg_url = trg_pair[1]
+            src_url = parallel_urls[idx1][0]
+            trg_url = parallel_urls[idx2][1]
 
-            _urls.add((src_url, trg_url))
-
-        return _urls
-
-    _results = \
-        joblib.Parallel(n_jobs=n_jobs)( \
-        joblib.delayed(get_random_trg_urls)(idx) for idx in range(len(parallel_urls)))
-
-    for _r in _results:
-        urls.update(_r)
+            urls.add((src_url, trg_url))
 
     common_last_checks(urls, parallel_urls)
 

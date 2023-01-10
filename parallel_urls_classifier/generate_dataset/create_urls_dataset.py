@@ -24,7 +24,7 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
     no_non_parallel_domains = 0
     last_perc_shown = -1
 
-    with open(non_parallel_filename, 'a') as f:
+    with open(non_parallel_filename, 'w') as f:
         for idx, domain in enumerate(target_domains):
             parallel_urls_domain = list(parallel_urls[domain]) # WARNING: you will need to set PYTHONHASHSEED if you want deterministic results across different executions
             negative_samples = unary_generator(parallel_urls_domain)
@@ -35,7 +35,7 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
             _finished_perc = (idx + 1) * 100.0 / no_parallel_domains
             finished_perc = int(_finished_perc)
 
-            # Show every 0.02%
+            # Show every logging_cte %
             if finished_perc % logging_cte == 0 and finished_perc != last_perc_shown:
                 logging.info("%.2f %% of negative samples generated (%d out of %d domains were already processed): %d negative samples loaded",
                              _finished_perc, idx + 1, no_parallel_domains, no_non_parallel_urls)
@@ -73,7 +73,7 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
             _finished_perc = (idx + 1) * 100.0 / no_parallel_domains
             finished_perc = int(_finished_perc)
 
-            # Show every (logging_cte / 100) %
+            # Show every logging_cte %
             if finished_perc % logging_cte == 0 and finished_perc != last_perc_shown:
                 logging.info("%.2f %% of positive samples generated (%d out of %d domains were already processed): %d positive samples loaded",
                              _finished_perc, idx + 1, no_parallel_domains, no_parallel_urls)
@@ -96,16 +96,14 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
             continue
 
-        with open(non_parallel_filename_gen, 'w') as f:
-            # Create file and remove content if exists
-            pass
-
         if generator != "none":
             extra_kwargs = {}
             extra_kwargs["n_jobs"] = n_jobs
 
             if generator == "random":
                 negative_samples_generator_f = nsg.get_negative_samples_random
+
+                del extra_kwargs["n_jobs"]
             elif generator == "bow-overlapping-metric":
                 negative_samples_generator_f = nsg.get_negative_samples_intersection_metric
             elif generator == "remove-random-tokens":
@@ -143,7 +141,8 @@ def main(args):
     seed = args.seed
     max_negative_samples_alignments = args.max_negative_samples_alignments
     check_same = args.check_same
-    train_perc, dev_perc, test_perc = args.sets_percentage
+    sets_absolute_instead_of_relative = args.sets_absolute_instead_of_relative
+    sets_percentage = args.sets_percentage
     src_freq_file = args.src_freq_file
     trg_freq_file = args.trg_freq_file
     process_even_if_files_exist = args.process_even_if_files_exist
@@ -151,11 +150,18 @@ def main(args):
 
     other_args = {"src_freq_file": src_freq_file,
                   "trg_freq_file": trg_freq_file}
+    train_perc, dev_perc, test_perc = sets_percentage
+    sets_quantities_with_minus_one = -1
 
     if not isinstance(negative_samples_generator, list):
         negative_samples_generator = list(negative_samples_generator)
 
-    if not np.isclose(sum(args.sets_percentage), 1.0):
+    if sets_absolute_instead_of_relative:
+        sets_quantities_with_minus_one = sets_percentage.count(-1)
+
+        if sets_quantities_with_minus_one > 1:
+            raise Exception("The provided sets quantities have the value -1 >1 times and only it is allowed [0,1] times")
+    elif not np.isclose(sum(sets_percentage), 1.0):
         raise Exception("The provided sets percentages do not sum up to 1.0")
 
     if "PYTHONHASHSEED" not in os.environ:
@@ -226,14 +232,52 @@ def main(args):
 
         no_parallel_urls += 1
 
+    len_domains = len(parallel_urls.keys())
+
     logging.info("Skipped lines: %d out of %d (%.2f %%)", skipped_urls, idx + 1, skipped_urls * 100.0 / (idx + 1))
     logging.info("Loaded URLs (positive samples): %d", no_parallel_urls)
-    logging.info("Total domains (positive samples): %d", len(parallel_urls.keys()))
+    logging.info("Total domains (positive samples): %d", len_domains)
 
-    train_domains, train_max_idx = set(), int(train_perc * len(parallel_urls.keys()))
-    dev_domains, dev_max_idx = set(), train_max_idx + int(dev_perc * len(parallel_urls.keys()))
-    test_domains, test_max_idx = set(), len(parallel_urls.keys())
-    idx = 0
+    if sets_absolute_instead_of_relative:
+        if sets_quantities_with_minus_one == 1:
+            # Update the set quantity
+            for i, v in enumerate(sets_percentage):
+                if v == -1:
+                    new_value = sum(sets_percentage) - sets_percentage[i]
+                    label = "train" if i == 0 else "dev" if i == 1 else "test" if i == 2 else "UNKNOWN"
+
+                    if new_value < 1:
+                        raise Exception(f"Not enough web domains ({len_domains}): you set {sets_percentage} and "
+                                        f"{new_value} ({label} set) <= 0 but should be >")
+
+                    sets_percentage[i] = new_value
+
+            train_perc, dev_perc, test_perc = sets_percentage
+
+        sum_sets = sum(sets_percentage)
+
+        if sum_sets != len_domains:
+            raise Exception(f"The provided sets quantities do not sum up to the total number of domains: {sum_sets} != {len_domains}")
+
+        train_max_idx = 0 + train_perc
+        dev_max_idx = train_max_idx + dev_perc
+        test_max_idx = dev_max_idx + test_perc
+    else:
+        train_max_idx = 0 + int(train_perc * len_domains)
+        dev_max_idx = train_max_idx + int(dev_perc * len_domains)
+        test_max_idx = len_domains # test_perc is not used since it is sure that the percentages sum up to 1.0 and this method might
+                                   #  leave some domain out
+
+        if np.isclose(test_perc, 0.0) and test_max_idx > dev_max_idx:
+            # Special behaviour needed due to precision problems
+            logging.warning("Since test percentage was set to 0 but some domains were added, they are going to be used in the dev set instead")
+
+            dev_max_idx += test_max_idx - dev_max_idx
+            test_max_idx = dev_max_idx
+
+    train_domains = set()
+    dev_domains = set()
+    test_domains = set()
     all_domains = list(parallel_urls.keys())
 
     random.shuffle(all_domains) # Shuffle domains in order to avoid dependency between the data and the order it was provided
@@ -245,12 +289,15 @@ def main(args):
             dev_domains.add(domain)
         elif idx < test_max_idx:
             test_domains.add(domain)
+        else:
+            logging.error("Domain is not going to be processed in iteration %d: %s", idx, domain)
 
     logging.info("Train domains: %d", len(train_domains))
     logging.info("Dev domains: %d", len(dev_domains))
     logging.info("Test domains: %d", len(test_domains))
 
-    assert len(train_domains) + len(dev_domains) + len(test_domains) == len(parallel_urls.keys()), "Not all the domains have been set to a set"
+    if len(train_domains) + len(dev_domains) + len(test_domains) != len_domains:
+        raise Exception("Not all the domains have been set to a set")
 
     common_kwargs = {
         "negative_samples_generator": negative_samples_generator,
@@ -261,48 +308,44 @@ def main(args):
         "n_jobs": n_jobs,
     }
 
-    if len(train_domains) == 0 or len(dev_domains) == 0 or len(test_domains) == 0:
-        logging.warning("Some set has been detected to contain 0 domains (train, dev, test: %d, %d, %d): merging all the domains")
+    # Generate positive and negative samples for train, dev and test sets
+    store_dataset(parallel_urls, train_domains,
+                  f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train",
+                  logging_cte=5, **common_kwargs)
+    store_dataset(parallel_urls, dev_domains,
+                  f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev",
+                  logging_cte=10, **common_kwargs)
+    store_dataset(parallel_urls, test_domains,
+                  f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test",
+                  logging_cte=10, **common_kwargs)
 
-        all_parallel_urls = set()
-        all_domain = "all"
-
-        for domain in train_domains.union(dev_domains).union(test_domains):
-            all_parallel_urls.update(parallel_urls[domain])
-
-        all_parallel_urls = list(all_parallel_urls)
-
-        logging.info("Processing %d URL pairs at once", len(all_parallel_urls))
-
-        train_max_idx = int(train_perc * len(all_parallel_urls))
-        dev_max_idx = train_max_idx + int(dev_perc * len(all_parallel_urls))
-        test_max_idx = len(all_parallel_urls)
-
-        store_dataset({all_domain: all_parallel_urls[0:train_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=5, **common_kwargs)
-        store_dataset({all_domain: all_parallel_urls[train_max_idx:dev_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=10, **common_kwargs)
-        store_dataset({all_domain: all_parallel_urls[dev_max_idx:test_max_idx]}, [all_domain], f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=10, **common_kwargs)
-    else:
-        store_dataset(parallel_urls, train_domains, f"{output_file_urls_prefix}.parallel.train", f"{output_file_urls_prefix}.non-parallel.train", logging_cte=5, **common_kwargs)
-        store_dataset(parallel_urls, dev_domains, f"{output_file_urls_prefix}.parallel.dev", f"{output_file_urls_prefix}.non-parallel.dev", logging_cte=10, **common_kwargs)
-        store_dataset(parallel_urls, test_domains, f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test", logging_cte=10, **common_kwargs)
+    logging.info("Done")
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Create URLs dataset from parallel samples")
 
+    sets_absolute_instead_of_relative = "--sets-absolute-instead-of-relative" in sys.argv[1:]
+
     parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt', errors="backslashreplace"), help="Input TSV file with parallel URLs")
     parser.add_argument('output_files_prefix', help="Output files prefix")
 
     parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens", "replace-freq-words"],
-                        default="random", nargs='+', help="Strategy to create negative samples from positive samples")
+                        default="random", nargs='+',
+                        help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")
     parser.add_argument('--do-not-generate-positive-samples', action='store_true', help="Do not generate positive samples. Useful if you only want to generate negative samples")
     parser.add_argument('--do-not-generate-negative-samples', action='store_true', help="Do not generate negative samples. Useful if you only want to split the data in train/dev/test")
     parser.add_argument('--check-same', choices=["none", "authority", "subdomain", "domain", "tld"], default="domain", help="Skip pair of URLs according to the specified configuration")
-    parser.add_argument('--sets-percentage', type=float, nargs=3, default=[0.8, 0.1, 0.1], help="Train, dev and test percentages")
+    parser.add_argument('--sets-percentage', type=int if sets_absolute_instead_of_relative else float, nargs=3, default=None if sets_absolute_instead_of_relative else [0.8, 0.1, 0.1],
+                        required=sets_absolute_instead_of_relative,
+                        help="Train, dev and test percentages (by default, relative percentages, but if --sets-absolute-instead-of-relative is set, absolute quantities are expected)")
     parser.add_argument('--src-freq-file', help="Src monolingual freq dictionary. Used if 'replace-freq-words' is in --generator-technique. Expected format: occurrences<tab>word")
     parser.add_argument('--trg-freq-file', help="Src monolingual freq dictionary. Used if 'replace-freq-words' is in --generator-technique. Expected format: occurrences<tab>word")
     parser.add_argument('--process-even-if-files-exist', action='store_true', help="When output files exist, they are not generated. If set, they will be generated even if the files exist")
+    parser.add_argument('--sets-absolute-instead-of-relative', action='store_true',
+                        help="--sets-percentage option will accept an absolute number of web domains instead of a percentage of them. A value of -1 will be accepted in one or zero "
+                             "positions and it will mean to inference the number of web domains")
 
     parser.add_argument('--n-jobs', type=int, default=24,
                         help="Number of parallel jobs to use (-n means to use all CPUs - n + 1)")
