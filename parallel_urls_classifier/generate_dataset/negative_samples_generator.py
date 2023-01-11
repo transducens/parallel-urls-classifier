@@ -176,7 +176,7 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                         lambda s, t: run(s, t, side=_side, min_replacements=min_replacements))
 
                     if hit:
-                        _results.append((_src_url, _trg_url, hit, side))
+                        _results.append((_src_url, _trg_url))
 
                         hits += 1
                     else:
@@ -185,25 +185,21 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
 
                             _break = True # The "all" strategy needs all hits, not any
 
-                    if idx == limit_max_alignments_per_url and len(_results) == 0:
-                        _results.append((_src_url, _trg_url, hit, side))
-
                     if _break:
                         break
-
-                if side == "all-any" and hits > 0:
-                    break
             else:
                 _src_url, _trg_url, _, hit = apply_function_to_negative_sample_tokenized_urls(
                     src_url, trg_url,
                     lambda s, t: run(s, t, side=side, min_replacements=min_replacements))
 
-                if hit or idx == limit_max_alignments_per_url:
-                    _results.append((_src_url, _trg_url, hit, side))
-
-                    break
+                if hit:
+                    _results.append((_src_url, _trg_url))
 
             results.extend(_results)
+
+        if len(results) == 0:
+            logging.warning("Couldn't find words with the same frequency: couldn't generate negative sample for the provided URLs with the side '%s': ('%s', '%s')",
+                            side, str(_src_url), str(_trg_url))
 
         return results
 
@@ -213,14 +209,8 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
             for src_url, trg_url in parallel_urls)
 
     for _r in _results:
-        for _r2 in _r:
-            _src_url, _trg_url, hit, side_strategy = _r2
-
-            if hit:
-                urls.add((_src_url, _trg_url))
-            else:
-                logging.warning("Couldn't find words with the same frequency: couldn't generate negative sample for the provided URLs with the side '%s': ('%s', '%s')",
-                                side_strategy, str(_src_url), str(_trg_url))
+        for _src_url, _trg_url in _r:
+            urls.add((_src_url, _trg_url))
 
     common_last_checks(urls, parallel_urls)
 
