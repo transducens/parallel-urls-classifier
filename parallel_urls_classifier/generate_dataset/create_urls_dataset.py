@@ -38,14 +38,16 @@ def store_negative_samples(parallel_urls, non_parallel_filename, target_domains,
             _finished_perc = (idx + 1) * 100.0 / no_parallel_domains
             finished_perc = int(_finished_perc)
 
-            # Show every logging_cte %
-            if finished_perc % logging_cte == 0 and finished_perc != last_perc_shown:
-                logging.info("%.2f %% of negative samples generated (%d out of %d domains were already processed): %d negative samples loaded",
-                             _finished_perc, idx + 1, no_parallel_domains, no_non_parallel_urls)
-                last_perc_shown = finished_perc
-
+            # Update statistics
             no_non_parallel_domains += 1 if len(negative_samples) != 0 else 0
             no_non_parallel_urls += len(negative_samples)
+
+            # Show every logging_cte %
+            if finished_perc % logging_cte == 0 and finished_perc != last_perc_shown:
+                logging.info("%.2f %% of negative samples generated (%d out of %d domains were already processed): %d negative samples",
+                             _finished_perc, idx + 1, no_parallel_domains, no_non_parallel_urls)
+
+                last_perc_shown = finished_perc
 
     return no_non_parallel_urls, no_non_parallel_domains
 
@@ -78,8 +80,9 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
 
             # Show every logging_cte %
             if finished_perc % logging_cte == 0 and finished_perc != last_perc_shown:
-                logging.info("%.2f %% of positive samples generated (%d out of %d domains were already processed): %d positive samples loaded",
+                logging.info("%.2f %% of positive samples generated (%d out of %d domains were already processed): %d positive samples",
                              _finished_perc, idx + 1, no_parallel_domains, no_parallel_urls)
+
                 last_perc_shown = finished_perc
 
     if generate_positive_samples:
@@ -247,12 +250,12 @@ def main(args):
             # Update the set quantity
             for i, v in enumerate(sets_percentage):
                 if v == -1:
-                    new_value = sum(sets_percentage) - sets_percentage[i]
+                    new_value = len_domains - (sum(sets_percentage) - sets_percentage[i])
                     label = "train" if i == 0 else "dev" if i == 1 else "test" if i == 2 else "UNKNOWN"
 
-                    if new_value < 1:
+                    if new_value < 0:
                         raise Exception(f"Not enough web domains ({len_domains}): you set {sets_percentage} and "
-                                        f"{new_value} ({label} set) <= 0 but should be >")
+                                        f"{new_value} ({label} set) < 0 but should be >=")
 
                     sets_percentage[i] = new_value
 
@@ -261,7 +264,7 @@ def main(args):
         sum_sets = sum(sets_percentage)
 
         if sum_sets != len_domains:
-            raise Exception(f"The provided sets quantities do not sum up to the total number of domains: {sum_sets} != {len_domains}")
+            raise Exception(f"The provided sets quantities do not sum up to the total number of domains: {sets_percentage} -> {sum_sets} != {len_domains}")
 
         train_max_idx = 0 + train_perc
         dev_max_idx = train_max_idx + dev_perc
