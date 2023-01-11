@@ -49,40 +49,43 @@ class WordFreqDistDoubleLinked(WordFreqDist):
             raise Exception("Something weird happened...")
 
     def get_words_for_freq(self, freq):
-        if freq in self.freq_words:
+        try:
             return self.freq_words[freq]
-        else:
+        except KeyError:
             return None
 
     def get_words_for_occs(self, occs, exact=True, fixed_limit=None):
-        if occs in self.occs_words:
+        try:
             return self.occs_words[occs]
-        elif not exact and occs > 0:
-            if fixed_limit is not None:
-                limit = fixed_limit
-            else:
-                limit = int(math.log(occs, 2) + occs / 100) # small limit with small values (1 <= x <= 100) and
-                                                            #  more flexible with high values (x > 100)
-            count = 1
-
-            while count <= limit:
-                non_exact_occs = occs + count
-
-                # Taking care of boundaries
-                if count > 0:
-                    non_exact_occs = min(non_exact_occs, self.max_occs)
-
-                    # Update count: change to negative
-                    count *= -1
+        except KeyError:
+            if not exact and occs > 0:
+                if fixed_limit is not None:
+                    limit = fixed_limit
                 else:
-                    non_exact_occs = max(non_exact_occs, self.min_occs)
+                    limit = int(math.log(occs, 2) + occs / 100) # small limit with small values (1 <= x <= 100) and
+                                                                #  more flexible with high values (x > 100)
+                count = 1
 
-                    # Update count: change to positive and update
-                    count *= -1
-                    count += 1
+                while count <= limit:
+                    non_exact_occs = occs + count
 
-                # Hit?
-                if non_exact_occs in self.occs_words:
-                    return self.occs_words[non_exact_occs]
+                    # Taking care of boundaries
+                    if count > 0:
+                        non_exact_occs = min(non_exact_occs, self.max_occs)
+
+                        # Update count: change to negative
+                        count *= -1
+                    else:
+                        non_exact_occs = max(non_exact_occs, self.min_occs)
+
+                        # Update count: change to positive and update
+                        count *= -1
+                        count += 1
+
+                    # Hit?
+                    try:
+                        return self.occs_words[non_exact_occs]
+                    except KeyError:
+                        pass
 
         return None

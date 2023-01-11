@@ -64,49 +64,37 @@ class WordFreqDist(object):
             return 4
 
     def word_is_in_q1(self, word):
-        if word in self.word_freqs:
-            val_word = self.word_freqs[word]
-
-            return val_word <= self.q1limit
-        else:
+        try:
+            return self.word_freqs[word] <= self.q1limit
+        except KeyError:
             return False
 
     def word_is_in_q2(self, word):
-        if word in self.word_freqs:
-            val_word = self.word_freqs[word]
-
-            return val_word <= self.q2limit
-        else:
+        try:
+            return self.word_freqs[word] <= self.q2limit
+        except KeyError:
             return False
 
     def word_is_in_q3(self, word):
-        if word in self.word_freqs:
-            val_word = self.word_freqs[word]
-
-            return val_word <= self.q3limit
-        else:
+        try:
+            return self.word_freqs[word] <= self.q3limit
+        except KeyError:
             return False
 
     def word_is_in_q4(self, word):
-        if word in self.word_freqs:
-            val_word = self.word_freqs[word]
-
-            return val_word > self.q3limit
-        else:
+        try:
+            return self.word_freqs[word] > self.q3limit
+        except KeyError:
             return True
 
     def get_word_freq(self, word):
-        word = word.lower()
-
-        if word in self.word_freqs:
-            return self.word_freqs[word]
-        else:
+        try:
+            return self.word_freqs[word.lower()]
+        except KeyError:
             return self.min_freq
 
     def get_word_occs(self, word):
-        word = word.lower()
-
-        if word in self.word_occs:
-            return self.word_occs[word]
-        else:
+        try:
+            return self.word_occs[word.lower()]
+        except KeyError:
             return 0

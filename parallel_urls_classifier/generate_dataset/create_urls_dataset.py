@@ -115,6 +115,7 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
                 extra_kwargs["src_monolingual_file"] = other_args["src_freq_file"]
                 extra_kwargs["trg_monolingual_file"] = other_args["trg_freq_file"]
                 extra_kwargs["min_replacements"] = 2
+                extra_kwargs["side"] = "all-any"
                 negative_samples_generator_f = nsg.get_negative_samples_replace_freq_words
             else:
                 logging.warning("Generator %d: unknown negative samples generator (%s): skipping", idx, generator)

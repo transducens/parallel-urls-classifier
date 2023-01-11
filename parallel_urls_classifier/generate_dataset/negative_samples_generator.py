@@ -23,19 +23,19 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
     """
     Original function from https://github.com/bitextor/bicleaner-ai/blob/master/bicleaner_ai/training.py
     """
-    if side not in ("src", "trg", "both", "all"):
-        raise Exception(f"'side' must be in ('src', 'trg', 'both'): '{side}'")
+    if side not in ("src", "trg", "both", "all", "all-any"):
+        raise Exception(f"'side' must be in ('src', 'trg', 'both', 'all', 'all-any'): '{side}'")
 
     if side == "src" and not utils.exists(src_monolingual_file):
         raise Exception(f"Src monolingual file does not exist: '{src_monolingual_file}'")
     elif side == "trg" and not utils.exists(trg_monolingual_file):
         raise Exception(f"Trg monolingual file does not exist: '{trg_monolingual_file}'")
-    elif side in ("both", "all") and (not utils.exists(src_monolingual_file) or not utils.exists(trg_monolingual_file)):
+    elif side in ("both", "all", "all-any") and (not utils.exists(src_monolingual_file) or not utils.exists(trg_monolingual_file)):
         raise Exception(f"Either src, trg or both monolingual files do not exist: ('{src_monolingual_file}', '{trg_monolingual_file}')")
 
-    if side in ("src", "both", "all"):
+    if side in ("src", "both", "all", "all-any"):
         double_linked_freqs_src = WordFreqDistDoubleLinked(src_monolingual_file)
-    if side in ("trg", "both", "all"):
+    if side in ("trg", "both", "all", "all-any"):
         double_linked_freqs_trg = WordFreqDistDoubleLinked(trg_monolingual_file)
 
     urls = set()
@@ -134,34 +134,63 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
 
     side_priority = ("trg", "src", "both") # Priority for modifying src, trg or both URLs -> the priority is important since it will depend on 'limit_max_alignments_per_url'
 
-    def process(src_url, trg_url, idx, level, seed=None):
+    def process(src_url, trg_url, level, seed=None):
         utils.set_up_logging(level=level)
 
         if seed is not None:
             random.seed(seed)
 
         _side = side
+        results = []
 
-        if side == "all":
-            _side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
+        for idx in range(limit_max_alignments_per_url, 1):
+            if side in ("all", "all-any"):
+                for idx2 in range(len(side_priority)):
+                    _break = False
+                    _side = side_priority[idx2 % len(side_priority)] # Take a side taking into account the specified priority
+                    _src_url, _trg_url, _, hit = apply_function_to_negative_sample_tokenized_urls(
+                        src_url, trg_url,
+                        lambda s, t: run(s, t, side=_side, min_replacements=min_replacements))
 
-        _src_url, _trg_url, _, hit = apply_function_to_negative_sample_tokenized_urls(
-            src_url, trg_url,
-            lambda s, t: run(s, t, side=_side, min_replacements=min_replacements))
+                    if hit:
+                        results.append((_src_url, _trg_url, hit, side))
+                    else:
+                        if side == "all":
+                            results = []
 
-        return _src_url, _trg_url, hit, f"{side}/{_side}"
+                            _break = True # The "all" strategy needs all hits, not any
+
+                    if idx == limit_max_alignments_per_url and len(results) == 0:
+                        results.append((_src_url, _trg_url, hit, side))
+
+                    if _break:
+                        break
+            else:
+                _src_url, _trg_url, _, hit = apply_function_to_negative_sample_tokenized_urls(
+                    src_url, trg_url,
+                    lambda s, t: run(s, t, side=_side, min_replacements=min_replacements))
+
+                if hit or idx == limit_max_alignments_per_url:
+                    results.append((_src_url, _trg_url, hit, side))
+
+                    break
+
+        return results
 
     _results = \
         joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-        joblib.delayed(process)(src_url, trg_url, idx, logging.root.level, seed=random.randint(~sys.maxsize, sys.maxsize)) \
-            for src_url, trg_url in parallel_urls for idx in range(limit_max_alignments_per_url))
+        joblib.delayed(process)(src_url, trg_url, logging.root.level, seed=random.randint(~sys.maxsize, sys.maxsize)) \
+            for src_url, trg_url in parallel_urls)
 
-    for _src_url, _trg_url, hit, side_strategy in _results:
-        if hit:
-            urls.add((_src_url, _trg_url))
-        else:
-            logging.warning("Couldn't find words with the same frequency: couldn't generate negative sample for the provided URLs with the side '%s': ('%s', '%s')",
-                            side_strategy, str(_src_url), str(_trg_url))
+    for _r in _results:
+        for _r2 in _r:
+            _src_url, _trg_url, hit, side_strategy = _r2
+
+            if hit:
+                urls.add((_src_url, _trg_url))
+            else:
+                logging.warning("Couldn't find words with the same frequency: couldn't generate negative sample for the provided URLs with the side '%s': ('%s', '%s')",
+                                side_strategy, str(_src_url), str(_trg_url))
 
     common_last_checks(urls, parallel_urls)
 
