@@ -54,12 +54,15 @@ class WordFreqDistDoubleLinked(WordFreqDist):
         else:
             return None
 
-    def get_words_for_occs(self, occs, exact=True):
+    def get_words_for_occs(self, occs, exact=True, fixed_limit=None):
         if occs in self.occs_words:
             return self.occs_words[occs]
         elif not exact and occs > 0:
-            limit = int(math.log(occs, 2) + occs / 100) # small limit with small values (1 <= x <= 100) and
-                                                        #  more flexible with high values (x > 100)
+            if fixed_limit is not None:
+                limit = fixed_limit
+            else:
+                limit = int(math.log(occs, 2) + occs / 100) # small limit with small values (1 <= x <= 100) and
+                                                            #  more flexible with high values (x > 100)
             count = 1
 
             while count <= limit:

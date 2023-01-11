@@ -91,7 +91,7 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                         if not alternatives:
                             # Let's try a non-exact approach
                             woccs = double_linked_freqs.get_word_occs(w)
-                            alternatives = double_linked_freqs.get_words_for_occs(woccs, exact=False)
+                            alternatives = double_linked_freqs.get_words_for_occs(woccs, exact=False, fixed_limit=10 if woccs > 100 else None)
 
                             # Avoid replace with the same word
                             if alternatives and w.lower() in alternatives:
@@ -134,7 +134,9 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
 
     side_priority = ("trg", "src", "both") # Priority for modifying src, trg or both URLs -> the priority is important since it will depend on 'limit_max_alignments_per_url'
 
-    def process(src_url, trg_url, idx, seed=None):
+    def process(src_url, trg_url, idx, level, seed=None):
+        utils.set_up_logging(level=level)
+
         if seed is not None:
             random.seed(seed)
 
@@ -143,16 +145,15 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
         if side == "all":
             _side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
 
-        _src_url, _trg_url, hit = apply_function_to_negative_sample_tokenized_urls(
+        _src_url, _trg_url, _, hit = apply_function_to_negative_sample_tokenized_urls(
             src_url, trg_url,
-            lambda s, t: run(s, t, side=_side, min_replacements=min_replacements),
-            "replace_freq_words")
+            lambda s, t: run(s, t, side=_side, min_replacements=min_replacements))
 
         return _src_url, _trg_url, hit, f"{side}/{_side}"
 
     _results = \
         joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-        joblib.delayed(process)(src_url, trg_url, idx, seed=random.randint(~sys.maxsize, sys.maxsize)) \
+        joblib.delayed(process)(src_url, trg_url, idx, logging.root.level, seed=random.randint(~sys.maxsize, sys.maxsize)) \
             for src_url, trg_url in parallel_urls for idx in range(limit_max_alignments_per_url))
 
     for _src_url, _trg_url, hit, side_strategy in _results:
@@ -190,11 +191,13 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
 
     _results = \
         joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-        joblib.delayed(apply_function_to_negative_sample_tokenized_urls)(src_url, trg_url, run, "remove_random_tokens", seed=random.randint(~sys.maxsize, sys.maxsize)) \
+        joblib.delayed(apply_function_to_negative_sample_tokenized_urls)(src_url, trg_url, run, seed=random.randint(~sys.maxsize, sys.maxsize),
+                       level=logging.root.level) \
             for src_url, trg_url in parallel_urls for _ in range(limit_max_alignments_per_url))
 
-    for _src_url, _trg_url in _results:
-        urls.add((_src_url, _trg_url))
+    for _src_url, _trg_url, hit in _results:
+        if hit:
+            urls.add((_src_url, _trg_url))
 
     common_last_checks(urls, parallel_urls)
 
@@ -207,7 +210,9 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
     urls = set()
 
-    def tokenize_urls(src_url, trg_url):
+    def tokenize_urls(src_url, trg_url, level):
+        utils.set_up_logging(level=level)
+
         resource_idx_src_url = utils.get_idx_resource(src_url) if apply_resource_forward else 0
         resource_idx_trg_url = utils.get_idx_resource(trg_url) if apply_resource_forward else 0
         tokenized_src_url = tokenize(src_url[resource_idx_src_url:])
@@ -217,9 +222,11 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
     tokenized_urls = \
         joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-        joblib.delayed(tokenize_urls)(src_url, trg_url) for src_url, trg_url in parallel_urls)
+        joblib.delayed(tokenize_urls)(src_url, trg_url, logging.root.level) for src_url, trg_url in parallel_urls)
 
-    def get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url):
+    def get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url, level):
+        utils.set_up_logging(level=level)
+
         tokenized_src_url = set(tokenized_urls[idx_pair_src_url][0])
         tokenized_trg_url = set(tokenized_urls[idx_pair_trg_url][1])
         src_url_set = set(src_url)
@@ -235,7 +242,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
         src_url, _ = parallel_urls_pair
         _results = \
             joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-            joblib.delayed(get_metrics)(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url) \
+            joblib.delayed(get_metrics)(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url, logging.root.level) \
                 for idx_pair_trg_url, (_, trg_url) in enumerate(parallel_urls) if idx_pair_src_url != idx_pair_trg_url)
         sorted_trg_parallel_urls_dict = sorted(_results, key=lambda item: (item[1][0], item[1][1]), reverse=True)
 
@@ -256,7 +263,7 @@ def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
     idxs = range(len(parallel_urls)) # Do not convert to list for performance reasons!
     urls = set()
 
-    for idx in idxs:
+    for idx1 in idxs:
         max_alignments_per_url = limit_max_alignments_per_url
         k = min(limit_max_alignments_per_url, len(parallel_urls))
         sample_idxs = random.sample(idxs, k)
@@ -329,17 +336,18 @@ def show_info_from_fd(fd, generator, generator_kwargs=None, sample_size=None, pr
 
     return results
 
-def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, strategy_description, apply_resource_forward=True, seed=None):
+def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, apply_resource_forward=True, seed=None, level=None):
     """
     Input is str URLs
     Input of 'func' is src and trg tokenized URLs
     Output of 'func' must be src and trg tuple of lists or strings
     Output is str URLs
     """
+    if level is not None:
+        utils.set_up_logging(level=level)
+
     if seed is not None:
         random.seed(seed)
-
-    h = hash(f"{src_url}\t{trg_url}")
 
     # Get tokens
     resource_idx_src_url = utils.get_idx_resource(src_url) if apply_resource_forward else 0
@@ -359,12 +367,9 @@ def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, str
     src_url_again = src_url_before_resource + (''.join(tokenized_src_url) if isinstance(tokenized_src_url, list) else tokenized_src_url)
     trg_url_again = trg_url_before_resource + (''.join(tokenized_trg_url) if isinstance(tokenized_trg_url, list) else tokenized_trg_url)
 
-    if hash(f"{src_url_again}\t{trg_url_again}") == h:
+    if src_url == src_url_again and trg_url == trg_url_again:
         # Do not add a negative sample which actually is a positive sample
-        logging.warning("Couldn't generate a negative sample using '%s': return original src and trg URLs: ('%s', '%s')",
-                        strategy_description, src_url, trg_url)
-
-        return src_url, trg_url
+        return src_url, trg_url, False, *func_output[2:]
 
     # Replace multiple '/' with one '/' (only the protocol has to have 2 '/')
     protocol_idx_src_url = utils.get_idx_after_protocol(src_url_again)
@@ -372,7 +377,7 @@ def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, str
     src_url_again = src_url_again[:protocol_idx_src_url] + re.sub(r'/+', r'/', src_url_again[protocol_idx_src_url:])
     trg_url_again = trg_url_again[:protocol_idx_trg_url] + re.sub(r'/+', r'/', trg_url_again[protocol_idx_trg_url:])
 
-    return src_url_again, trg_url_again, *func_output[2:]
+    return src_url_again, trg_url_again, True, *func_output[2:]
 
 def get_position_idxs_random(l, percentage=0.5, min_elements=1, reverse=True):
     if percentage < 0.0:

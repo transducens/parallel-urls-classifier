@@ -18,6 +18,9 @@ import parallel_urls_classifier.preprocess as preprocess
 import numpy as np
 from tldextract import extract
 
+# Disable (less verbose) 3rd party logging
+logging.getLogger("filelock").setLevel(logging.WARNING)
+
 def store_negative_samples(parallel_urls, non_parallel_filename, target_domains, unary_generator, logging_cte=2):
     no_parallel_domains = len(target_domains)
     no_non_parallel_urls = 0
@@ -319,7 +322,7 @@ def main(args):
                   f"{output_file_urls_prefix}.parallel.test", f"{output_file_urls_prefix}.non-parallel.test",
                   logging_cte=10, **common_kwargs)
 
-    logging.info("Done")
+    logging.info("Done!")
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
