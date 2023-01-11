@@ -161,16 +161,15 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
 
         results = []
 
-        for idx in range(limit_max_alignments_per_url):
-            idx += 1
+        for _ in range(limit_max_alignments_per_url):
             _results = []
 
             if side in ("all", "all-any"):
                 hits = 0
 
-                for idx2 in range(len(side_priority)):
-                    _break = False
-                    _side = side_priority[idx2 % len(side_priority)] # Take a side taking into account the specified priority
+                # Iterate through all the "side" strategies
+                for idx in range(len(side_priority)):
+                    _side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
                     _src_url, _trg_url, _, hit = apply_function_to_negative_sample_tokenized_urls(
                         src_url, trg_url,
                         lambda s, t: run(s, t, side=_side, min_replacements=min_replacements))
@@ -183,10 +182,7 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                         if side == "all":
                             _results = []
 
-                            _break = True # The "all" strategy needs all hits, not any
-
-                    if _break:
-                        break
+                            break # The "all" strategy needs all hits, not any
             else:
                 _src_url, _trg_url, _, hit = apply_function_to_negative_sample_tokenized_urls(
                     src_url, trg_url,
