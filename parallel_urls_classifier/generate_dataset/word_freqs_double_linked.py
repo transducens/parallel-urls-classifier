@@ -58,8 +58,8 @@ class WordFreqDistDoubleLinked(WordFreqDist):
         if occs in self.occs_words:
             return self.occs_words[occs]
         elif not exact and occs > 0:
-            limit = int(math.log(occs, 2) + occs / 100) # not too limit with small values (1 <= x <= 100) and
-                                                        #  more flexible with high values (x < 100)
+            limit = int(math.log(occs, 2) + occs / 100) # small limit with small values (1 <= x <= 100) and
+                                                        #  more flexible with high values (x > 100)
             count = 1
 
             while count <= limit:
@@ -68,20 +68,18 @@ class WordFreqDistDoubleLinked(WordFreqDist):
                 # Taking care of boundaries
                 if count > 0:
                     non_exact_occs = min(non_exact_occs, self.max_occs)
+
+                    # Update count: change to negative
+                    count *= -1
                 else:
                     non_exact_occs = max(non_exact_occs, self.min_occs)
+
+                    # Update count: change to positive and update
+                    count *= -1
+                    count += 1
 
                 # Hit?
                 if non_exact_occs in self.occs_words:
                     return self.occs_words[non_exact_occs]
-
-                # Update 'count'
-                if count > 0:
-                    # Change to negative
-                    count *= -1
-                else:
-                    # Change to positive and update
-                    count *= -1
-                    count += 1
 
         return None

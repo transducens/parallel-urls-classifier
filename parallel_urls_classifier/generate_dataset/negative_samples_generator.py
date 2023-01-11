@@ -48,59 +48,71 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
         tokenized_url_and_dic = []
         orig_src_url = copy.copy(tokenized_src_url)
         orig_trg_url = copy.copy(tokenized_trg_url)
+        min_hits = 1
+        hits = 0
 
         if side == "src":
             tokenized_url_and_dic = [(tokenized_src_url, double_linked_freqs_src)]
         elif side == "trg":
             tokenized_url_and_dic = [(tokenized_trg_url, double_linked_freqs_trg)]
         elif side == "both":
+            min_hits = 2
             tokenized_url_and_dic = [(tokenized_src_url, double_linked_freqs_src),
                                      (tokenized_trg_url, double_linked_freqs_trg)]
+        else:
+            raise Exception(f"Unknown side strategy: {side}")
 
         # Replace tokens with equal frequency
         for tokenized_url, double_linked_freqs in tokenized_url_and_dic:
             # sentence will modify either tokenized_src_url, tokenized_trg_url or both (i.e. is a reference)
 
             count = 0
+            hit = False
 
             # Loop until any of the chosen words have an alternative, at most 'max_tries' times
-            while True:
+            while count < max_tries and not hit:
                 # Random number of words that will be replaced (at least 1)
-                idx_words_to_replace = get_position_idxs_random(tokenized_url, percentage=percentage_tokens_affected, min_elements=1)
-                total_replacements = 0
+                idx_words_to_replace = get_position_idxs_random(tokenized_url, percentage=percentage_tokens_affected,
+                                                                min_elements=min_replacements)
 
-                for wordpos in idx_words_to_replace:
-                    w = tokenized_url[wordpos] # lower() will be applied by WordFreqDistDoubleLinked instance
-                    wfreq = double_linked_freqs.get_word_freq(w)
-                    alternatives = double_linked_freqs.get_words_for_freq(wfreq)
+                if len(idx_words_to_replace) >= min_replacements:
+                    total_replacements = 0
 
-                    # Avoid replace with the same word
-                    if alternatives and w.lower() in alternatives:
-                        alternatives.remove(w.lower())
-
-                    # Try a non-exact approach, if needed
-                    if not alternatives:
-                        # Let's try a non-exact approach
-                        woccs = double_linked_freqs.get_word_occs(w)
-                        alternatives = double_linked_freqs.get_words_for_occs(woccs, exact=False)
+                    for idx, wordpos in enumerate(idx_words_to_replace, 1):
+                        w = tokenized_url[wordpos] # lower() will be applied by WordFreqDistDoubleLinked instance
+                        wfreq = double_linked_freqs.get_word_freq(w)
+                        alternatives = double_linked_freqs.get_words_for_freq(wfreq)
 
                         # Avoid replace with the same word
                         if alternatives and w.lower() in alternatives:
                             alternatives.remove(w.lower())
 
-                    if alternatives:
-                        alternatives = list(alternatives)
-                        tokenized_url[wordpos] = random.choice(alternatives)
+                        # Try a non-exact approach, if needed
+                        if not alternatives:
+                            # Let's try a non-exact approach
+                            woccs = double_linked_freqs.get_word_occs(w)
+                            alternatives = double_linked_freqs.get_words_for_occs(woccs, exact=False)
 
-                        # Restore starting capital letter
-                        if wordpos == 0 and w[0].isupper():
-                            tokenized_url[wordpos] = tokenized_url[wordpos].capitalize()
+                            # Avoid replace with the same word
+                            if alternatives and w.lower() in alternatives:
+                                alternatives.remove(w.lower())
 
-                        total_replacements += 1
+                        if alternatives:
+                            alternatives = list(alternatives)
+                            tokenized_url[wordpos] = random.choice(alternatives)
 
-                if total_replacements < min_replacements:
-                    tokenized_src_url = orig_src_url
-                    tokenized_trg_url = orig_trg_url
+                            # Restore starting capital letter
+                            if wordpos == 0 and w[0].isupper():
+                                tokenized_url[wordpos] = tokenized_url[wordpos].capitalize()
+
+                            total_replacements += 1
+
+                        if len(idx_words_to_replace) - idx < min_replacements - total_replacements:
+                            break
+
+                    if total_replacements < min_replacements:
+                        tokenized_src_url = orig_src_url
+                        tokenized_trg_url = orig_trg_url
 
                 count += 1
 
@@ -108,39 +120,40 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                     # We got different URLs! 1 hit, at least (we might have had more since 'len(tokenized_url_and_dic) > 1' is possible)
                     # We can't restore original URLs because we might remove the modifications done by
                     #  other loop instance from 'tokenized_url_and_dic' element
-                    break
-                if count >= max_tries:
-                    break
+                    hit = True
 
-        return tokenized_src_url, tokenized_trg_url
+            if hit:
+                hits += 1
+
+        if hits > min_hits:
+            logging.warning("hits > min_hits: %d > %d: it is not expected (side strategy: %s)", hits, min_hits, side)
+
+        necessary_hits = hits >= min_hits
+
+        return tokenized_src_url, tokenized_trg_url, necessary_hits
 
     side_priority = ("trg", "src", "both") # Priority for modifying src, trg or both URLs -> the priority is important since it will depend on 'limit_max_alignments_per_url'
 
-    def process(src_url, trg_url, idx):
-        hit = False
+    def process(src_url, trg_url, idx, seed=None):
+        if seed is not None:
+            random.seed(seed)
+
         _side = side
 
         if side == "all":
             _side = side_priority[idx % len(side_priority)] # Take a side taking into account the specified priority
 
-        _src_url, _trg_url = apply_function_to_negative_sample_tokenized_urls(
+        _src_url, _trg_url, hit = apply_function_to_negative_sample_tokenized_urls(
             src_url, trg_url,
             lambda s, t: run(s, t, side=_side, min_replacements=min_replacements),
             "replace_freq_words")
 
-        if src_url != _src_url or trg_url != _trg_url:
-            hit = True
+        return _src_url, _trg_url, hit, f"{side}/{_side}"
 
-            return _src_url, _trg_url, hit, idx
-
-        return src_url, trg_url, hit, f"{side}/{_side}"
-
-    # TODO fix random state: each process has different state
-    #  Use something similar to https://joblib.readthedocs.io/en/latest/auto_examples/parallel_random_state.html#fixing-the-random-state-to-obtain-deterministic-results
-    # TODO can we optimize the following line in the used methods?
     _results = \
         joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-        joblib.delayed(process)(src_url, trg_url, idx) for src_url, trg_url in parallel_urls for idx in range(limit_max_alignments_per_url))
+        joblib.delayed(process)(src_url, trg_url, idx, seed=random.randint(~sys.maxsize, sys.maxsize)) \
+            for src_url, trg_url in parallel_urls for idx in range(limit_max_alignments_per_url))
 
     for _src_url, _trg_url, hit, side_strategy in _results:
         if hit:
@@ -175,11 +188,9 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
 
         return tokenized_src_url, tokenized_trg_url
 
-    # TODO fix random state: each process has different state
-    #  Use something similar to https://joblib.readthedocs.io/en/latest/auto_examples/parallel_random_state.html#fixing-the-random-state-to-obtain-deterministic-results
     _results = \
         joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-        joblib.delayed(apply_function_to_negative_sample_tokenized_urls)(src_url, trg_url, run, "remove_random_tokens") \
+        joblib.delayed(apply_function_to_negative_sample_tokenized_urls)(src_url, trg_url, run, "remove_random_tokens", seed=random.randint(~sys.maxsize, sys.maxsize)) \
             for src_url, trg_url in parallel_urls for _ in range(limit_max_alignments_per_url))
 
     for _src_url, _trg_url in _results:
@@ -214,7 +225,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
         src_url_set = set(src_url)
         trg_url_set = set(trg_url)
 
-        # Apply Jaccard
+        # Apply Jaccard (https://stats.stackexchange.com/a/290740)
         metric1 = len(set.intersection(tokenized_src_url, tokenized_trg_url)) / len(set.union(tokenized_src_url, tokenized_trg_url))
         metric2 = len(set.intersection(src_url_set, trg_url_set)) / len(set.union(src_url_set, trg_url_set))
 
@@ -318,13 +329,16 @@ def show_info_from_fd(fd, generator, generator_kwargs=None, sample_size=None, pr
 
     return results
 
-def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, strategy_description, apply_resource_forward=True):
+def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, strategy_description, apply_resource_forward=True, seed=None):
     """
     Input is str URLs
     Input of 'func' is src and trg tokenized URLs
     Output of 'func' must be src and trg tuple of lists or strings
     Output is str URLs
     """
+    if seed is not None:
+        random.seed(seed)
+
     h = hash(f"{src_url}\t{trg_url}")
 
     # Get tokens
@@ -338,7 +352,8 @@ def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, str
     trg_url_before_resource = trg_url[:resource_idx_trg_url]
 
     # Apply function which will modify the tokens
-    tokenized_src_url, tokenized_trg_url = func(tokenized_src_url, tokenized_trg_url)
+    func_output = func(tokenized_src_url, tokenized_trg_url)
+    tokenized_src_url, tokenized_trg_url = func_output[0], func_output[1]
 
     # Reconstruct
     src_url_again = src_url_before_resource + (''.join(tokenized_src_url) if isinstance(tokenized_src_url, list) else tokenized_src_url)
@@ -357,7 +372,7 @@ def apply_function_to_negative_sample_tokenized_urls(src_url, trg_url, func, str
     src_url_again = src_url_again[:protocol_idx_src_url] + re.sub(r'/+', r'/', src_url_again[protocol_idx_src_url:])
     trg_url_again = trg_url_again[:protocol_idx_trg_url] + re.sub(r'/+', r'/', trg_url_again[protocol_idx_trg_url:])
 
-    return src_url_again, trg_url_again
+    return src_url_again, trg_url_again, *func_output[2:]
 
 def get_position_idxs_random(l, percentage=0.5, min_elements=1, reverse=True):
     if percentage < 0.0:
