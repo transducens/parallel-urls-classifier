@@ -17,6 +17,8 @@ import parallel_urls_classifier.utils.utils as utils
 
 import joblib
 
+_double_linked_freqs_src = None
+_double_linked_freqs_trg = None
 def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_per_url=10, min_replacements=1,
                                             src_monolingual_file='', trg_monolingual_file='', side="both",
                                             n_jobs=1):
@@ -33,10 +35,27 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
     elif side in ("both", "all", "all-any") and (not utils.exists(src_monolingual_file) or not utils.exists(trg_monolingual_file)):
         raise Exception(f"Either src, trg or both monolingual files do not exist: ('{src_monolingual_file}', '{trg_monolingual_file}')")
 
+    global _double_linked_freqs_src
+    global _double_linked_freqs_trg
+
     if side in ("src", "both", "all", "all-any"):
-        double_linked_freqs_src = WordFreqDistDoubleLinked(src_monolingual_file)
+        if _double_linked_freqs_src is None:
+            logging.debug("Loading src word freq.: %s", trg_monolingual_file)
+
+            _double_linked_freqs_src = WordFreqDistDoubleLinked(src_monolingual_file)
+
+            logging.debug("Src word freq. loaded")
+
+        double_linked_freqs_src = _double_linked_freqs_src
     if side in ("trg", "both", "all", "all-any"):
-        double_linked_freqs_trg = WordFreqDistDoubleLinked(trg_monolingual_file)
+        if _double_linked_freqs_trg is None:
+            logging.debug("Loading trg word freq.: %s", trg_monolingual_file)
+
+            _double_linked_freqs_trg = WordFreqDistDoubleLinked(trg_monolingual_file)
+
+            logging.debug("Trg word freq. loaded")
+
+        double_linked_freqs_trg = _double_linked_freqs_trg
 
     urls = set()
 
@@ -140,10 +159,12 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
         if seed is not None:
             random.seed(seed)
 
-        _side = side
         results = []
 
-        for idx in range(limit_max_alignments_per_url, 1):
+        for idx in range(limit_max_alignments_per_url):
+            idx += 1
+            _results = []
+
             if side in ("all", "all-any"):
                 hits = 0
 
@@ -155,17 +176,17 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                         lambda s, t: run(s, t, side=_side, min_replacements=min_replacements))
 
                     if hit:
-                        results.append((_src_url, _trg_url, hit, side))
+                        _results.append((_src_url, _trg_url, hit, side))
 
                         hits += 1
                     else:
                         if side == "all":
-                            results = []
+                            _results = []
 
                             _break = True # The "all" strategy needs all hits, not any
 
-                    if idx == limit_max_alignments_per_url and len(results) == 0:
-                        results.append((_src_url, _trg_url, hit, side))
+                    if idx == limit_max_alignments_per_url and len(_results) == 0:
+                        _results.append((_src_url, _trg_url, hit, side))
 
                     if _break:
                         break
@@ -175,12 +196,14 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
             else:
                 _src_url, _trg_url, _, hit = apply_function_to_negative_sample_tokenized_urls(
                     src_url, trg_url,
-                    lambda s, t: run(s, t, side=_side, min_replacements=min_replacements))
+                    lambda s, t: run(s, t, side=side, min_replacements=min_replacements))
 
                 if hit or idx == limit_max_alignments_per_url:
-                    results.append((_src_url, _trg_url, hit, side))
+                    _results.append((_src_url, _trg_url, hit, side))
 
                     break
+
+            results.extend(_results)
 
         return results
 
@@ -269,8 +292,10 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
         trg_url_set = set(trg_url)
 
         # Apply Jaccard (https://stats.stackexchange.com/a/290740)
-        metric1 = len(set.intersection(tokenized_src_url, tokenized_trg_url)) / len(set.union(tokenized_src_url, tokenized_trg_url))
-        metric2 = len(set.intersection(src_url_set, trg_url_set)) / len(set.union(src_url_set, trg_url_set))
+        metric1_denominator = len(set.union(tokenized_src_url, tokenized_trg_url))
+        metric2_denominator = len(set.union(src_url_set, trg_url_set))
+        metric1 = (len(set.intersection(tokenized_src_url, tokenized_trg_url)) / metric1_denominator) if metric1_denominator != 0 else 0.0
+        metric2 = (len(set.intersection(src_url_set, trg_url_set)) / metric2_denominator) if metric2_denominator != 0 else 0.0
 
         return trg_url, (metric1, metric2)
 
