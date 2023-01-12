@@ -476,6 +476,13 @@ def main(args):
     logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
 
+    del parallel_urls_train
+    del non_parallel_urls_train
+    del parallel_urls_dev
+    del non_parallel_urls_dev
+    del parallel_urls_test
+    del non_parallel_urls_test
+
     dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
     dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
     dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
@@ -955,7 +962,8 @@ def initialization():
     parser.add_argument('--max-length-tokens', type=int, default=256, help="Max. length for the generated tokens")
     parser.add_argument('--model-input', help="Model input path which will be loaded")
     parser.add_argument('--model-output', help="Model output path where the model will be stored")
-    parser.add_argument('--inference', action="store_true", help="Do not train, just apply inference (flag --model-input is recommended)")
+    parser.add_argument('--inference', action="store_true",
+                        help="Do not train, just apply inference (flag --model-input is recommended). If this option is set, it will not be necessary to provide the input dataset")
     parser.add_argument('--inference-from-stdin', action="store_true", help="Read inference from stdin")
     parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
     parser.add_argument('--threshold', type=float, default=-np.inf, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")

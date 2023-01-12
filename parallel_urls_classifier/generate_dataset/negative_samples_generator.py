@@ -16,6 +16,7 @@ from parallel_urls_classifier.generate_dataset.word_freqs_double_linked import W
 import parallel_urls_classifier.utils.utils as utils
 
 import joblib
+from tldextract import extract
 
 _double_linked_freqs_src = None
 _double_linked_freqs_trg = None
@@ -127,6 +128,7 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
                             total_replacements += 1
 
                         if len(idx_words_to_replace) - idx < min_replacements - total_replacements:
+                            # We are sure we won't meet the requirements, so we can stop earlier
                             break
 
                     if total_replacements < min_replacements:
@@ -243,6 +245,8 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
     for _src_url, _trg_url, hit in _results:
         if hit:
             urls.add((_src_url, _trg_url))
+        else:
+            logging.warning("Couldn't generate negative samples removing random tokens: ('%s', '%s')", _src_url, _trg_url)
 
     common_last_checks(urls, parallel_urls)
 
@@ -309,10 +313,24 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
     idxs = range(len(parallel_urls)) # Do not convert to list for performance reasons!
     urls = set()
+    k = min(limit_max_alignments_per_url, len(parallel_urls))
+
+    if len(parallel_urls) < limit_max_alignments_per_url:
+        if len(parallel_urls) > 0:
+            src_domain = extract(parallel_urls[0][0])[1]
+            trg_domain = extract(parallel_urls[0][1])[1]
+
+            logging.warning("Will not be possible to generate the required %d random pairs of URLs: "
+                            "%d pairs will not be generated for the src/trg domain '%s'/'%s'",
+                            limit_max_alignments_per_url, limit_max_alignments_per_url - len(parallel_urls),
+                            src_domain, trg_domain)
+        else:
+            logging.warning("Will not be possible to generate the required %d random pairs of URLs: "
+                            "%d pairs will not be generated since no parallel URLs were provided",
+                            limit_max_alignments_per_url, limit_max_alignments_per_url - len(parallel_urls))
 
     for idx1 in idxs:
         max_alignments_per_url = limit_max_alignments_per_url
-        k = min(limit_max_alignments_per_url, len(parallel_urls))
         sample_idxs = random.sample(idxs, k)
 
         for sort_idx2, idx2 in enumerate(sample_idxs, 1):
