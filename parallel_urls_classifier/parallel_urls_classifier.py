@@ -442,6 +442,7 @@ def main(args):
         for batch_urls in batch:
             l.extend(batch_urls)
 
+    logger.debug("Allocated memory after tokenization: %d", utils.get_current_allocated_memory_size())
     logger.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
     logger.info("%d pairs of non-parallel URLs loaded (train)", len(non_parallel_urls_train))
     logger.info("%d pairs of parallel URLs loaded (dev)", len(parallel_urls_dev))
@@ -482,6 +483,8 @@ def main(args):
     del non_parallel_urls_dev
     del parallel_urls_test
     del non_parallel_urls_test
+
+    logger.debug("Allocated memory after removing pairs of URLs (str): %d", utils.get_current_allocated_memory_size())
 
     dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
     dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
