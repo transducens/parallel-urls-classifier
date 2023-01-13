@@ -58,8 +58,9 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
         attention_mask = attention_mask.to(device)
 
         for head_task in tasks:
-            # Move to device
-            labels[head_task] = labels[head_task].to(device)
+            if criteria:
+                # Move to device
+                labels[head_task] = labels[head_task].to(device)
 
             # Inference
             model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
@@ -79,7 +80,8 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                     outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
                 else:
                     # Binary classification
-                    outputs_argmax = torch.argmax(F.softmax(outputs, dim=1).cpu(), dim=1)
+                    outputs = F.softmax(outputs, dim=1)
+                    outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
 
                 if criterion:
                     loss = criterion(outputs, labels[head_task])
@@ -121,18 +123,20 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
             else:
                 results["_internal"]["total_loss"] = None
 
+            if criteria and len(tasks) > 1:
+                # Move data to CPU (it will free up memory if device is cuda)
+                # TODO does this work as expected? Is it the inference slower?
+                labels[head_task] = labels[head_task].cpu()
+
+                torch.cuda.empty_cache() # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
+
+        if len(tasks) > 1:
             # Move data to CPU (it will free up memory if device is cuda)
             # TODO does this work as expected? Is it the inference slower?
-            labels[head_task] = labels[head_task].cpu()
+            urls = urls.cpu()
+            attention_mask = attention_mask.cpu()
 
             torch.cuda.empty_cache() # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
-
-        # Move data to CPU (it will free up memory if device is cuda)
-        # TODO does this work as expected? Is it the inference slower?
-        urls = urls.cpu()
-        attention_mask = attention_mask.cpu()
-
-        torch.cuda.empty_cache() # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
 
     return results
 

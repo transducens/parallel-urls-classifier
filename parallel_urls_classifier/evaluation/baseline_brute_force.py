@@ -351,7 +351,8 @@ def initialization():
     parser.add_argument('--trg-lang-tokens', nargs='+', default=["fr"], # Found in WMT16 train: ["fr", "francais", "fra", "f", "fre", "french"]
                         help="Trg tokens which will be used for replacing in the normalized URL (cart. product with --src-lang-tokens)")
     parser.add_argument('--gold-standard', type=argparse.FileType('rt', errors="backslashreplace"), help="GS filename with parallel URLs (TSV format)")
-    parser.add_argument('--evaluate-urls-in-gs', action="store_true", help="Only evaluate those URLs which are present in the GS")
+    parser.add_argument('--evaluate-urls-in-gs', action="store_true",
+                        help="Only evaluate those URLs which are present in the GS, not all the combinations of the provided input")
     parser.add_argument('--lowercase-tokens', action="store_true", help="Lowercase URL tokens (GS as well if provided). It might increase the evaluation results")
     parser.add_argument('--evaluate-m-x-n', action="store_true",
                         help="Evaluate all the possible pairs instead of construct 'possible pairs' like is described in section 4.2 of YODA system")

@@ -460,7 +460,7 @@ def main(args):
 
         for cw in min_classes_weights:
             if cw < 0.9:
-                logger.warning("Your data seems to be imbalanced and you did not selected any imbalanced data strategy")
+                logger.warning("Your data seems to be imbalanced and you did not select any imbalanced data strategy")
                 break
 
     # Datasets
@@ -473,6 +473,7 @@ def main(args):
     dataset_test = dataset.SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer,
                                                     max_length_tokens, regression=regression, set_desc="test")
 
+    logger.debug("Allocated memory after encoding the data: %d", utils.get_current_allocated_memory_size())
     logger.debug("Total tokens (train): %d", dataset_train.total_tokens)
     logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
