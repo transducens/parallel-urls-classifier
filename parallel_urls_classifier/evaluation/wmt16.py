@@ -320,9 +320,8 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
             logging.error("Unexpected different values: positive_pairs != tp + fn: %d != %d", positive_pairs, tp + fn)
         # else: it is expected
 
-    recall = tp / positive_pairs if positive_pairs != 0 else 1.0 # We do not use (tp + fn) because of rule 1-1 since
-                                                                 #  (tp + fn) might be greater than len(gs_pairs)
-    precision = tp / (tp + fp) if (tp + fp) != 0 else 1.0
+    recall = tp / (tp + fn) if (tp + fn) != 0 else 0.0
+    precision = tp / (tp + fp) if (tp + fp) != 0 else 0.0
 
     if recall > 1.0 or recall < 0.0:
         logging.error("Recall off-range: %f", recall)
@@ -331,7 +330,7 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
 
     print(f"Recall: {recall}")
     print(f"Precision (not trustworthy because GS is not exhaustive): {precision}")
-    print(f"TN, FP, FN, TP, recall_divisor: {tn} {fp} {fn} {tp} {positive_pairs}")
+    print(f"TN, FP, FN, TP: {tn} {fp} {fn} {tp}")
 
 def main(args):
     input_file = args.input_file
