@@ -19,6 +19,9 @@ import numpy as np
 import Levenshtein
 from tldextract import extract
 
+# Disable (less verbose) 3rd party logging
+logging.getLogger("filelock").setLevel(logging.WARNING)
+
 def process_pairs(pairs, command, results_fd=None, results_are_fp=False, do_not_classify_missing_pairs=True):
     def log_classifier_stderr(msg):
         logging.warning("There were errors, so FD/classifier output is going to be displayed")
@@ -156,9 +159,16 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                     rule_1_1=True, disable_near_matchs=False, non_src_pairs=None, non_trg_pairs=None,
                     src_pairs_scores=None, trg_pairs_scores=None):
     tp, fp = 0, 0
-    seen_src_pairs, seen_trg_pairs = set(), set()
+    seen_src_pairs, seen_trg_pairs, found_pairs = set(), set(), set()
     gs_pairs = set(f"{src_gs_pair}\t{trg_gs_pair}" for src_gs_pair, trg_gs_pair in zip(src_gs_pairs, trg_gs_pairs))
     positive_near_matches, negative_near_matches = 0, 0
+    positive_pairs = len(gs_pairs)
+
+    logging.info("GS pairs: %d", len(gs_pairs))
+    logging.debug("GS is not exhaustive, so we cannot trust false positives, so we cannot trust precision")
+
+    if len(gs_pairs) == 0:
+        logging.warning("GS does not contain values")
 
     for idx, (src_pair, trg_pair) in enumerate(zip(src_pairs, trg_pairs)):
         pair = f"{src_pair}\t{trg_pair}"
@@ -167,10 +177,13 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
 
         #if pair in gs_pairs and src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs:
         if rule_1_1 and (src_pair in seen_src_pairs or trg_pair in seen_trg_pairs):
-            pass
+            if pair in gs_pairs:
+                found_pairs.add(pair)
         elif pair in gs_pairs:
             tp += 1
             pair_hit = True
+
+            found_pairs.add(pair)
         elif not disable_near_matchs:
             # "Soft" recall
 
@@ -205,7 +218,19 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                         trg_gs_pair = trg_pair
 
                     logging.debug("Near-match?\t%s\t%s", url_1, url_2)
-                    logging.debug("(GS, Not GS) pair:\t%s\t%s\t%s\t%s", src_gs_pair, trg_gs_pair, src_pair, trg_pair)
+                    logging.debug("(GS, not GS) pair:\t%s\t%s\t%s\t%s", src_gs_pair, trg_gs_pair, src_pair, trg_pair)
+
+                    nm_gs_pair = f"{src_gs_pair}\t{trg_gs_pair}"
+                    force_fp = False
+
+                    if nm_gs_pair in found_pairs:
+                        # This GS pair has already been processed
+
+                        if rule_1_1:
+                            # This can happen once per pair since a near-match can be found for src and trg side independently
+                            force_fp = True
+
+                            logging.debug("This near-match is going to be ignored since the GS pair has already been processed")
 
                     # Early stopping: if the documents are the same, the documents will have a very similar length, and if they are not, we want to
                     #  avoid calculation as many as possible, so we use min of the doc lengths. Since we are looking for a similarity >= 95%, out
@@ -229,13 +254,15 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
 
                     logging.debug("Near-match similarity (url_1, url_2, similarity_score):\t%s\t%s\t%f", url_1, url_2, similarity)
 
-                    if similarity >= 0.95:
+                    if not force_fp and similarity >= 0.95:
                         logging.debug("Near-match found")
 
                         tp += 1
                         positive_near_matches += 1
                         pair_hit = True
                         near_match = True
+
+                        found_pairs.add(nm_gs_pair)
                     else:
                         negative_near_matches += 1
 
@@ -271,37 +298,40 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
 
             if pair in gs_pairs:
                 fn += 1
+
+                found_pairs.add(pair)
             else:
                 tn += 1
     else:
         logging.debug("TN and FN could not be calculated")
 
     logging.info("(True, False) negatives: (%d, %d)", tn, fn)
-    logging.info("GS pairs: %d", len(gs_pairs))
-    logging.debug("GS is not exhaustive, so we cannot trust false positives, so we cannot trust precision")
 
-    if len(gs_pairs) == 0:
-        logging.warning("GS does not contain values")
+    if len(found_pairs) != len(gs_pairs):
+        logging.error("Not all the pairs from the GS were found: %d were expected, %d were found: "
+                      "did all the pairs were provided? If not: bug", len(gs_pairs), len(found_pairs))
 
-    expected_pairs_found = len(gs_pairs)
-    parallel_pairs_found = tp + fn
+    if not rule_1_1:
+        positive_pairs += positive_near_matches
+    # else: we don't want to penalize NM, but consider them as a valid match
 
-    if rule_1_1:
-        # We need to subtract PNM because NM will be classified as TP or FP, and the real GS pair (it should be among
-        #  the pairs) will be classified as FP if rule 1-1 is enabled, so we need to take into account only PNM
-        parallel_pairs_found -= positive_near_matches
+    if positive_pairs != (tp + fn):
+        if not rule_1_1:
+            logging.error("Unexpected different values: positive_pairs != tp + fn: %d != %d", positive_pairs, tp + fn)
+        # else: it is expected
 
-    if not rule_1_1 and not disable_near_matchs:
-        pass
-    elif expected_pairs_found != parallel_pairs_found:
-        logging.error("Unexpected GS pairs found: %d were expected, %d were found", expected_pairs_found, parallel_pairs_found)
-
-    recall = tp / expected_pairs_found if expected_pairs_found != 0 else 1.0
+    recall = tp / positive_pairs if positive_pairs != 0 else 1.0 # We do not use (tp + fn) because of rule 1-1 since
+                                                                 #  (tp + fn) might be greater than len(gs_pairs)
     precision = tp / (tp + fp) if (tp + fp) != 0 else 1.0
+
+    if recall > 1.0 or recall < 0.0:
+        logging.error("Recall off-range: %f", recall)
+    if precision > 1.0 or precision < 0.0:
+        logging.error("Precision off-range: %f", precision)
 
     print(f"Recall: {recall}")
     print(f"Precision (not trustworthy because GS is not exhaustive): {precision}")
-    print(f"TN, FP, FN, TP, recall_divisor: {tn} {fp} {fn} {tp} {expected_pairs_found}")
+    print(f"TN, FP, FN, TP, recall_divisor: {tn} {fp} {fn} {tp} {positive_pairs}")
 
 def main(args):
     input_file = args.input_file
