@@ -28,7 +28,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CyclicLR, LambdaLR
-from torch.optim import Adam, AdamW
+from torch.optim import Adam, AdamW, SGD
 from torch.utils.data import (
     DataLoader,
     RandomSampler,
@@ -50,6 +50,50 @@ logging.getLogger("PIL.PngImagePlugin").setLevel(logging.WARNING)
 logger = logging.getLogger("parallel_urls_classifier")
 logger_verbose = {"tokens": logging}
 
+# Other
+_lr_scheduler_args = {
+    "none": {},
+    "linear": {
+        "nargs": 1,
+        "metavar": ("warmup_steps_percentage",),
+        "default": (0.1,),
+        "type": utils.argparse_nargs_type(float),
+    },
+    "CLR": {
+        "nargs": 6,
+        "metavar": ("max_lr", "step_size", "mode", "gamma", "max_lr_factor", "step_size_factor"),
+        "default": (8e-5, 2000, "triangular2", 1.0, 4, 2),
+        "type": utils.argparse_nargs_type(float, int, str, float, {"type": int, "choices": (3, 4)},
+                                            {"type": int, "choices": tuple(range(2,8+1))}),
+    },
+    "inverse_sqrt": {
+        "nargs": 1,
+        "metavar": ("warmup_steps_percentage",),
+        "default": (0.1,),
+        "type": utils.argparse_nargs_type(float),
+    }
+}
+_optimizer_args = {
+    "adam": {
+        "nargs": 4,
+        "metavar": ("beta1", "beta2", "eps", "weight_decay"),
+        "default": (0.9, 0.999, 1e-08, 0.0),
+        "type": utils.argparse_nargs_type(float, float, float, float),
+    },
+    "adamw": {
+        "nargs": 4,
+        "metavar": ("beta1", "beta2", "eps", "weight_decay"),
+        "default": (0.9, 0.999, 1e-08, 0.01),
+        "type": utils.argparse_nargs_type(float, float, float, float),
+    },
+    "sgd": {
+        "nargs": 2,
+        "metavar": ("momentum", "weight_decay"),
+        "default": (0.0, 0.0),
+        "type": utils.argparse_nargs_type(float, float),
+    }
+}
+
 def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
     scheduler_instance = None
     mandatory_args = ""
@@ -58,7 +102,9 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
         if len(args) != num_args:
             raise Exception(f"LR scheduler: '{scheduler}' mandatory args: {str_args}")
 
-    if scheduler == "linear":
+    if scheduler == "none":
+        pass
+    elif scheduler == "linear":
         mandatory_args = "num_warmup_steps, num_training_steps"
 
         check_args(2, mandatory_args)
@@ -196,9 +242,7 @@ def main(args):
     learning_rate = args.learning_rate
     re_initialize_last_n_layers = max(0, args.re_initialize_last_n_layers)
     scheduler_str = args.lr_scheduler
-    lr_scheduler_args_linear = utils.get_tuple_if_is_not_tuple(args.lr_scheduler_args_linear)
-    lr_scheduler_args_clr = args.lr_scheduler_args_clr
-    lr_scheduler_args_inverse_sqrt = utils.get_tuple_if_is_not_tuple(args.lr_scheduler_args_inverse_sqrt)
+    lr_scheduler_args = args.lr_scheduler_args # Content might vary depending on the value of scheduler_str
     cuda_amp = args.cuda_amp
     llrd = args.llrd
     lock_file = args.lock_file
@@ -209,6 +253,8 @@ def main(args):
     freeze_embeddings_layer = args.freeze_embeddings_layer
     waiting_time = args.waiting_time
     remove_instead_of_truncate = args.remove_instead_of_truncate
+    optimizer_str = args.optimizer
+    optimizer_args = args.optimizer_args # Content might vary depending on the value of optimizer_str
 
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
@@ -533,16 +579,40 @@ def main(args):
     else:
         model_parameters = filter(lambda p: p.requires_grad, model.parameters())
 
-    #optimizer = Adam(model_parameters, lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
-    optimizer = AdamW(model_parameters, lr=learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
+    if optimizer_str == "adam":
+        optimizer_kwargs = {
+            "betas": tuple(optimizer_args[0:2]),
+            "eps": optimizer_args[2],
+            "weight_decay": optimizer_args[3],
+        }
+        optimizer = Adam(model_parameters, lr=learning_rate, **optimizer_kwargs)
+    elif optimizer_str == "adamw":
+        optimizer_kwargs = {
+            "betas": tuple(optimizer_args[0:2]),
+            "eps": optimizer_args[2],
+            "weight_decay": optimizer_args[3],
+        }
+        optimizer = AdamW(model_parameters, lr=learning_rate, **optimizer_kwargs)
+    elif optimizer_str == "sgd":
+        optimizer_kwargs = {
+            "momentum": optimizer_args[0],
+            "weight_decay": optimizer_args[1],
+        }
+        optimizer = SGD(model_parameters, lr=learning_rate, **optimizer_kwargs)
+    else:
+        raise Exception(f"Unknown optimizer: {optimizer_str}")
 
     # Get LR scheduler args
-    if scheduler_str == "linear":
-        scheduler_args = [int(lr_scheduler_args_linear[0] * training_steps), training_steps]
-        scheduler_kwargs = {}
+    scheduler_args = []
+    scheduler_kwargs = {}
+
+    if scheduler_str == "none":
+        pass
+    elif scheduler_str == "linear":
+        scheduler_args = [int(lr_scheduler_args[0] * training_steps), training_steps]
     elif scheduler_str == "CLR":
         scheduler_max_lr, scheduler_step_size, scheduler_mode, scheduler_gamma, scheduler_max_lr_factor, scheduler_step_size_factor \
-            = lr_scheduler_args_clr
+            = lr_scheduler_args
 
         if learning_rate > scheduler_max_lr:
             new_scheduler_max_lr = learning_rate * scheduler_max_lr_factor # Based on the CLR paper (possible values are [3.0, 4.0])
@@ -557,13 +627,15 @@ def main(args):
             logger.warning("LR scheduler: '%s': provided step size is 0 or negative: setting value to %d", scheduler_str, scheduler_step_size)
 
         scheduler_args = [learning_rate, scheduler_max_lr]
-        scheduler_kwargs = {"step_size_up": scheduler_step_size, "step_size_down": scheduler_step_size,
-                            "mode": scheduler_mode, "gamma": scheduler_gamma,
-                            "cycle_momentum": False, # https://github.com/pytorch/pytorch/issues/73910
-                            }
+        scheduler_kwargs = {
+            "step_size_up": scheduler_step_size,
+            "step_size_down": scheduler_step_size,
+            "mode": scheduler_mode,
+            "gamma": scheduler_gamma,
+            "cycle_momentum": False, # https://github.com/pytorch/pytorch/issues/73910
+        }
     elif scheduler_str == "inverse_sqrt":
-        scheduler_args = [int(lr_scheduler_args_inverse_sqrt[0] * training_steps)]
-        scheduler_kwargs = {}
+        scheduler_args = [int(lr_scheduler_args[0] * training_steps)]
     else:
         raise Exception(f"Unknown LR scheduler: {scheduler}")
 
@@ -573,7 +645,8 @@ def main(args):
     best_values_maximize = True
     best_values_binary_func_comp = (lambda a, b: a > b) if best_values_minimize else (lambda a, b: a < b)
 
-    assert best_values_minimize ^ best_values_maximize, "You can either minimize or maximize"
+    if not best_values_minimize ^ best_values_maximize:
+        raise Exception("You can either minimize or maximize")
 
     logger.debug("Best values are being %s", "minimized" if best_values_minimize else "maximized")
 
@@ -728,7 +801,7 @@ def main(args):
 
                     plot_statistics(plot_args, path=args.plot_path)
 
-            if show_statistics:
+            if scheduler and show_statistics:
                 # LRs statistics
                 all_lrs = scheduler.get_last_lr()
                 current_lr = all_lrs[0]
@@ -745,7 +818,8 @@ def main(args):
             else:
                 optimizer.step()
 
-            scheduler.step()
+            if scheduler:
+                scheduler.step()
 
         if total_train_tokens != dataset_train.total_tokens:
             if imbalanced_strategy in ("none", "weighted-loss"):
@@ -943,10 +1017,33 @@ def main(args):
 
         logger.debug("Lock file created: %s", lock_file)
 
+def get_options_from_argv(argv_flag, default_value, dict_with_options):
+    choices = list(dict_with_options.keys())
+    args_options = dict_with_options[default_value]
+
+    if argv_flag in sys.argv:
+        idx = sys.argv.index(argv_flag)
+
+        if len(sys.argv) > idx + 1:
+            value = sys.argv[idx + 1]
+
+            if value in choices:
+                args_options = dict_with_options[value]
+
+    result = {
+        "default": default_value,
+        "choices": choices,
+        "options": args_options,
+    }
+
+    return result
+
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Parallel URLs classifier")
     inference = "--inference" in sys.argv
+    lr_scheduler_conf = get_options_from_argv("--lr-scheduler", "CLR", _lr_scheduler_args)
+    optimizer_conf = get_options_from_argv("--optimizer", "adamw", _optimizer_args)
 
     if not inference:
         parser.add_argument('parallel_urls_train_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with parallel URLs (TSV format)")
@@ -985,15 +1082,12 @@ def initialization():
     parser.add_argument('--url-separator', default='/', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
     parser.add_argument('--learning-rate', type=float, default=2e-5, help="Learning rate")
-    parser.add_argument('--lr-scheduler', choices=["linear", "CLR", "inverse_sqrt"], default="CLR", help="LR scheduler")
-    parser.add_argument('--lr-scheduler-args-linear', nargs=1, metavar=("warmup_steps_percentage",), default=(0.1), \
-                        type=utils.argparse_nargs_type(float), help="Args. for linear scheduler")
-    parser.add_argument('--lr-scheduler-args-clr', nargs=6, metavar=("max_lr", "step_size", "mode", "gamma", "max_lr_factor", "step_size_factor"), \
-                        default=(8e-5, 2000, "triangular2", 1.0, 4, 2),
-                        type=utils.argparse_nargs_type(float, int, str, float, {"type": int, "choices": (3, 4)}, {"type": int, "choices": tuple(range(2,8+1))}), \
-                        help="Args. for CLR scheduler")
-    parser.add_argument('--lr-scheduler-args-inverse-sqrt', nargs=1, metavar=("warmup_steps_percentage",), default=(0.1), \
-                        type=utils.argparse_nargs_type(float), help="Args. for inverse sqrt")
+    parser.add_argument('--optimizer', choices=optimizer_conf["choices"], default=optimizer_conf["default"], help="Optimizer")
+    parser.add_argument('--optimizer-args', **optimizer_conf["options"],
+                        help="Args. for the optimizer (in order to see the specific configuration for a optimizer, use -h and set --optimizer)")
+    parser.add_argument('--lr-scheduler', choices=lr_scheduler_conf["choices"], default=lr_scheduler_conf["default"], help="LR scheduler")
+    parser.add_argument('--lr-scheduler-args', **lr_scheduler_conf["options"],
+                        help="Args. for LR scheduler (in order to see the specific configuration for a LR scheduler, use -h and set --lr-scheduler)")
     parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")

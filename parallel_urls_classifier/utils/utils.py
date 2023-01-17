@@ -286,7 +286,7 @@ def argparse_nargs_type(*types):
             type_arg = type(arg)
 
             try:
-                arg = t(arg)
+                arg = t(arg) # Cast from str
             except:
                 raise argparse.ArgumentTypeError(f"Arg. #{f._invoked + 1} is not instance of {str(t)}, but {str(type_arg)}")
         elif choices is not None:
