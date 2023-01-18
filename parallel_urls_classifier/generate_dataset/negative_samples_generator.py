@@ -273,8 +273,9 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
         joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
         joblib.delayed(tokenize_urls)(src_url, trg_url, logging.root.level) for src_url, trg_url in parallel_urls)
 
-    def get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url, level):
-        utils.set_up_logging(level=level)
+    def get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url, level=None):
+        if level is not None:
+            utils.set_up_logging(level=level)
 
         tokenized_src_url = set(tokenized_urls[idx_pair_src_url][0])
         tokenized_trg_url = set(tokenized_urls[idx_pair_trg_url][1])
@@ -289,13 +290,51 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
         return trg_url, (metric1, metric2)
 
+    metrics_parallel = True
+
+    try:
+        metrics_parallel = bool(int(os.environ["PUC_NSG_BOW_METRIC_PARALLEL"]))
+    except ValueError:
+        logging.error("Envvar PUC_NSG_BOW_METRIC_PARALLEL was defined but couldn't be casted to int")
+    except KeyError:
+        pass
+
+    logging.debug("BOW metrics are going to be calculated using parallelization (envvar PUC_NSG_BOW_METRIC_PARALLEL): %s", metrics_parallel)
+
     for idx_pair_src_url, parallel_urls_pair in enumerate(parallel_urls):
         src_url, _ = parallel_urls_pair
-        _results = \
-            joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-            joblib.delayed(get_metrics)(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url, logging.root.level) \
-                for idx_pair_trg_url, (_, trg_url) in enumerate(parallel_urls) if idx_pair_src_url != idx_pair_trg_url)
-        sorted_trg_parallel_urls_dict = sorted(_results, key=lambda item: (item[1][0], item[1][1]), reverse=True)
+
+        if metrics_parallel:
+            _results = \
+                joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
+                joblib.delayed(get_metrics)(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url, level=logging.root.level) \
+                    for idx_pair_trg_url, (_, trg_url) in enumerate(parallel_urls) if idx_pair_src_url != idx_pair_trg_url)
+            sorted_trg_parallel_urls_dict = sorted(_results, key=lambda item: (item[1][0], item[1][1]), reverse=True)
+        else:
+            best_values = []
+
+            for idx_pair_trg_url, (_, trg_url) in enumerate(parallel_urls):
+                if idx_pair_src_url != idx_pair_trg_url:
+                    metrics = get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url)
+                    _trg_url, (metric1, metric2) = metrics
+
+                    for idx, (_, (_metric1, _metric2)) in enumerate(best_values):
+                        if metric1 > _metric1:
+                            break
+                        elif metric1 == _metric1 and metric2 > _metric2:
+                            break
+
+                    if len(best_values) == 0:
+                        best_values.append(metrics)
+                    elif idx != len(best_values):
+                        best_values[idx + 1:] = best_values[idx:-1] # Move one position to right direction in order to allocate the new element
+
+                        if len(best_values) < limit_max_alignments_per_url:
+                            best_values.insert(idx, metrics)
+                        else:
+                            best_values[idx] = metrics
+
+            sorted_trg_parallel_urls_dict = best_values
 
         for idx, (trg_url, metrics) in enumerate(sorted_trg_parallel_urls_dict):
             if idx >= limit_max_alignments_per_url:
