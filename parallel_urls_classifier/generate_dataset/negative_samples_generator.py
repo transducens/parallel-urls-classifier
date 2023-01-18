@@ -323,16 +323,21 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
                 if idx_pair_src_url != idx_pair_trg_url:
                     metrics = get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url)
                     _trg_url, (metric1, metric2) = metrics
+                    hit = False
 
                     for idx, (_, (_metric1, _metric2)) in enumerate(best_values):
                         if metric1 > _metric1:
+                            hit = True
+
                             break
                         elif metric1 == _metric1 and metric2 > _metric2:
+                            hit = True
+
                             break
 
                     if len(best_values) == 0:
                         best_values.append(metrics)
-                    elif idx != len(best_values):
+                    elif hit:
                         best_values.insert(idx, metrics)
 
                         if len(best_values) > limit_max_alignments_per_url:
