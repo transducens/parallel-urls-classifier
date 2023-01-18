@@ -25,13 +25,17 @@ for idx, url_pair in enumerate(sys.stdin):
     src_url, trg_url = url_pair[0], url_pair[1]
     tokenized_src_url = tokenize(src_url)
     tokenized_trg_url = tokenize(trg_url)
+    tokenized_src_url_set = set(tokenized_src_url)
+    tokenized_trg_url_set = set(tokenized_trg_url)
+    tokenized_src_url = ' '.join(tokenized_src_url)
+    tokenized_trg_url = ' '.join(tokenized_trg_url)
     src_url_set = set(src_url)
     trg_url_set = set(trg_url)
 
     # Apply Jaccard (https://stats.stackexchange.com/a/290740)
-    metric1_intersection = len(set.intersection(tokenized_src_url, tokenized_trg_url))
+    metric1_intersection = len(set.intersection(tokenized_src_url_set, tokenized_trg_url_set))
     metric2_intersection = len(set.intersection(src_url_set, trg_url_set))
-    metric1_union = len(set.union(tokenized_src_url, tokenized_trg_url))
+    metric1_union = len(set.union(tokenized_src_url_set, tokenized_trg_url_set))
     metric2_union = len(set.union(src_url_set, trg_url_set))
     metric1 = (metric1_intersection / metric1_union) if metric1_union != 0 else 0.0
     metric2 = (metric2_intersection / metric2_union) if metric2_union != 0 else 0.0
