@@ -43,8 +43,10 @@ for idx, url_pair in enumerate(sys.stdin):
     print(f"{src_url}\t{trg_url}\t{tokenized_src_url}\t{tokenized_trg_url}\t{metric1_intersection}\t{metric1_union}\t{metric1}\t"
           f"{metric2_intersection}\t{metric2_union}\t{metric2}")
 
-    final_intersection += intersection
-    final_union += union
+    final_intersection1 += metric1_intersection
+    final_intersection2 += metric2_intersection
+    final_union1 += metric1_union
+    final_union2 += metric2_union
 
 logging.info("Total pairs: %d", idx + 1)
 
