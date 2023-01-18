@@ -252,6 +252,7 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
 
     return list(urls)
 
+_bow_logging_parallelization_variable_once = False
 def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments_per_url=10, append_metric=False, n_jobs=1,
                                              apply_resource_forward=True):
     # Download NLTK model if not available
@@ -295,11 +296,16 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
     try:
         metrics_parallel = bool(int(os.environ["PUC_NSG_BOW_METRIC_PARALLEL"]))
     except ValueError:
-        logging.error("Envvar PUC_NSG_BOW_METRIC_PARALLEL was defined but couldn't be casted to int")
+        if not _bow_logging_parallelization_variable_once:
+            logging.error("Envvar PUC_NSG_BOW_METRIC_PARALLEL was defined but couldn't be casted to int")
     except KeyError:
         pass
 
-    logging.debug("BOW metrics are going to be calculated using parallelization (envvar PUC_NSG_BOW_METRIC_PARALLEL): %s", metrics_parallel)
+    if not _bow_logging_parallelization_variable_once:
+        logging.debug("BOW metrics are going to be calculated using parallelization (envvar PUC_NSG_BOW_METRIC_PARALLEL): %s", metrics_parallel)
+
+    global _bow_logging_parallelization_variable_once
+    _bow_logging_parallelization_variable_once = True
 
     for idx_pair_src_url, parallel_urls_pair in enumerate(parallel_urls):
         src_url, _ = parallel_urls_pair
@@ -327,12 +333,10 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
                     if len(best_values) == 0:
                         best_values.append(metrics)
                     elif idx != len(best_values):
-                        best_values[idx + 1:] = best_values[idx:-1] # Move one position to right direction in order to allocate the new element
+                        best_values.insert(idx, metrics)
 
-                        if len(best_values) < limit_max_alignments_per_url:
-                            best_values.insert(idx, metrics)
-                        else:
-                            best_values[idx] = metrics
+                        if len(best_values) > limit_max_alignments_per_url:
+                            best_values.pop()
 
             sorted_trg_parallel_urls_dict = best_values
 
