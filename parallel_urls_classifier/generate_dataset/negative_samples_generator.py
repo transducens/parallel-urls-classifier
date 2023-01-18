@@ -291,6 +291,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
         return trg_url, (metric1, metric2)
 
+    global _bow_logging_parallelization_variable_once
     metrics_parallel = True
 
     try:
@@ -304,7 +305,6 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
     if not _bow_logging_parallelization_variable_once:
         logging.debug("BOW metrics are going to be calculated using parallelization (envvar PUC_NSG_BOW_METRIC_PARALLEL): %s", metrics_parallel)
 
-    global _bow_logging_parallelization_variable_once
     _bow_logging_parallelization_variable_once = True
 
     for idx_pair_src_url, parallel_urls_pair in enumerate(parallel_urls):
