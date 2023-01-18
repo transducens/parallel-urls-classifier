@@ -259,6 +259,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
     urls = set()
+    max_pairs_to_be_generated = min(limit_max_alignments_per_url, len(parallel_urls) - 1) * len(parallel_urls)
 
     def tokenize_urls(src_url, trg_url, level):
         utils.set_up_logging(level=level)
@@ -292,7 +293,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
         return trg_url, (metric1, metric2)
 
     global _bow_logging_parallelization_variable_once
-    metrics_parallel = True
+    metrics_parallel = False # Parallelization disabled by default since it seems to be slower due to sorted()
 
     try:
         metrics_parallel = bool(int(os.environ["PUC_NSG_BOW_METRIC_PARALLEL"]))
@@ -306,6 +307,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
         logging.debug("BOW metrics are going to be calculated using parallelization (envvar PUC_NSG_BOW_METRIC_PARALLEL): %s", metrics_parallel)
 
     _bow_logging_parallelization_variable_once = True
+    duplicated_pairs = 0
 
     for idx_pair_src_url, parallel_urls_pair in enumerate(parallel_urls):
         src_url, _ = parallel_urls_pair
@@ -337,7 +339,7 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
                     if len(best_values) == 0:
                         best_values.append(metrics)
-                    elif hit:
+                    elif hit or len(best_values) < limit_max_alignments_per_url:
                         best_values.insert(idx, metrics)
 
                         if len(best_values) > limit_max_alignments_per_url:
@@ -349,10 +351,20 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
             if idx >= limit_max_alignments_per_url:
                 break
 
+            len_urls = len(urls)
+
             if append_metric:
                 urls.add((src_url, trg_url, *metrics))
             else:
                 urls.add((src_url, trg_url))
+
+            duplicated_pairs += 1 if len(urls) == len_urls else 0
+
+    logging.debug("Generated but duplicated (not added) pairs: %d", duplicated_pairs)
+
+    if max_pairs_to_be_generated != len(urls) + duplicated_pairs:
+        logging.error("The number of generated pairs is not the expected: %d was expected, but %d (unique) + %d (duplicated) were generated: bug?",
+                      max_pairs_to_be_generated, len(urls), duplicated_pairs)
 
     common_last_checks(urls, parallel_urls)
 
