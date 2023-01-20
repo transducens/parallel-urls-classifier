@@ -338,7 +338,7 @@ def initialization():
     parser.add_argument('output_files_prefix', help="Output files prefix")
 
     parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens", "replace-freq-words"],
-                        default="random", nargs='+',
+                        default=["random"], nargs='+',
                         help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")
     parser.add_argument('--do-not-generate-positive-samples', action='store_true', help="Do not generate positive samples. Useful if you only want to generate negative samples")
