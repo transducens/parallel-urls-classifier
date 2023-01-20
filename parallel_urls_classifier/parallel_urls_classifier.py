@@ -255,6 +255,7 @@ def main(args):
     remove_instead_of_truncate = args.remove_instead_of_truncate
     optimizer_str = args.optimizer
     optimizer_args = args.optimizer_args # Content might vary depending on the value of optimizer_str
+    best_dev_metric = args.best_dev_metric
 
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
@@ -579,6 +580,8 @@ def main(args):
     else:
         model_parameters = filter(lambda p: p.requires_grad, model.parameters())
 
+    logger.debug("Optimizer args: %s", optimizer_args)
+
     if optimizer_str == "adam":
         optimizer_kwargs = {
             "betas": tuple(optimizer_args[0:2]),
@@ -605,6 +608,8 @@ def main(args):
     # Get LR scheduler args
     scheduler_args = []
     scheduler_kwargs = {}
+
+    logger.debug("LR scheduler args: %s", lr_scheduler_args)
 
     if scheduler_str == "none":
         pass
@@ -643,6 +648,17 @@ def main(args):
 
     best_values_minimize = False
     best_values_maximize = True
+
+    if best_dev_metric == "loss":
+        best_values_minimize = True
+        best_values_maximize = False
+    elif best_dev_metric == "Macro-F1":
+        pass
+    elif best_dev_metric == "MCC":
+        pass
+    else:
+        raise Exception(f"Unknown best dev metric: {best_dev_metric}")
+
     best_values_binary_func_comp = (lambda a, b: a > b) if best_values_minimize else (lambda a, b: a < b)
 
     if not best_values_minimize ^ best_values_maximize:
@@ -656,6 +672,7 @@ def main(args):
     final_acc_per_class = np.zeros(2)
     final_acc_per_class_abs = np.zeros(2)
     final_macro_f1 = 0.0
+    final_mcc = 0.0
     best_dev = np.inf * (1 if best_values_minimize else -1)
     best_train = np.inf * (1 if best_values_minimize else -1)
     stop_training = False
@@ -673,6 +690,7 @@ def main(args):
     epoch_train_acc_classes, epoch_dev_acc_classes = {0: [], 1: []}, {0: [], 1: []}
     epoch_train_macro_f1, epoch_dev_macro_f1 = [], []
 
+    # Start training!
     while not stop_training:
         logger.info("Epoch %d", epoch + 1)
 
@@ -843,11 +861,13 @@ def main(args):
         epoch_acc_per_class = metrics["acc_per_class"]
         epoch_acc_per_class_abs = metrics["f1"]
         epoch_macro_f1 = metrics["macro_f1"]
+        epoch_mcc = metrics["mcc"]
         final_loss += epoch_loss
         final_acc += epoch_acc
         final_acc_per_class += epoch_acc_per_class
         final_acc_per_class_abs += epoch_acc_per_class_abs
         final_macro_f1 += epoch_macro_f1
+        final_mcc += epoch_mcc
 
         logger.info("[train:epoch#%d] Avg. loss: %f", epoch + 1, epoch_loss)
         logger.info("[train:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -855,6 +875,7 @@ def main(args):
         logger.info("[train:epoch#%d] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
                     epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
         logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
+        logger.info("[train:epoch#%d] MCC: %.2f %%", epoch + 1, epoch_mcc * 100.0)
 
         dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
                                           device, amp_context_manager, classes=classes, max_tokens=max_tokens)
@@ -867,6 +888,7 @@ def main(args):
         dev_acc_per_class_abs_recall = dev_inference_metrics["recall"]
         dev_acc_per_class_abs_f1 = dev_inference_metrics["f1"]
         dev_macro_f1 = dev_inference_metrics["macro_f1"]
+        dev_mcc = dev_inference_metrics["mcc"]
 
         logger.info("[dev:epoch#%d] Avg. loss: %f", epoch + 1, dev_loss)
         logger.info("[dev:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -875,12 +897,22 @@ def main(args):
                     dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
                     dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
         logger.info("[dev:epoch#%d] Macro F1: %.2f %%", epoch + 1, dev_macro_f1 * 100.0)
+        logger.info("[dev:epoch#%d] MCC: %.2f %%", epoch + 1, dev_mcc * 100.0)
 
         # Get best dev and train result (check out best_values_minimize and best_values_maximize if you modify these values)
-        dev_target = dev_macro_f1 # Might be acc, loss, ...
-                                  # We prefer macro over micro F1:
-                                  #  https://datascience.stackexchange.com/questions/15989/micro-average-vs-macro-average-performance-in-a-multiclass-classification-settin#comment42550_24051
-        train_target = epoch_macro_f1 # It should be the same metric that dev_target
+        if best_dev_metric == "loss":
+            dev_target = dev_loss
+            train_target = epoch_loss
+        elif best_dev_metric == "Macro-F1":
+            dev_target = dev_macro_f1 # Might be acc, loss, ...
+                                      # We prefer macro over micro F1:
+                                      #  https://datascience.stackexchange.com/questions/15989/micro-average-vs-macro-average-performance-in-a-multiclass-classification-settin#comment42550_24051
+            train_target = epoch_macro_f1 # It should be the same metric that dev_target
+        elif best_dev_metric == "MCC":
+            dev_target = dev_mcc
+            train_target = epoch_mcc
+        else:
+            raise Exception(f"Unknown best dev metric: {best_dev_metric}")
 
         if best_values_binary_func_comp(best_dev, dev_target) or (best_dev == dev_target and best_values_binary_func_comp(best_train, train_target)):
             if best_dev == dev_target:
@@ -940,6 +972,7 @@ def main(args):
     final_acc_per_class /= epoch
     final_acc_per_class_abs /= epoch
     final_macro_f1 /= epoch
+    final_mcc /= epoch
 
     logger.info("[train] Avg. loss: %f", final_loss)
     logger.info("[train] Avg. acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -947,6 +980,7 @@ def main(args):
     logger.info("[train] Avg. acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
                 final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
     logger.info("[train] Avg. macro F1: %.2f %%", final_macro_f1 * 100.0)
+    logger.info("[train] Avg. MCC: %.2f %%", final_mcc * 100.0)
 
     if do_not_load_best_model or not model_output:
         logger.warning("Using last model for dev and test evaluation")
@@ -968,6 +1002,7 @@ def main(args):
     dev_acc_per_class_abs_recall = dev_inference_metrics["recall"]
     dev_acc_per_class_abs_f1 = dev_inference_metrics["f1"]
     dev_macro_f1 = dev_inference_metrics["macro_f1"]
+    dev_mcc = dev_inference_metrics["mcc"]
 
     logger.info("[dev] Avg. loss: %f", dev_loss)
     logger.info("[dev] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -976,6 +1011,7 @@ def main(args):
                 dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
                 dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
+    logger.info("[dev] MCC: %.2f %%", dev_mcc * 100.0)
 
     test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_test,
                                        device, amp_context_manager, classes=classes, max_tokens=max_tokens)
@@ -988,6 +1024,7 @@ def main(args):
     test_acc_per_class_abs_recall = test_inference_metrics["recall"]
     test_acc_per_class_abs_f1 = test_inference_metrics["f1"]
     test_macro_f1 = test_inference_metrics["macro_f1"]
+    test_mcc = test_inference_metrics["mcc"]
 
     logger.info("[test] Avg. loss: %f", test_loss)
     logger.info("[test] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -996,6 +1033,7 @@ def main(args):
                 test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
                 test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
     logger.info("[test] Macro F1: %.2f %%", test_macro_f1 * 100.0)
+    logger.info("[test] MCC: %.2f %%", test_mcc * 100.0)
 
     if plot:
         plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
@@ -1097,6 +1135,7 @@ def initialization():
     parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
     parser.add_argument('--remove-instead-of-truncate', action="store_true", help="Remove pairs of URLs which would need to be truncated (if not enabled, truncation will be applied). This option will be only applied to the training set")
+    parser.add_argument('--best-dev-metric', default="Macro-F1", choices=["loss", "Macro-F1", "MCC"], help="Which metric should be maximized or minimized when dev is being evaluated in order to save the best model")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")

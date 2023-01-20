@@ -146,12 +146,6 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
     model.eval()
 
     total_loss = 0.0
-    total_acc = 0.0
-    total_acc_per_class = np.zeros(2)
-    total_acc_per_class_abs_precision = np.zeros(2)
-    total_acc_per_class_abs_recall = np.zeros(2)
-    total_acc_per_class_abs_f1 = np.zeros(2)
-    total_macro_f1 = 0.0
     all_outputs = []
     all_labels = []
     total_blocks_per_batch = 1 if max_tokens else max(int(np.ceil(batch_size / block_size)), 1)
@@ -206,23 +200,17 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
     all_outputs = torch.as_tensor(all_outputs)
     all_labels = torch.as_tensor(all_labels)
     metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
-
     total_loss /= idx + 1
-    total_acc += metrics["acc"]
-    total_acc_per_class += metrics["acc_per_class"]
-    total_acc_per_class_abs_precision += metrics["precision"]
-    total_acc_per_class_abs_recall += metrics["recall"]
-    total_acc_per_class_abs_f1 += metrics["f1"]
-    total_macro_f1 += metrics["macro_f1"]
 
     return {
         "loss": total_loss,
-        "acc": total_acc,
-        "acc_per_class": total_acc_per_class,
-        "precision": total_acc_per_class_abs_precision,
-        "recall": total_acc_per_class_abs_recall,
-        "f1": total_acc_per_class_abs_f1,
-        "macro_f1": total_macro_f1,
+        "acc": metrics["acc"],
+        "acc_per_class": metrics["acc_per_class"],
+        "precision": metrics["precision"],
+        "recall": metrics["recall"],
+        "f1": metrics["f1"],
+        "macro_f1": metrics["macro_f1"],
+        "mcc": metrics["mcc"],
     }
 
 @torch.no_grad()

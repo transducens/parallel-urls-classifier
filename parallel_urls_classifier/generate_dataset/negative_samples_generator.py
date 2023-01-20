@@ -167,6 +167,8 @@ def get_negative_samples_replace_freq_words(parallel_urls, limit_max_alignments_
             _results = []
 
             if side in ("all", "all-any"):
+                # WARNING: these strategies will generate limit_max_alignments_per_url * len(side_priority) pairs instead
+                #  of only limit_max_alignments_per_url pairs like the other generators
                 hits = 0
 
                 # Iterate through all the "side" strategies
