@@ -1,4 +1,5 @@
 
+import os
 import logging
 
 import numpy as np
@@ -9,14 +10,20 @@ import sklearn.metrics
 logger = logging.getLogger("parallel_urls_classifier")
 
 # TODO check if values from sklearn are the same that the ones we calculate. If so, change own calculated values with sklearn
+DEBUG = if bool(int(os.environ["PUC_DEBUG"]))
+
+if debug:
+    logger.info("DEBUG is enabled")
 
 def get_confusion_matrix(outputs_argmax, labels, classes=2):
     tp, fp, fn, tn = np.zeros(classes), np.zeros(classes), np.zeros(classes), np.zeros(classes)
     conf_mat = np.array([[torch.sum(torch.logical_and(outputs_argmax == c1, labels == c2)) for c1 in range(classes)] for c2 in range(classes)])
-    sklearn_conf_mat = sklearn.metrics.confusion_matrix(labels, outputs_argmax, labels=list(range(classes)))
 
-    if (conf_mat != sklearn_conf_mat).any():
-        logger.error("Own confusion matric is different from the one calculated in sklearn: %s vs %s", conf_mat["conf_mat"], sklearn_conf_mat)
+    if DEBUG:
+        sklearn_conf_mat = sklearn.metrics.confusion_matrix(labels, outputs_argmax, labels=list(range(classes)))
+
+        if (conf_mat != sklearn_conf_mat).any():
+            logger.error("Own confusion matric is different from the one calculated in sklearn: %s vs %s", conf_mat["conf_mat"], sklearn_conf_mat)
 
     for c in range(classes):
         # Multiclass confusion matrix
@@ -26,18 +33,19 @@ def get_confusion_matrix(outputs_argmax, labels, classes=2):
         fn[c] = int(torch.sum(torch.logical_and(labels == c, outputs_argmax != c)))
         tn[c] = int(torch.sum(torch.logical_and(labels != c, outputs_argmax != c)))
 
-    # Check
-    def check(a, b, desc):
-        if a != b:
-            logger.error("%s: %d vs %d", desc, a, b)
+    if DEBUG:
+        # Check
+        def check(a, b, desc):
+            if a != b:
+                logger.error("%s: %d vs %d", desc, a, b)
 
-    for c in range(classes):
-        idxs = np.arange(classes)
+        for c in range(classes):
+            idxs = np.arange(classes)
 
-        check(tp[c], conf_mat[c][c], f"class {c} -> TP != confusion matrix")
-        check(fp[c], np.sum(conf_mat[idxs != c][:,c]), f"class {c} -> FP != confusion matrix")
-        check(fn[c], np.sum(conf_mat[c][idxs != c]), f"class {c} -> FN != confusion matrix")
-        check(tn[c], np.sum([conf_mat[c1][c2] for c1 in range(classes) for c2 in range(classes) if c1 != c and c2 != c]), f"class {c} -> TN != confusion matrix")
+            check(tp[c], conf_mat[c][c], f"class {c} -> TP != confusion matrix")
+            check(fp[c], np.sum(conf_mat[idxs != c][:,c]), f"class {c} -> FP != confusion matrix")
+            check(fn[c], np.sum(conf_mat[c][idxs != c]), f"class {c} -> FN != confusion matrix")
+            check(tn[c], np.sum([conf_mat[c1][c2] for c1 in range(classes) for c2 in range(classes) if c1 != c and c2 != c]), f"class {c} -> TN != confusion matrix")
 
     return {
         "tp": tp,
@@ -54,7 +62,9 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
         logger.warning("Some metrics might not work as expected since they have been designed to work for a binary classification")
 
     sklearn_mcc = sklearn.metrics.matthews_corrcoef(labels, outputs_argmax)
-    sklearn_precision_recall_fscore_support = \
+
+    if DEBUG:
+        sklearn_precision_recall_fscore_support = \
             sklearn.metrics.precision_recall_fscore_support(labels, outputs_argmax, labels=list(range(classes)), zero_division=0)
 
     acc = (torch.sum(outputs_argmax == labels) / current_batch_size).cpu().detach().numpy()
@@ -85,13 +95,14 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
         mcc[c] = (tp[c] + fp[c]) * (tp[c] + fn[c]) * (tn[c] + fp[c]) * (tn[c] + fn[c])
         mcc[c] = (tp[c] * tn[c] - fp[c] * fn[c]) / np.sqrt(mcc[c]) if mcc[c] != 0 else (tp[c] * tn[c] - fp[c] * fn[c])
 
-        # Sklearn
-        if not np.isclose(sklearn_precision_recall_fscore_support[0][c], precision[c]):
-            logger.warning("Own precision is different from the one calculated in sklearn: class %d -> %f vs %f", c, sklearn_precision_recall_fscore_support[0][c], precision[c])
-        if not np.isclose(sklearn_precision_recall_fscore_support[1][c], recall[c]):
-            logger.warning("Own recall is different from the one calculated in sklearn: class %d -> %f vs %f", c, sklearn_precision_recall_fscore_support[1][c], recall[c])
-        if not np.isclose(sklearn_precision_recall_fscore_support[2][c], f1[c]):
-            logger.warning("Own f1 is different from the one calculated in sklearn: class %d -> %f vs %f", c, sklearn_precision_recall_fscore_support[2][c], f1[c])
+        if DEBUG:
+            # Sklearn
+            if not np.isclose(sklearn_precision_recall_fscore_support[0][c], precision[c]):
+                logger.warning("Own precision is different from the one calculated in sklearn: class %d -> %f vs %f", c, sklearn_precision_recall_fscore_support[0][c], precision[c])
+            if not np.isclose(sklearn_precision_recall_fscore_support[1][c], recall[c]):
+                logger.warning("Own recall is different from the one calculated in sklearn: class %d -> %f vs %f", c, sklearn_precision_recall_fscore_support[1][c], recall[c])
+            if not np.isclose(sklearn_precision_recall_fscore_support[2][c], f1[c]):
+                logger.warning("Own f1 is different from the one calculated in sklearn: class %d -> %f vs %f", c, sklearn_precision_recall_fscore_support[2][c], f1[c])
 
     #assert outputs.shape[-1] == acc_per_class.shape[-1], f"Shape of outputs does not match the acc per class shape ({outputs.shape[-1]} vs {acc_per_class.shape[-1]})"
     if not np.isclose(np.sum(acc_per_class), acc):
@@ -99,18 +110,19 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
 
     macro_f1 = np.sum(f1) / f1.shape[0]
 
-    if classes == 2:
-        # Check that all values in mcc are the same since the value is symetric
-        for idx in range(len(mcc) - 1):
-            if not np.isclose(mcc[idx], mcc[idx + 1]):
-                logger.error("MCC of classes %d and %d are different: %f vs %f", idx, idx + 1, mcc[idx], mcc[idx + 1])
+    if DEBUG:
+        if classes == 2:
+            # Check that all values in mcc are the same since the value is symetric
+            for idx in range(len(mcc) - 1):
+                if not np.isclose(mcc[idx], mcc[idx + 1]):
+                    logger.error("MCC of classes %d and %d are different: %f vs %f", idx, idx + 1, mcc[idx], mcc[idx + 1])
 
-        mcc = mcc[0]
+            mcc = mcc[0]
 
-        if not np.isclose(mcc, sklearn_mcc):
-            logger.error("Own MCC is different from the one calculated in sklearn: %f vs %f", mcc, sklearn_mcc)
-    else:
-        mcc = sklearn_mcc
+            if not np.isclose(mcc, sklearn_mcc):
+                logger.error("Own MCC is different from the one calculated in sklearn: %f vs %f", mcc, sklearn_mcc)
+
+    mcc = sklearn_mcc # Version from sklearn works for multiclass
 
     if log:
         logger.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)

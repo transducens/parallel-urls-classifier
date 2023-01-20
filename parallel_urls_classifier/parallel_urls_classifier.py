@@ -203,6 +203,7 @@ def main(args):
         file_parallel_urls_test = args.parallel_urls_test_filename
         file_non_parallel_urls_test = args.non_parallel_urls_test_filename
 
+    # Task: parallel URLs
     parallel_urls_train = []
     non_parallel_urls_train = []
     parallel_urls_dev = []
@@ -210,6 +211,15 @@ def main(args):
     parallel_urls_test = []
     non_parallel_urls_test = []
 
+    # Task: language identification
+    parallel_urls_train_target_lang_id = []
+    non_parallel_urls_train_target_lang_id = []
+    parallel_urls_dev_target_lang_id = []
+    non_parallel_urls_dev_target_lang_id = []
+    parallel_urls_test_target_lang_id = []
+    non_parallel_urls_test_target_lang_id = []
+
+    # Args
     batch_size = args.batch_size
     block_size = args.block_size
     max_tokens = args.max_tokens if args.max_tokens > 0 else None
@@ -358,7 +368,7 @@ def main(args):
         logger.info("Using auxiliary task: mlm")
 
         total_auxiliary_tasks += 1
-    elif "language-identification" in auxiliary_tasks:
+    if "language-identification" in auxiliary_tasks:
         all_tasks_kwargs["language-identification"] = {
             "num_labels": 2, # We will have 2 outputs: 1st will be the language identification of all the data and 2nd the urls_classification task and 1st output "multiplication"
         }
@@ -463,31 +473,28 @@ def main(args):
 
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
-    for fd, l in ((file_parallel_urls_train, parallel_urls_train), (file_non_parallel_urls_train, non_parallel_urls_train),
-                  (file_parallel_urls_dev, parallel_urls_dev), (file_non_parallel_urls_dev, non_parallel_urls_dev)):
-                  # We add symmetric examples in dev as well in order to be sure we get a robust model
+    # Read data from input files
+    for fd, symmetric_samples, input_data, target_lang_id in \
+            ((file_parallel_urls_train, add_symmetric_samples, parallel_urls_train, parallel_urls_train_target_lang_id),
+             (file_non_parallel_urls_train, add_symmetric_samples, non_parallel_urls_train, non_parallel_urls_train_target_lang_id),
+             (file_parallel_urls_dev, add_symmetric_samples, parallel_urls_dev, parallel_urls_dev_target_lang_id),
+             (file_non_parallel_urls_dev, add_symmetric_samples, non_parallel_urls_dev, non_parallel_urls_dev_target_lang_id),
+             (file_parallel_urls_test, False, parallel_urls_test, parallel_urls_test_target_lang_id),
+             (file_non_parallel_urls_test, False, non_parallel_urls_test, non_parallel_urls_test_target_lang_id)):
+        # We add symmetric examples in dev as well in order to be sure we get a robust model, but not in test
         batch = utils.tokenize_batch_from_fd(
                     fd, tokenizer, batch_size,
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,
                                                           separator=url_separator, lower=lower,
                                                           stringify_instead_of_tokenization=stringify_instead_of_tokenization),
-                    add_symmetric_samples=add_symmetric_samples, auxiliary_tasks=auxiliary_tasks)
+                    add_symmetric_samples=symmetric_samples, auxiliary_tasks=auxiliary_tasks)
 
         for batch_urls in batch:
-            l.extend(batch_urls)
+            input_data.extend(batch_urls["urls"])
 
-    for fd, l in ((file_parallel_urls_test, parallel_urls_test), (file_non_parallel_urls_test, non_parallel_urls_test)):
-        batch = utils.tokenize_batch_from_fd(
-                    fd, tokenizer, batch_size,
-                    f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
-                                                          remove_positional_data=remove_positional_data_from_resource,
-                                                          separator=url_separator, lower=lower,
-                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization),
-                    auxiliary_tasks=auxiliary_tasks)
-
-        for batch_urls in batch:
-            l.extend(batch_urls)
+            if "target-language-identification" in batch_urls:
+                target_lang_id.extend(batch_urls["target-language-identification"])
 
     logger.debug("Allocated memory after tokenization: %d", utils.get_current_allocated_memory_size())
     logger.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
@@ -510,27 +517,51 @@ def main(args):
                 logger.warning("Your data seems to be imbalanced and you did not select any imbalanced data strategy")
                 break
 
+    # Prepare datasets data
+    dataset_train_tasks_data = {
+        "labels_language_identification": parallel_urls_train_target_lang_id + non_parallel_urls_train_target_lang_id,
+    }
+    dataset_dev_tasks_data = {
+        "labels_language_identification": parallel_urls_dev_target_lang_id + non_parallel_urls_dev_target_lang_id,
+    }
+    dataset_test_tasks_data = {
+        "labels_language_identification": parallel_urls_test_target_lang_id + non_parallel_urls_test_target_lang_id,
+    }
+
     # Datasets
     dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
                                                      max_length_tokens, regression=regression, set_desc="train",
                                                      remove_instead_of_truncate=remove_instead_of_truncate,
-                                                     imbalanced_strategy=imbalanced_strategy)
+                                                     imbalanced_strategy=imbalanced_strategy,
+                                                     tasks_data=dataset_train_tasks_data)
     dataset_dev = dataset.SmartBatchingURLsDataset(parallel_urls_dev, non_parallel_urls_dev, tokenizer,
-                                                   max_length_tokens, regression=regression, set_desc="dev")
+                                                   max_length_tokens, regression=regression, set_desc="dev",
+                                                     tasks_data=dataset_dev_tasks_data)
     dataset_test = dataset.SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer,
-                                                    max_length_tokens, regression=regression, set_desc="test")
+                                                    max_length_tokens, regression=regression, set_desc="test",
+                                                     tasks_data=dataset_test_tasks_data)
 
     logger.debug("Allocated memory after encoding the data: %d", utils.get_current_allocated_memory_size())
     logger.debug("Total tokens (train): %d", dataset_train.total_tokens)
     logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
 
+    # Remove data in order to free memory
     del parallel_urls_train
     del non_parallel_urls_train
     del parallel_urls_dev
     del non_parallel_urls_dev
     del parallel_urls_test
     del non_parallel_urls_test
+    del parallel_urls_train_target_lang_id
+    del non_parallel_urls_train_target_lang_id
+    del parallel_urls_dev_target_lang_id
+    del non_parallel_urls_dev_target_lang_id
+    del parallel_urls_test_target_lang_id
+    del non_parallel_urls_test_target_lang_id
+    del dataset_train_tasks_data
+    del dataset_dev_tasks_data
+    del dataset_test_tasks_data
 
     logger.debug("Allocated memory after removing pairs of URLs (str): %d", utils.get_current_allocated_memory_size())
 

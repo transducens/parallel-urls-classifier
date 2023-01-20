@@ -75,7 +75,7 @@ def apply_model(model, tokenizer, tokens, encode=False):
 
 def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
                            auxiliary_tasks=[]):
-    urls = []
+    urls = {"urls": []}
     initial_urls = []
 
     # Tasks
@@ -85,8 +85,8 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
         url = url.strip().split('\t')
 
         if task_language_identification:
-            if len(url) != 4:
-                raise Exception("It was expected 4 values per line (src_url, trg_url, src_url_lang, trg_url_lang), "
+            if len(url) != 5:
+                raise Exception("It was expected 5 values per line (src_url, trg_url, src_url_lang, trg_url_lang, lang_id_output), "
                                 f"but got {len(url)} values")
         else:
             if len(url) != 2:
@@ -113,42 +113,50 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
 
             continue
 
-        urls.append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
-                                                                #  (or other special tokens) since they are automatically added
-                                                                #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
+        urls["urls"].append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
+                                                                        #  (or other special tokens) since they are automatically added
+                                                                        #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
         initial_urls.append((url[0], url[1]))
 
         if task_language_identification:
-            src_url_lang, trg_url_lang = url[2], url[3]
+            src_url_lang, trg_url_lang, target = url[2], url[3], int(url[4])
 
-            urls.append(f"{src_url_lang}{tokenizer.sep_token}{trg_url_lang}{tokenizer.sep_token}"
-                        f"{src_url}{tokenizer.sep_token}{trg_url}") # We first add the lang ids in order to avoid to lose them if
-                                                                    #  the URLs are too long
+            urls["urls"].append(f"{src_url_lang}{tokenizer.sep_token}{trg_url_lang}{tokenizer.sep_token}"
+                                f"{src_url}{tokenizer.sep_token}{trg_url}") # We first add the lang ids in order to avoid to lose them if
+                                                                            #  the URLs are too long
+
+            if "target-language-identification" not in urls:
+                urls["target-language-identification"] = []
+
+            urls["target-language-identification"].append(0) # Result for the URLs without language identificators
+            urls["target-language-identification"].append(target)
 
         if add_symmetric_samples:
-            urls.append(f"{trg_url}{tokenizer.sep_token}{src_url}")
+            urls["urls"].append(f"{trg_url}{tokenizer.sep_token}{src_url}")
             initial_urls.append((url[1], url[0]))
 
             if task_language_identification:
-                urls.append(f"{trg_url_lang}{tokenizer.sep_token}{src_url_lang}{tokenizer.sep_token}"
-                            f"{trg_url}{tokenizer.sep_token}{src_url}")
+                urls["urls"].append(f"{trg_url_lang}{tokenizer.sep_token}{src_url_lang}{tokenizer.sep_token}"
+                                    f"{trg_url}{tokenizer.sep_token}{src_url}")
+                urls["target-language-identification"].append(0) # If languages are not provided, target will be 0
+                urls["target-language-identification"].append(target) # Symmetry doesn't affect the result in this task
 
-        if len(urls) >= batch_size:
+        if len(urls["urls"]) >= batch_size:
             if return_urls:
                 yield urls, initial_urls
             else:
                 yield urls
 
-            urls = []
+            urls = {"urls": []}
             initial_urls = []
 
-    if len(urls) != 0:
+    if len(urls["urls"]) != 0:
         if return_urls:
             yield urls, initial_urls
         else:
             yield urls
 
-        urls = []
+        urls = {"urls": []}
         initial_urls = []
 
 def get_current_allocated_memory_size():
@@ -412,6 +420,7 @@ def get_data_from_batch(batch, block_size, device):
     urls = batch["url_tokens"]
     attention_mask = batch["url_attention_mask"]
     labels = batch["labels"]
+    labels_language_identification = batch["labels_task_language_identification"] if labels_task_language_identification in labels else None
 
     # Split in batch_size batches
     start = 0
@@ -430,6 +439,9 @@ def get_data_from_batch(batch, block_size, device):
                 "urls": _urls,
                 "attention_mask": _attention_mask,
             }
+
+            if labels_language_identification is not None:
+                inputs_and_outputs["labels_task_language_identification"] = labels_language_identification[start:end].to(device)
 
             yield inputs_and_outputs
 

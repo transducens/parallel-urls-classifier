@@ -60,7 +60,7 @@ class SmartBatchingURLsDataset(Dataset):
     # Code based on https://www.kaggle.com/code/rhtsingh/speeding-up-transformer-w-optimization-strategies?scriptVersionId=67176227&cellId=2
 
     def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False, sampler_better_randomness=True,
-                 remove_instead_of_truncate=False, set_desc='', imbalanced_strategy=''):
+                 remove_instead_of_truncate=False, set_desc='', imbalanced_strategy='', tasks_data={}):
         super(SmartBatchingURLsDataset, self).__init__()
 
         self.max_length = max_length
@@ -98,13 +98,27 @@ class SmartBatchingURLsDataset(Dataset):
         self._total_tokens = sum([len(t) for t in self.tokens])
         #self.attention_mask = data["attention_mask"]
         #self.tokens = [tokenizer.convert_tokens_to_ids(tokenizer.tokenize(url)) for url in non_parallel_urls + parallel_urls]
-        self.labels = np.zeros(len(self.tokens))
+        self.labels = {"urls_classification": np.zeros(len(self.tokens) * (2 if "labels_language_identification" in tasks_data else 1))}
 
         #self.size_gb = self.data.element_size() * self.data.nelement() / 1000 / 1000 / 1000
 
         #self.labels[:len(non_parallel_urls)] = 0
         # Set to 1 the parallel URLs
-        self.labels[len(non_parallel_urls):] = 1
+        self.labels["urls_classification"][len(non_parallel_urls) * (2 if "labels_language_identification" in tasks_data else 1):] = 1
+        disable_balance = False
+
+        if "labels_language_identification" in tasks_data:
+            logger.debug("Loading labels for task: language-identification")
+
+            if len(tasks_data["labels_language_identification"]) != len(self.labels["urls_classification"]):
+                raise Exception("Number of labels from the main task is different for the lang. id. task: "
+                                f"{len(self.labels['urls_classification'])} vs {len(tasks_data['labels_language_identification'])}")
+
+            disable_balance = True
+            self.labels["language-identification"] = np.zeros((len(self.tokens), 2)) # Content: lang id, parallel URLs and lang id
+
+            for idx, (label, lang_id_label) in enumerate(zip(self.labels["language-identification"], tasks_data["labels_language_identification"])):
+                self.labels["language-identification"][idx] = (lang_id_label, label * lang_id_label)
 
         # Imbalanced strategy?
         if imbalanced_strategy:
@@ -119,18 +133,22 @@ class SmartBatchingURLsDataset(Dataset):
             else:
                 raise Exception(f"Unknown imbalanced_strategy: {imbalanced_strategy}")
 
-            if balance:
-                lengths_before = [np.sum(self.labels == 0), np.sum(self.labels == 1)]
+            if balance and disable_balance:
+                logger.error("Currently is not supported to apply the selected imbalanced strategy with some auxiliary tasks: %s",
+                             imbalanced_strategy)
+            elif balance:
+                lengths_before = [np.sum(self.labels["urls_classification"] == 0), np.sum(self.labels["urls_classification"] == 1)]
                 self.tokens, _ = pad_sequence(self.tokens, self.pad_token_id, max_length=self.max_length) # We need to apply padding :/
-                self.tokens, self.labels = imbalanced_obj.fit_resample(self.tokens, self.labels)
+                self.tokens, self.labels["urls_classification"] = imbalanced_obj.fit_resample(self.tokens, self.labels["urls_classification"])
                 self.tokens = remove_padding(self.tokens, self.pad_token_id) # Remove padding
-                lengths_after = [np.sum(self.labels == 0), np.sum(self.labels == 1)]
+                lengths_after = [np.sum(self.labels["urls_classification"] == 0), np.sum(self.labels["urls_classification"] == 1)]
 
                 logger.info("Imbalanced strategy '%s': from %s to %s", imbalanced_strategy, str(lengths_before), str(lengths_after))
 
         # Postprocess labels
-        self.labels = torch.from_numpy(self.labels)
-        self.labels = self.labels.type(torch.float) if regression else self.labels.type(torch.long)
+        self.labels["urls_classification"] = torch.from_numpy(self.labels["urls_classification"])
+        self.labels["urls_classification"] = \
+            self.labels["urls_classification"].type(torch.float) if regression else self.labels["urls_classification"].type(torch.long)
 
     def __len__(self):
         return len(self.tokens)
@@ -145,7 +163,11 @@ class SmartBatchingURLsDataset(Dataset):
         #    #"url_attention_mask": self.attention_mask[idx],
         #    "label": self.labels[idx],
         #}
-        return self.tokens[idx], self.labels[idx]
+
+        if "language-identification" in self.labels:
+            return self.tokens[idx], self.labels["urls_classification"][idx], self.labels["language-identification"][idx]
+        else:
+            return self.tokens[idx], self.labels["urls_classification"][idx]
 
     def get_dataloader(self, batch_size, device, force_cpu, num_workers, sampler=None, max_tokens=None, set_dataloader=True):
         is_device_gpu = device.type.startswith("cuda")
@@ -267,7 +289,13 @@ class SmartBatchingCollate:
         self._pad_token_id = pad_token_id
 
     def __call__(self, batch):
-        sequences, targets = list(zip(*batch))
+        targets_lang_id = None
+
+        if len(batch[0]) == 2:
+            sequences, targets = list(zip(*batch))
+        elif len(batch[0]) == 3:
+            sequences, targets, targets_lang_id = list(zip(*batch))
+
         input_ids, attention_mask = pad_sequence(sequences, self._pad_token_id)
 
         output = {
@@ -275,6 +303,9 @@ class SmartBatchingCollate:
             "url_attention_mask": attention_mask,
         }
         output["labels"] = torch.tensor(targets)
+
+        if targets_lang_id is not None:
+            output["labels_task_language_identification"] = torch.tensor(targets_lang_id)
 
         return output
 
@@ -336,6 +367,13 @@ class MaxTokensCollate:
 
         if force_return or max_tokens_processed or last_batch:
             # Return dynamic batch when max_tokens criteria is met or last batch is being processed
+            targets_lang_id = None
+
+            if len(batch[0]) == 2:
+                sequences, targets = list(zip(*batch))
+            elif len(batch[0]) == 3:
+                sequences, targets, targets_lang_id = list(zip(*batch))
+
             sequences, targets = list(zip(*self._current_batch))
             input_ids, attention_mask = pad_sequence(sequences, self._pad_token_id)
 
@@ -344,6 +382,9 @@ class MaxTokensCollate:
                 "url_attention_mask": attention_mask,
             }
             output["labels"] = torch.tensor(targets)
+
+            if targets_lang_id is not None:
+                output["labels_task_language_identification"] = torch.tensor(targets_lang_id)
 
             # Reset variables
             self.reset_max_tokens_variables(last_or_first_batch=last_batch)

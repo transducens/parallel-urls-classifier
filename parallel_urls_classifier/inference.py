@@ -41,9 +41,15 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
             if criteria:
                 labels["urls_classification"] = inputs_and_outputs["labels"]
         if "language-identification" in tasks:
+            if "urls_classification" not in tasks:
+                raise Exception("Task 'language-identification' needs task 'urls_classification', and it seems it is not enabled")
+
             if criteria:
-                # TODO where do I find "labels_task_language_identification"?
-                labels["language-identification"] = inputs_and_outputs["labels_task_language_identification"]
+                # Create labels: [lang. id. output, parallel pair of URLs and lang. id. output]
+                labels["language-identification"] = \
+                    torch.cat([inputs_and_outputs["labels_task_language_identification"],
+                               torch.mul(inputs_and_outputs["labels_task_language_identification"],
+                              inputs_and_outputs["labels"])], dim=1)
         if "mlm" in tasks:
             # MLM is applied at the same time with all the other tasks
 
@@ -257,6 +263,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                                                      remove_positional_data=remove_positional_data_from_resource,
                                                                      separator=url_separator, lower=lower)))
 
+        target_urls = target_urls["urls"]
+
         # Tokens
         tokens = utils.encode(tokenizer, target_urls, max_length_tokens, padding="longest", return_attention_mask=True)
         urls = tokens["input_ids"].to(device)
@@ -325,6 +333,8 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                                                                   separator=url_separator, lower=lower))
 
     for target_urls in urls_generator:
+        target_urls = target_urls["urls"]
+
         # Tokens
         tokens = utils.encode(tokenizer, target_urls, max_length=max_length_tokens, padding="longest", return_attention_mask=True)
         urls = tokens["input_ids"].to(device)
