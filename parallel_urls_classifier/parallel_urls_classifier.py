@@ -528,6 +528,13 @@ def main(args):
         "labels_language_identification": parallel_urls_test_target_lang_id + non_parallel_urls_test_target_lang_id,
     }
 
+    if len(parallel_urls_train_target_lang_id) == 0 and len(non_parallel_urls_train_target_lang_id) == 0:
+        del dataset_train_tasks_data["labels_language_identification"]
+    if len(parallel_urls_dev_target_lang_id) == 0 and len(non_parallel_urls_dev_target_lang_id) == 0:
+        del dataset_dev_tasks_data["labels_language_identification"]
+    if len(parallel_urls_test_target_lang_id) == 0 and len(non_parallel_urls_test_target_lang_id) == 0:
+        del dataset_test_tasks_data["labels_language_identification"]
+
     # Datasets
     dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
                                                      max_length_tokens, regression=regression, set_desc="train",
@@ -574,8 +581,8 @@ def main(args):
     #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
     classes_weights = torch.as_tensor(sklearn.utils.class_weight.compute_class_weight("balanced",
-                                                                                      classes=np.unique(dataset_train.labels),
-                                                                                      y=dataset_train.labels.numpy()),
+                                                                                      classes=np.unique(dataset_train.labels["urls_classification"]),
+                                                                                      y=dataset_train.labels["urls_classification"].numpy()),
                                       dtype=torch.float)
     loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     training_steps_per_epoch = len(dataloader_train)

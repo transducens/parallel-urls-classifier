@@ -420,7 +420,7 @@ def get_data_from_batch(batch, block_size, device):
     urls = batch["url_tokens"]
     attention_mask = batch["url_attention_mask"]
     labels = batch["labels"]
-    labels_language_identification = batch["labels_task_language_identification"] if labels_task_language_identification in labels else None
+    labels_language_identification = batch["labels_task_language_identification"] if "labels_task_language_identification" in batch else None
 
     # Split in batch_size batches
     start = 0

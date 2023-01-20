@@ -10,9 +10,9 @@ import sklearn.metrics
 logger = logging.getLogger("parallel_urls_classifier")
 
 # TODO check if values from sklearn are the same that the ones we calculate. If so, change own calculated values with sklearn
-DEBUG = if bool(int(os.environ["PUC_DEBUG"]))
+DEBUG = bool(int(os.environ["PUC_DEBUG"])) if "PUC_DEBUG" in os.environ else False
 
-if debug:
+if DEBUG:
     logger.info("DEBUG is enabled")
 
 def get_confusion_matrix(outputs_argmax, labels, classes=2):
