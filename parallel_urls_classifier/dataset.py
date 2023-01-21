@@ -98,13 +98,13 @@ class SmartBatchingURLsDataset(Dataset):
         self._total_tokens = sum([len(t) for t in self.tokens])
         #self.attention_mask = data["attention_mask"]
         #self.tokens = [tokenizer.convert_tokens_to_ids(tokenizer.tokenize(url)) for url in non_parallel_urls + parallel_urls]
-        self.labels = {"urls_classification": np.zeros(len(self.tokens) * (2 if "labels_language_identification" in tasks_data else 1))}
+        self.labels = {"urls_classification": np.zeros(len(self.tokens))}
 
         #self.size_gb = self.data.element_size() * self.data.nelement() / 1000 / 1000 / 1000
 
         #self.labels[:len(non_parallel_urls)] = 0
         # Set to 1 the parallel URLs
-        self.labels["urls_classification"][len(non_parallel_urls) * (2 if "labels_language_identification" in tasks_data else 1):] = 1
+        self.labels["urls_classification"][len(non_parallel_urls):] = 1
         disable_balance = False
 
         if "labels_language_identification" in tasks_data:
@@ -117,7 +117,7 @@ class SmartBatchingURLsDataset(Dataset):
             disable_balance = True
             self.labels["language-identification"] = np.zeros((len(self.tokens), 2)) # Content: lang id, parallel URLs and lang id
 
-            for idx, (label, lang_id_label) in enumerate(zip(self.labels["language-identification"], tasks_data["labels_language_identification"])):
+            for idx, (label, lang_id_label) in enumerate(zip(self.labels["urls_classification"], tasks_data["labels_language_identification"])):
                 self.labels["language-identification"][idx] = (lang_id_label, label * lang_id_label)
 
         # Imbalanced strategy?
@@ -291,10 +291,12 @@ class SmartBatchingCollate:
     def __call__(self, batch):
         targets_lang_id = None
 
-        if len(batch[0]) == 2:
+        if len(batch) == 2:
             sequences, targets = list(zip(*batch))
-        elif len(batch[0]) == 3:
+        elif len(batch) == 3:
             sequences, targets, targets_lang_id = list(zip(*batch))
+        else:
+            raise Exception(f"Unexpected shape: {len(batch)}: {str(batch)}")
 
         input_ids, attention_mask = pad_sequence(sequences, self._pad_token_id)
 
@@ -332,12 +334,19 @@ class MaxTokensCollate:
             self._aux_batch = [] # Auxiliar storage (we want to avoid to exceed max_tokens)
 
     def __call__(self, batch):
-        sequence, target = batch
+        targets_lang_id = None
+
+        if len(batch) == 2:
+            sequence, target = batch
+        elif len(batch) == 3:
+            sequence, target, targets_lang_id = batch
+        else:
+            raise Exception(f"Unexpected shape: {len(batch)}: {str(batch)}")
 
         if len(self._aux_batch) > 0:
             self._current_batch.extend(self._aux_batch)
             self._aux_batch = []
-            self._current_max_length = max(self._current_max_length, max([len(s) for s, _ in self._current_batch]))
+            self._current_max_length = max(self._current_max_length, max([len(s) for s, _, _ in self._current_batch]))
 
         self._current_max_length = max(self._current_max_length, len(sequence)) # Necessary for padding
         self._current_tokens = self._current_max_length * (len(self._current_batch) + 1) # Simulate padding with the current longest sentence
@@ -349,11 +358,11 @@ class MaxTokensCollate:
         force_return = False
 
         if more_max_tokens_processed and not last_batch:
-            self._aux_batch.append([sequence, target])
+            self._aux_batch.append([sequence, target, targets_lang_id])
 
             force_return = True
         else:
-            self._current_batch.append([sequence, target])
+            self._current_batch.append([sequence, target, targets_lang_id])
 
         if more_max_tokens_processed and last_batch:
             logger.warning("Specified max_tokens have been exceeded: edge case where we had some element in the auxiliary "
@@ -367,14 +376,8 @@ class MaxTokensCollate:
 
         if force_return or max_tokens_processed or last_batch:
             # Return dynamic batch when max_tokens criteria is met or last batch is being processed
-            targets_lang_id = None
+            sequences, targets, targets_lang_id = list(zip(*self._current_batch))
 
-            if len(batch[0]) == 2:
-                sequences, targets = list(zip(*batch))
-            elif len(batch[0]) == 3:
-                sequences, targets, targets_lang_id = list(zip(*batch))
-
-            sequences, targets = list(zip(*self._current_batch))
             input_ids, attention_mask = pad_sequence(sequences, self._pad_token_id)
 
             output = {
@@ -383,8 +386,8 @@ class MaxTokensCollate:
             }
             output["labels"] = torch.tensor(targets)
 
-            if targets_lang_id is not None:
-                output["labels_task_language_identification"] = torch.tensor(targets_lang_id)
+            if targets_lang_id[0] is not None:
+                output["labels_task_language_identification"] = torch.tensor(np.array(targets_lang_id))
 
             # Reset variables
             self.reset_max_tokens_variables(last_or_first_batch=last_batch)

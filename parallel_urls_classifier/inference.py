@@ -45,11 +45,11 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                 raise Exception("Task 'language-identification' needs task 'urls_classification', and it seems it is not enabled")
 
             if criteria:
-                # Create labels: [lang. id. output, parallel pair of URLs and lang. id. output]
-                labels["language-identification"] = \
-                    torch.cat([inputs_and_outputs["labels_task_language_identification"],
-                               torch.mul(inputs_and_outputs["labels_task_language_identification"],
-                              inputs_and_outputs["labels"])], dim=1)
+                # labels: [lang. id. output, parallel pair of URLs and lang. id. output]
+                #labels["language-identification"] = \
+                #    torch.cat([inputs_and_outputs["labels_task_language_identification"],
+                #               torch.mul(inputs_and_outputs["labels_task_language_identification"], inputs_and_outputs["labels"])], dim=1)
+                labels["language-identification"] = inputs_and_outputs["labels_task_language_identification"]
         if "mlm" in tasks:
             # MLM is applied at the same time with all the other tasks
 
