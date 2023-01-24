@@ -6,6 +6,7 @@ import logging
 import parallel_urls_classifier.utils.utils as utils
 from parallel_urls_classifier.metrics import (
     get_metrics,
+    get_metrics_task_specific,
 )
 import parallel_urls_classifier.preprocess as preprocess
 
@@ -83,6 +84,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                 if regression:
                     # Regression
                     outputs = torch.sigmoid(outputs).squeeze(1)
+                    # TODO use threshold instead of torch.round
                     outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
                 else:
                     # Binary classification
@@ -95,7 +97,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
 
                 results["urls_classification"] = {
                     "outputs": outputs,
-                    "outputs_argmax": outputs_argmax,
+                    "outputs_classification": outputs_argmax,
                     "loss_detach": loss.cpu().detach() if criterion else None,
                     "regression": regression,
                 }
@@ -109,12 +111,17 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                     "loss_detach": loss.cpu().detach() if criterion else None,
                 }
             elif head_task == "language-identification":
+                outputs = torch.sigmoid(outputs)
+                # TODO use threshold instead of torch.round
+                outputs_classification = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+
                 if criterion:
                     loss = criterion(outputs, labels[head_task])
                     loss *= loss_weight
 
                 results["language-identification"] = {
                     "outputs": outputs,
+                    "outputs_classification": outputs_classification,
                     "loss_detach": loss.cpu().detach() if criterion else None,
                 }
             else:
@@ -152,8 +159,8 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
     model.eval()
 
     total_loss = 0.0
-    all_outputs = []
-    all_labels = []
+    all_outputs = {task: [] for task in tasks}
+    all_labels = {task: [] for task in tasks}
     total_blocks_per_batch = 1 if max_tokens else max(int(np.ceil(batch_size / block_size)), 1)
     total_tokens = 0
     total_tokens_with_padding = 0
@@ -165,7 +172,6 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
             continue
 
         for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, None):
-            labels = inputs_and_outputs["labels"]
             total_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
             total_tokens_with_padding += sum([len(urls) for urls in inputs_and_outputs["urls"]])
 
@@ -174,49 +180,61 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
                                            device=device)
 
             # Tasks
-            loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?
-            outputs_argmax = results["urls_classification"]["outputs_argmax"]
-            regression = results["urls_classification"]["regression"]
+            for task in tasks:
+                if task == "urls_classification":
+                    loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?
+                    outputs_argmax = results["urls_classification"]["outputs_classification"]
+                    regression = results["urls_classification"]["regression"]
+                    labels = inputs_and_outputs["labels"].cpu()
 
-            if "mlm" in results:
-                # TODO propagate somehow? Statistics?
-                loss_mlm = results["mlm"]["loss_detach"]
-                outputs_mlm = results["mlm"]["outputs"].cpu()
-            elif "language-identification" in results:
-                # TODO propagate somehow? Statistics?
-                loss_language_identification = results["language-identification"]["loss_detach"]
-                outputs_language_identification = results["language-identification"]["outputs"].cpu()
+                    if regression:
+                        labels = torch.round(labels).type(torch.long)
+
+                    all_outputs["urls_classification"].extend(outputs_argmax.tolist())
+                    all_labels["urls_classification"].extend(labels.tolist())
+                elif task == "mlm":
+                    # TODO propagate somehow? Statistics?
+                    loss_mlm = results["mlm"]["loss_detach"]
+                    outputs_mlm = results["mlm"]["outputs"].cpu()
+                elif task == "language-identification":
+                    loss_language_identification = results["language-identification"]["loss_detach"] # TODO propagate somehow? Statistics?
+                    outputs_language_identification = results["language-identification"]["outputs_classification"].cpu()
+                    labels = inputs_and_outputs["labels_task_language_identification"].cpu()
+
+                    all_outputs["language-identification"].extend(outputs_language_identification.tolist())
+                    all_labels["language-identification"].extend(labels.tolist())
+                else:
+                    raise Exception(f"Unknown task: {task}")
 
             loss = results["_internal"]["total_loss"].cpu()
             loss = loss.cpu() / total_blocks_per_batch
-            labels = labels.cpu()
-
-            if regression:
-                labels = torch.round(labels).type(torch.long)
 
             total_loss += loss
-
-            all_outputs.extend(outputs_argmax.tolist())
-            all_labels.extend(labels.tolist())
 
     if total_tokens != dataset.total_tokens:
         logger.error("Total processed tokens are different from the initial total tokens: %d vs %d",
                      total_tokens, dataset.total_tokens)
 
-    all_outputs = torch.as_tensor(all_outputs)
-    all_labels = torch.as_tensor(all_labels)
-    metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
+    for task in tasks:
+        all_outputs[task] = torch.as_tensor(all_outputs[task])
+        all_labels[task] = torch.as_tensor(all_labels[task])
+
+    metrics = {task: {} for task in tasks}
     total_loss /= idx + 1
+
+    for task in tasks:
+        if task == "mlm":
+            continue
+
+        if task == "language-identification":
+            for _task in (f"{task}.langid", f"{task}.urls_classification"):
+                metrics[_task] = get_metrics_task_specific(_task, all_outputs[task], all_labels[task], len(all_labels[task]), classes=classes)
+        else:
+            metrics[task] = get_metrics_task_specific(task, all_outputs[task], all_labels[task], len(all_labels[task]), classes=classes)
 
     return {
         "loss": total_loss,
-        "acc": metrics["acc"],
-        "acc_per_class": metrics["acc_per_class"],
-        "precision": metrics["precision"],
-        "recall": metrics["recall"],
-        "f1": metrics["f1"],
-        "macro_f1": metrics["macro_f1"],
-        "mcc": metrics["mcc"],
+        "metrics": metrics,
     }
 
 @torch.no_grad()
@@ -295,7 +313,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
         # Get results only for main task
         outputs = results["urls_classification"]["outputs"].cpu()
-        outputs_argmax = results["urls_classification"]["outputs_argmax"]
+        outputs_argmax = results["urls_classification"]["outputs_classification"]
         regression = results["urls_classification"]["regression"]
 
         #if len(outputs_argmax.shape) == 0:
@@ -346,7 +364,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
 
         # Get results only for main task
         outputs = results["urls_classification"]["outputs"].cpu()
-        outputs_argmax = results["urls_classification"]["outputs_argmax"]
+        outputs_argmax = results["urls_classification"]["outputs_classification"]
         regression = results["urls_classification"]["regression"]
 
         #if len(outputs_argmax.shape) == 0:

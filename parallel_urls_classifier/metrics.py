@@ -55,7 +55,7 @@ def get_confusion_matrix(outputs_argmax, labels, classes=2):
         "conf_mat": conf_mat,
     }
 
-def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, log=False):
+def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, batch_idx=-1, log=False, task="UNKNOWN"):
     if classes < 2:
         raise Exception(f"Classes has to be greater or equal than 2: {classes}")
     elif classes > 2:
@@ -125,11 +125,14 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
     mcc = sklearn_mcc # Version from sklearn works for multiclass
 
     if log:
-        logger.debug("[train:batch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", idx + 1, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
-        logger.debug("[train:batch#%d] Acc per class (non-parallel->precision|recall|f1, parallel->precision|recall|f1): (%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)",
-                     idx + 1, no_values_per_class[0], precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0, no_values_per_class[1], precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
-        logger.debug("[train:batch#%d] Macro F1: %.2f %%", idx + 1, macro_f1 * 100.0)
-        logger.debug("[train:batch#%d] MCC: %.2f %%", idx + 1, mcc * 100.0)
+        logger.debug("[train:batch#%d] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+                     batch_idx + 1, task, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
+        logger.debug("[train:batch#%d] Acc per class (task '%s'; non-parallel->precision|recall|f1, parallel->precision|recall|f1): "
+                     "(%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)", batch_idx + 1, task,
+                     no_values_per_class[0], precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0,
+                     no_values_per_class[1], precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
+        logger.debug("[train:batch#%d] Macro F1 (task '%s'): %.2f %%", batch_idx + 1, task, macro_f1 * 100.0)
+        logger.debug("[train:batch#%d] MCC (task '%s'): %.2f %%", batch_idx + 1, task, mcc * 100.0)
 
     return {
         "acc": acc,
@@ -145,6 +148,30 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, idx=-1, l
         "macro_f1": macro_f1,
         "mcc": mcc,
     }
+
+def get_metrics_task_specific(task, outputs, labels, current_batch_size, classes=2, batch_idx=-1, log=False):
+    if task == "urls_classification":
+        metrics = get_metrics(outputs, labels, current_batch_size, classes=classes, batch_idx=batch_idx, log=log, task=task)
+    elif task.startswith("language-identification."):
+        if task.endswith(".langid"):
+            # Evaluate sub-task: language-identification
+            metrics = get_metrics(outputs[:,0], labels[:,0], current_batch_size, classes=2, batch_idx=batch_idx, log=log, task=task)
+        elif task.endswith(".urls_classification"):
+            # Evaluate sub-task: URLs classification
+            metrics = get_metrics(outputs[:,1], labels[:,1], current_batch_size, classes=classes, batch_idx=batch_idx, log=log, task=task)
+        else:
+            raise Exception(f"Unexpected format for 'language-identification' task name: {aux_task}")
+    elif task == "language-identification":
+        raise Exception("Unexpected task 'language-identification': it is expected to receive a sub-task")
+    elif task == "mlm":
+        # TODO how can we evaluate MLM beyond the loss?
+        logger.warning("Task '%s' is not being evaluated: returning empty metrics", task)
+
+        metrics = {}
+    else:
+        raise Exception(f"Unknown task: {task}")
+
+    return metrics
 
 def plot_statistics(args, path=None, time_wait=5.0, freeze=False):
     plt_plot_common_params = {"marker": 'o', "markersize": 2,}

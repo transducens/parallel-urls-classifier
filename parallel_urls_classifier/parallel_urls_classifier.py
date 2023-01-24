@@ -8,6 +8,7 @@ import argparse
 import tempfile
 import contextlib
 from datetime import datetime
+import copy
 
 import parallel_urls_classifier.utils.utils as utils
 from parallel_urls_classifier.inference import (
@@ -17,6 +18,7 @@ from parallel_urls_classifier.inference import (
 )
 from parallel_urls_classifier.metrics import (
     get_metrics,
+    get_metrics_task_specific,
     plot_statistics,
 )
 import parallel_urls_classifier.preprocess as preprocess
@@ -728,6 +730,16 @@ def main(args):
     epoch_train_acc_classes, epoch_dev_acc_classes = {0: [], 1: []}, {0: [], 1: []}
     epoch_train_macro_f1, epoch_dev_macro_f1 = [], []
 
+    # Tasks and sub-tasks
+    metrics_auxiliary_tasks = copy.deepcopy(all_tasks)
+
+    while "language-identification" in metrics_auxiliary_tasks:
+        metrics_auxiliary_tasks.remove("language-identification")
+
+    if "language-identification" in auxiliary_tasks:
+        metrics_auxiliary_tasks.append("language-identification.langid")
+        metrics_auxiliary_tasks.append("language-identification.urls_classification")
+
     # Start training!
     while not stop_training:
         logger.info("Epoch %d", epoch + 1)
@@ -737,8 +749,8 @@ def main(args):
         epoch_acc_per_class = np.zeros(2)
         epoch_acc_per_class_abs = np.zeros(2)
         epoch_macro_f1 = 0.0
-        all_outputs = []
-        all_labels = []
+        all_outputs = {aux_task: [] for aux_task in all_tasks}
+        all_labels = {aux_task: [] for aux_task in all_tasks}
         total_train_tokens = 0
         total_train_tokens_with_padding = 0
         idx = -1
@@ -751,8 +763,8 @@ def main(args):
                 continue
 
             idx += 1
-            batch_outputs = []
-            batch_labels = []
+            batch_outputs = {aux_task: [] for aux_task in all_tasks}
+            batch_labels = {aux_task: [] for aux_task in all_tasks}
             loss_value = None
             tasks_loss_value = {t: 0.0 for t in all_tasks}
 
@@ -770,7 +782,7 @@ def main(args):
                                                criteria=criteria, tasks_weights=auxiliary_tasks_weights, device=device)
 
                 # Main task
-                outputs_argmax = results["urls_classification"]["outputs_argmax"]
+                outputs_argmax = results["urls_classification"]["outputs_classification"]
                 loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
                 loss /= total_blocks_per_batch # Gradient accumulation
 
@@ -785,8 +797,17 @@ def main(args):
                 if regression:
                     labels = torch.round(labels).type(torch.long)
 
-                batch_outputs.extend(outputs_argmax.tolist())
-                batch_labels.extend(labels.tolist())
+                if "urls_classification" in all_tasks:
+                    batch_outputs["urls_classification"].extend(outputs_argmax.tolist())
+                    batch_labels["urls_classification"].extend(labels.tolist())
+                if "mlm" in all_tasks:
+                    pass
+                if "language-identification" in all_tasks:
+                    _outputs = results["language-identification"]["outputs_classification"]
+                    _labels = inputs_and_outputs["labels_task_language_identification"].cpu().detach()
+
+                    batch_outputs["language-identification"].extend(_outputs.tolist())
+                    batch_labels["language-identification"].extend(_labels.tolist())
 
                 if cuda_amp:
                     amp_grad_scaler.scale(loss).backward()
@@ -811,26 +832,43 @@ def main(args):
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-            batch_labels_tensor = torch.as_tensor(batch_labels)
+            batch_labels_tensor = torch.as_tensor(batch_labels["urls_classification"])
             current_batch_size = batch_labels_tensor.reshape(-1).shape[0]
 
-            all_outputs.extend(batch_outputs)
-            all_labels.extend(batch_labels)
+            for aux_task in all_tasks:
+                all_outputs[aux_task].extend(batch_outputs[aux_task])
+                all_labels[aux_task].extend(batch_labels[aux_task])
 
             # Get metrics
             log = (idx + 1) % show_statistics_every_batches == 0
-            metrics = get_metrics(torch.as_tensor(batch_outputs), batch_labels_tensor, current_batch_size,
-                                  classes=classes, idx=idx, log=log)
+            metrics = get_metrics_task_specific("urls_classification", torch.as_tensor(batch_outputs["urls_classification"]),
+                                                batch_labels_tensor, current_batch_size, classes=classes, batch_idx=idx, log=log)
 
             if log:
                 logger.debug("[train:batch#%d] Loss: %f", idx + 1, loss_value)
                 logger.debug("[train:batch#%d] Processed tokens (without padding): %d (%d)", idx + 1, total_train_tokens_with_padding,
                              total_train_tokens)
 
-                if len(all_tasks) > 1:
+                if len(auxiliary_tasks) > 0:
                     for t, v in tasks_loss_value.items():
                         # Log loss of all tasks
                         logger.debug("[train:batch#%d] Loss task '%s': %f", idx + 1, t, v)
+
+                    for aux_task in auxiliary_tasks:
+                        if aux_task not in ("language-identification",):
+                            continue
+
+                        if aux_task == "language-identification":
+                            _outputs = torch.as_tensor(batch_outputs[aux_task])
+                            _labels = torch.as_tensor(batch_labels[aux_task])
+
+                            # We don't want the metrics, just the log
+                            get_metrics_task_specific(f"{aux_task}.langid", _outputs, _labels, current_batch_size,
+                                                      classes=classes, batch_idx=idx, log=log)
+                            get_metrics_task_specific(f"{aux_task}.urls_classification", _outputs, _labels, current_batch_size,
+                                                      classes=classes, batch_idx=idx, log=log)
+                        else:
+                            raise Exception(f"Unknown task: {aux_task}")
 
             show_statistics = (epoch == 0 and idx == 0) or (idx + 1) % show_statistics_every_batches == 0
             epoch_loss += loss_value
@@ -847,13 +885,26 @@ def main(args):
                                         (batch_macro_f1, epoch_macro_f1 * 100.0 / (idx + 1)))
 
                 if epoch != 0 or idx != 0:
-                    plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
-                                "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
-                                "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
-                                "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
-                                "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
-                                "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
-                                "final_test_acc": None, "final_test_macro_f1": None,}
+                    plot_args = {
+                        "show_statistics_every_batches": show_statistics_every_batches,
+                        "batch_loss": batch_loss,
+                        "batch_acc": batch_acc,
+                        "batch_acc_classes": batch_acc_classes,
+                        "batch_macro_f1": batch_macro_f1,
+                        "epoch": epoch,
+                        "epoch_train_loss": epoch_train_loss,
+                        "epoch_train_acc": epoch_train_acc,
+                        "epoch_train_acc_classes": epoch_train_acc_classes,
+                        "epoch_train_macro_f1": epoch_train_macro_f1,
+                        "epoch_dev_loss": epoch_dev_loss,
+                        "epoch_dev_acc": epoch_dev_acc,
+                        "epoch_dev_acc_classes": epoch_dev_acc_classes,
+                        "epoch_dev_macro_f1": epoch_dev_macro_f1,
+                        "final_dev_acc": None,
+                        "final_dev_macro_f1": None,
+                        "final_test_acc": None,
+                        "final_test_macro_f1": None,
+                    }
 
                     plot_statistics(plot_args, path=args.plot_path)
 
@@ -890,110 +941,149 @@ def main(args):
 
         logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
 
-        all_outputs = torch.as_tensor(all_outputs)
-        all_labels = torch.as_tensor(all_labels)
-        metrics = get_metrics(all_outputs, all_labels, len(all_labels), classes=classes)
-
-        epoch_loss /= idx + 1
-        epoch_acc = metrics["acc"]
-        epoch_acc_per_class = metrics["acc_per_class"]
-        epoch_acc_per_class_abs = metrics["f1"]
-        epoch_macro_f1 = metrics["macro_f1"]
-        epoch_mcc = metrics["mcc"]
-        final_loss += epoch_loss
-        final_acc += epoch_acc
-        final_acc_per_class += epoch_acc_per_class
-        final_acc_per_class_abs += epoch_acc_per_class_abs
-        final_macro_f1 += epoch_macro_f1
-        final_mcc += epoch_mcc
-
-        logger.info("[train:epoch#%d] Avg. loss: %f", epoch + 1, epoch_loss)
-        logger.info("[train:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                    epoch + 1, epoch_acc * 100.0, epoch_acc_per_class[0] * 100.0, epoch_acc_per_class[1] * 100.0)
-        logger.info("[train:epoch#%d] Acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
-                    epoch + 1, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
-        logger.info("[train:epoch#%d] Macro F1: %.2f %%", epoch + 1, epoch_macro_f1 * 100.0)
-        logger.info("[train:epoch#%d] MCC: %.2f %%", epoch + 1, epoch_mcc * 100.0)
-
-        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
-                                          device, amp_context_manager, classes=classes, max_tokens=max_tokens)
-
-        # Dev metrics
-        dev_loss = dev_inference_metrics["loss"]
-        dev_acc = dev_inference_metrics["acc"]
-        dev_acc_per_class = dev_inference_metrics["acc_per_class"]
-        dev_acc_per_class_abs_precision = dev_inference_metrics["precision"]
-        dev_acc_per_class_abs_recall = dev_inference_metrics["recall"]
-        dev_acc_per_class_abs_f1 = dev_inference_metrics["f1"]
-        dev_macro_f1 = dev_inference_metrics["macro_f1"]
-        dev_mcc = dev_inference_metrics["mcc"]
-
-        logger.info("[dev:epoch#%d] Avg. loss: %f", epoch + 1, dev_loss)
-        logger.info("[dev:epoch#%d] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                    epoch + 1, dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
-        logger.info("[dev:epoch#%d] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1,
-                    dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
-                    dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
-        logger.info("[dev:epoch#%d] Macro F1: %.2f %%", epoch + 1, dev_macro_f1 * 100.0)
-        logger.info("[dev:epoch#%d] MCC: %.2f %%", epoch + 1, dev_mcc * 100.0)
-
-        # Get best dev and train result (check out best_values_minimize and best_values_maximize if you modify these values)
-        if best_dev_metric == "loss":
-            dev_target = dev_loss
-            train_target = epoch_loss
-        elif best_dev_metric == "Macro-F1":
-            dev_target = dev_macro_f1 # Might be acc, loss, ...
-                                      # We prefer macro over micro F1:
-                                      #  https://datascience.stackexchange.com/questions/15989/micro-average-vs-macro-average-performance-in-a-multiclass-classification-settin#comment42550_24051
-            train_target = epoch_macro_f1 # It should be the same metric that dev_target
-        elif best_dev_metric == "MCC":
-            dev_target = dev_mcc
-            train_target = epoch_mcc
-        else:
-            raise Exception(f"Unknown best dev metric: {best_dev_metric}")
-
-        if best_values_binary_func_comp(best_dev, dev_target) or (best_dev == dev_target and best_values_binary_func_comp(best_train, train_target)):
-            if best_dev == dev_target:
-                logger.debug("Dev is equal but train has been improved from %s to %s: checkpoint", str(best_train), str(train_target))
+        for aux_task in metrics_auxiliary_tasks:
+            if aux_task == "urls_classification":
+                pass
+            elif aux_task == "mlm":
+                continue
+            elif aux_task == "language-identification":
+                raise Exception("Unexpected task 'language-identification': it is expected to receive a sub-task")
+            elif aux_task == "language-identification.langid":
+                pass
+            elif aux_task == "language-identification.urls_classification":
+                pass
             else:
-                logger.debug("Dev has been improved from %s to %s: checkpoint", str(best_dev), str(dev_target))
+                raise Exception(f"Unknown task: {aux_task}")
 
-            best_dev = dev_target
+            if aux_task.startswith("language-identification."):
+                all_outputs["language-identification"] = torch.as_tensor(all_outputs["language-identification"])
+                all_labels["language-identification"] = torch.as_tensor(all_labels["language-identification"])
+                metrics = get_metrics_task_specific(aux_task, all_outputs["language-identification"], all_labels["language-identification"],
+                                                    len(all_labels["language-identification"]), classes=classes)
+            else:
+                all_outputs[aux_task] = torch.as_tensor(all_outputs[aux_task])
+                all_labels[aux_task] = torch.as_tensor(all_labels[aux_task])
+                metrics = get_metrics_task_specific(aux_task, all_outputs[aux_task], all_labels[aux_task],
+                                                    len(all_labels[aux_task]), classes=classes)
 
-            if best_values_binary_func_comp(best_train, train_target):
-                best_train = train_target
+            epoch_acc = metrics["acc"]
+            epoch_acc_per_class = metrics["acc_per_class"]
+            epoch_acc_per_class_abs = metrics["f1"]
+            epoch_macro_f1 = metrics["macro_f1"]
+            epoch_mcc = metrics["mcc"]
 
-            # Store model
-            if model_output:
-                model.save_pretrained_wrapper(model_output)
+            if aux_task == "urls_classification":
+                epoch_loss /= idx + 1
+                final_loss += epoch_loss
+                final_acc += epoch_acc
+                final_acc_per_class += epoch_acc_per_class
+                final_acc_per_class_abs += epoch_acc_per_class_abs
+                final_macro_f1 += epoch_macro_f1
+                final_mcc += epoch_mcc
 
-            current_patience = 0
-        else:
-            logger.debug("Dev has not been improved (best and current value): %s and %s", str(best_dev), str(dev_target))
+            logger.info("[train:epoch#%d] Avg. loss: %f", epoch + 1, epoch_loss)
+            logger.info("[train:epoch#%d] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+                        epoch + 1, aux_task, epoch_acc * 100.0, epoch_acc_per_class[0] * 100.0, epoch_acc_per_class[1] * 100.0)
+            logger.info("[train:epoch#%d] Acc per class (task '%s'; non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
+                        epoch + 1, aux_task, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
+            logger.info("[train:epoch#%d] Macro F1 (task '%s'): %.2f %%", epoch + 1, aux_task, epoch_macro_f1 * 100.0)
+            logger.info("[train:epoch#%d] MCC (task '%s'): %.2f %%", epoch + 1, aux_task, epoch_mcc * 100.0)
 
-            current_patience += 1
+            dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
+                                              device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
-        if plot:
-            utils.append_from_tuple((epoch_train_loss, epoch_loss),
-                                    (epoch_train_acc, epoch_acc * 100.0),
-                                    (epoch_train_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0),
-                                    (epoch_train_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0),
-                                    (epoch_train_macro_f1, epoch_macro_f1 * 100.0))
-            utils.append_from_tuple((epoch_dev_loss, dev_loss),
-                                    (epoch_dev_acc, dev_acc * 100.0),
-                                    (epoch_dev_acc_classes[0], dev_acc_per_class_abs_f1[0] * 100.0),
-                                    (epoch_dev_acc_classes[1], dev_acc_per_class_abs_f1[1] * 100.0),
-                                    (epoch_dev_macro_f1, dev_macro_f1 * 100.0))
+            # Dev metrics
+            dev_loss = dev_inference_metrics["loss"]
+            dev_acc = dev_inference_metrics["metrics"][aux_task]["acc"]
+            dev_acc_per_class = dev_inference_metrics["metrics"][aux_task]["acc_per_class"]
+            dev_acc_per_class_abs_precision = dev_inference_metrics["metrics"][aux_task]["precision"]
+            dev_acc_per_class_abs_recall = dev_inference_metrics["metrics"][aux_task]["recall"]
+            dev_acc_per_class_abs_f1 = dev_inference_metrics["metrics"][aux_task]["f1"]
+            dev_macro_f1 = dev_inference_metrics["metrics"][aux_task]["macro_f1"]
+            dev_mcc = dev_inference_metrics["metrics"][aux_task]["mcc"]
 
-            plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
-                         "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
-                         "epoch": epoch + 1, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
-                         "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
-                         "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
-                         "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": None, "final_dev_macro_f1": None,
-                         "final_test_acc": None, "final_test_macro_f1": None,}
+            logger.info("[dev:epoch#%d] Avg. loss: %f", epoch + 1, dev_loss)
+            logger.info("[dev:epoch#%d] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
+                        epoch + 1, aux_task, dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
+            logger.info("[dev:epoch#%d] Acc per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
+                        "(%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1, aux_task,
+                        dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
+                        dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
+            logger.info("[dev:epoch#%d] Macro F1 (task '%s'): %.2f %%", epoch + 1, aux_task, dev_macro_f1 * 100.0)
+            logger.info("[dev:epoch#%d] MCC (task '%s'): %.2f %%", epoch + 1, aux_task, dev_mcc * 100.0)
 
-            plot_statistics(plot_args, path=args.plot_path)
+            # TODO TBD get best model using multiple metrics from different tasks? E.g. macro F1 of main task and language identification task
+            if aux_task == "urls_classification":
+                # Get best dev and train result (check out best_values_minimize and best_values_maximize if you modify these values)
+                if best_dev_metric == "loss":
+                    dev_target = dev_loss
+                    train_target = epoch_loss
+                elif best_dev_metric == "Macro-F1":
+                    dev_target = dev_macro_f1 # Might be acc, loss, ...
+                                            # We prefer macro over micro F1:
+                                            #  https://datascience.stackexchange.com/questions/15989/micro-average-vs-macro-average-performance-in-a-multiclass-classification-settin#comment42550_24051
+                    train_target = epoch_macro_f1 # It should be the same metric that dev_target
+                elif best_dev_metric == "MCC":
+                    dev_target = dev_mcc
+                    train_target = epoch_mcc
+                else:
+                    raise Exception(f"Unknown best dev metric: {best_dev_metric}")
+
+                if best_values_binary_func_comp(best_dev, dev_target) or (best_dev == dev_target and best_values_binary_func_comp(best_train, train_target)):
+                    if best_dev == dev_target:
+                        logger.debug("Dev is equal but train has been improved from %s to %s: checkpoint", str(best_train), str(train_target))
+                    else:
+                        logger.debug("Dev has been improved from %s to %s: checkpoint", str(best_dev), str(dev_target))
+
+                    best_dev = dev_target
+
+                    if best_values_binary_func_comp(best_train, train_target):
+                        best_train = train_target
+
+                    # Store model
+                    if model_output:
+                        model.save_pretrained_wrapper(model_output)
+
+                    current_patience = 0
+                else:
+                    logger.debug("Dev has not been improved (best and current value): %s and %s", str(best_dev), str(dev_target))
+
+                    current_patience += 1
+
+                if plot:
+                    utils.append_from_tuple((epoch_train_loss, epoch_loss),
+                                            (epoch_train_acc, epoch_acc * 100.0),
+                                            (epoch_train_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0),
+                                            (epoch_train_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0),
+                                            (epoch_train_macro_f1, epoch_macro_f1 * 100.0))
+                    utils.append_from_tuple((epoch_dev_loss, dev_loss),
+                                            (epoch_dev_acc, dev_acc * 100.0),
+                                            (epoch_dev_acc_classes[0], dev_acc_per_class_abs_f1[0] * 100.0),
+                                            (epoch_dev_acc_classes[1], dev_acc_per_class_abs_f1[1] * 100.0),
+                                            (epoch_dev_macro_f1, dev_macro_f1 * 100.0))
+
+                    plot_args = {
+                        "show_statistics_every_batches": show_statistics_every_batches,
+                        "batch_loss": batch_loss,
+                        "batch_acc": batch_acc,
+                        "batch_acc_classes": batch_acc_classes,
+                        "batch_macro_f1": batch_macro_f1,
+                        "epoch": epoch + 1,
+                        "epoch_train_loss": epoch_train_loss,
+                        "epoch_train_acc": epoch_train_acc,
+                        "epoch_train_acc_classes": epoch_train_acc_classes,
+                        "epoch_train_macro_f1": epoch_train_macro_f1,
+                        "epoch_dev_loss": epoch_dev_loss,
+                        "epoch_dev_acc": epoch_dev_acc,
+                        "epoch_dev_acc_classes": epoch_dev_acc_classes,
+                        "epoch_dev_macro_f1": epoch_dev_macro_f1,
+                        "final_dev_acc": None,
+                        "final_dev_macro_f1": None,
+                        "final_test_acc": None,
+                        "final_test_macro_f1": None,
+                    }
+
+                    plot_statistics(plot_args, path=args.plot_path)
 
         epoch += 1
 
@@ -1032,56 +1122,83 @@ def main(args):
     dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
                                       device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
+    if "urls_classification" in metrics_auxiliary_tasks:
+        # Remove and add main task in order to be the last task: we want the main task to be the last
+        #  in order to plot info from the main task, if necessary
+        metrics_auxiliary_tasks.remove("urls_classification")
+        metrics_auxiliary_tasks.append("urls_classification")
+
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
-    dev_acc = dev_inference_metrics["acc"]
-    dev_acc_per_class = dev_inference_metrics["acc_per_class"]
-    dev_acc_per_class_abs_precision = dev_inference_metrics["precision"]
-    dev_acc_per_class_abs_recall = dev_inference_metrics["recall"]
-    dev_acc_per_class_abs_f1 = dev_inference_metrics["f1"]
-    dev_macro_f1 = dev_inference_metrics["macro_f1"]
-    dev_mcc = dev_inference_metrics["mcc"]
 
     logger.info("[dev] Avg. loss: %f", dev_loss)
-    logger.info("[dev] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
-    logger.info("[dev] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
-                dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
-                dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
-    logger.info("[dev] Macro F1: %.2f %%", dev_macro_f1 * 100.0)
-    logger.info("[dev] MCC: %.2f %%", dev_mcc * 100.0)
+
+    for aux_task in metrics_auxiliary_tasks:
+        dev_acc = dev_inference_metrics["metrics"][aux_task]["acc"]
+        dev_acc_per_class = dev_inference_metrics["metrics"][aux_task]["acc_per_class"]
+        dev_acc_per_class_abs_precision = dev_inference_metrics["metrics"][aux_task]["precision"]
+        dev_acc_per_class_abs_recall = dev_inference_metrics["metrics"][aux_task]["recall"]
+        dev_acc_per_class_abs_f1 = dev_inference_metrics["metrics"][aux_task]["f1"]
+        dev_macro_f1 = dev_inference_metrics["metrics"][aux_task]["macro_f1"]
+        dev_mcc = dev_inference_metrics["metrics"][aux_task]["mcc"]
+
+        logger.info("[dev] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", aux_task,
+                    dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
+        logger.info("[dev] Acc per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
+                    "(%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", aux_task,
+                    dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
+                    dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
+        logger.info("[dev] Macro F1 (task '%s'): %.2f %%", aux_task, dev_macro_f1 * 100.0)
+        logger.info("[dev] MCC (task '%s'): %.2f %%", aux_task, dev_mcc * 100.0)
 
     test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_test,
                                        device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
-    test_acc = test_inference_metrics["acc"]
-    test_acc_per_class = test_inference_metrics["acc_per_class"]
-    test_acc_per_class_abs_precision = test_inference_metrics["precision"]
-    test_acc_per_class_abs_recall = test_inference_metrics["recall"]
-    test_acc_per_class_abs_f1 = test_inference_metrics["f1"]
-    test_macro_f1 = test_inference_metrics["macro_f1"]
-    test_mcc = test_inference_metrics["mcc"]
 
     logger.info("[test] Avg. loss: %f", test_loss)
-    logger.info("[test] Acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
-                test_acc * 100.0, test_acc_per_class[0] * 100.0, test_acc_per_class[1] * 100.0)
-    logger.info("[test] Acc per class (non-parallel:precision|recall|f1, parallel:precision|recall|f1): (%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)",
-                test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
-                test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
-    logger.info("[test] Macro F1: %.2f %%", test_macro_f1 * 100.0)
-    logger.info("[test] MCC: %.2f %%", test_mcc * 100.0)
+
+    for aux_task in metrics_auxiliary_tasks: # We want the main task to be the last in order to plot info from the main task, if necessary
+        test_acc = test_inference_metrics["metrics"][aux_task]["acc"]
+        test_acc_per_class = test_inference_metrics["metrics"][aux_task]["acc_per_class"]
+        test_acc_per_class_abs_precision = test_inference_metrics["metrics"][aux_task]["precision"]
+        test_acc_per_class_abs_recall = test_inference_metrics["metrics"][aux_task]["recall"]
+        test_acc_per_class_abs_f1 = test_inference_metrics["metrics"][aux_task]["f1"]
+        test_macro_f1 = test_inference_metrics["metrics"][aux_task]["macro_f1"]
+        test_mcc = test_inference_metrics["metrics"][aux_task]["mcc"]
+
+        logger.info("[test] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", aux_task,
+                    test_acc * 100.0, test_acc_per_class[0] * 100.0, test_acc_per_class[1] * 100.0)
+        logger.info("[test] Acc per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
+                    "(%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", aux_task,
+                    test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
+                    test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
+        logger.info("[test] Macro F1 (task '%s'): %.2f %%", aux_task, test_macro_f1 * 100.0)
+        logger.info("[test] MCC (task '%s'): %.2f %%", aux_task, test_mcc * 100.0)
 
     if plot:
-        plot_args = {"show_statistics_every_batches": show_statistics_every_batches, "batch_loss": batch_loss,
-                     "batch_acc": batch_acc, "batch_acc_classes": batch_acc_classes, "batch_macro_f1": batch_macro_f1,
-                     # '"epoch": epoch' and not '"epoch": epoch + 1' because we have not added new values
-                     "epoch": epoch, "epoch_train_loss": epoch_train_loss, "epoch_train_acc": epoch_train_acc,
-                     "epoch_train_acc_classes": epoch_train_acc_classes, "epoch_train_macro_f1": epoch_train_macro_f1,
-                     "epoch_dev_loss": epoch_dev_loss, "epoch_dev_acc": epoch_dev_acc, "epoch_dev_acc_classes": epoch_dev_acc_classes,
-                     "epoch_dev_macro_f1": epoch_dev_macro_f1, "final_dev_acc": dev_acc, "final_dev_macro_f1": dev_macro_f1,
-                     "final_test_acc": test_acc, "final_test_macro_f1": test_macro_f1,}
+        plot_args = {
+            "show_statistics_every_batches": show_statistics_every_batches,
+            "batch_loss": batch_loss,
+            "batch_acc": batch_acc,
+            "batch_acc_classes": batch_acc_classes,
+            "batch_macro_f1": batch_macro_f1,
+            # '"epoch": epoch' and not '"epoch": epoch + 1' because we have not added new values
+            "epoch": epoch,
+            "epoch_train_loss": epoch_train_loss,
+            "epoch_train_acc": epoch_train_acc,
+            "epoch_train_acc_classes": epoch_train_acc_classes,
+            "epoch_train_macro_f1": epoch_train_macro_f1,
+            "epoch_dev_loss": epoch_dev_loss,
+            "epoch_dev_acc": epoch_dev_acc,
+            "epoch_dev_acc_classes": epoch_dev_acc_classes,
+            "epoch_dev_macro_f1": epoch_dev_macro_f1,
+            "final_dev_acc": dev_acc,
+            "final_dev_macro_f1": dev_macro_f1,
+            "final_test_acc": test_acc,
+            "final_test_macro_f1": test_macro_f1,
+        }
 
         plot_statistics(plot_args, path=args.plot_path, freeze=True) # Let the user finish the execution if necessary
 
@@ -1092,6 +1209,8 @@ def main(args):
         Path(lock_file).touch()
 
         logger.debug("Lock file created: %s", lock_file)
+
+    logger.info("Done!")
 
 def get_options_from_argv(argv_flag, default_value, dict_with_options):
     choices = list(dict_with_options.keys())
