@@ -847,9 +847,15 @@ def main(args):
 
             # Get metrics
             log = (idx + 1) % show_statistics_every_batches == 0
-            batch_labels_tensor = torch.as_tensor(batch_labels[task_dev_metric])
+
+            _task_dev_metric = task_dev_metric
+
+            if task_dev_metric in ("language-identification.langid", "language-identification.urls_classification"):
+                _task_dev_metric = "language-identification"
+
+            batch_labels_tensor = torch.as_tensor(batch_labels[_task_dev_metric])
             current_batch_size = batch_labels_tensor.shape[0]
-            metrics = get_metrics_task_specific(task_dev_metric, torch.as_tensor(batch_outputs[task_dev_metric]),
+            metrics = get_metrics_task_specific(task_dev_metric, torch.as_tensor(batch_outputs[_task_dev_metric]),
                                                 batch_labels_tensor, current_batch_size, classes=classes, batch_idx=idx, log=log)
 
             if log:

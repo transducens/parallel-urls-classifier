@@ -155,8 +155,8 @@ class SmartBatchingURLsDataset(Dataset):
         self.labels["urls_classification"] = \
             self.labels["urls_classification"].type(torch.float) if regression else self.labels["urls_classification"].type(torch.long)
 
-        if "language-identification" in self.labels:
-            self.labels["language-identification"] = torch.from_numpy(self.labels["language-identification"]).type(torch.float)
+        #if "language-identification" in self.labels:
+        #    self.labels["language-identification"] = torch.from_numpy(self.labels["language-identification"]).type(torch.float)
 
     def __len__(self):
         return len(self.tokens)
@@ -299,9 +299,9 @@ class SmartBatchingCollate:
     def __call__(self, batch):
         targets_lang_id = None
 
-        if len(batch) == 2:
+        if len(batch[0]) == 2:
             sequences, targets = list(zip(*batch))
-        elif len(batch) == 3:
+        elif len(batch[0]) == 3:
             sequences, targets, targets_lang_id = list(zip(*batch))
         else:
             raise Exception(f"Unexpected shape: {len(batch)}: {str(batch)}")
@@ -315,7 +315,7 @@ class SmartBatchingCollate:
         output["labels"] = torch.tensor(targets)
 
         if targets_lang_id is not None:
-            output["labels_task_language_identification"] = torch.tensor(np.array(targets_lang_id))
+            output["labels_task_language_identification"] = torch.tensor(np.array(targets_lang_id)).type(torch.float)
 
         return output
 
@@ -391,7 +391,7 @@ class MaxTokensCollate:
             output["labels"] = torch.tensor(targets)
 
             if targets_lang_id[0] is not None:
-                output["labels_task_language_identification"] = torch.tensor(np.array(targets_lang_id))
+                output["labels_task_language_identification"] = torch.tensor(np.array(targets_lang_id)).type(torch.float)
 
             # Reset variables
             self.reset_max_tokens_variables(last_or_first_batch=last_batch)
