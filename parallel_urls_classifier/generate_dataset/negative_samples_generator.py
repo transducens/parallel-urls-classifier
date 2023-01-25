@@ -260,11 +260,27 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
     # Download NLTK model if not available
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
+    global _bow_logging_parallelization_variable_once
+    metrics_parallel = False # Parallelization disabled by default since it seems to be slower due to sorted()
+
+    try:
+        metrics_parallel = bool(int(os.environ["PUC_NSG_BOW_METRIC_PARALLEL"]))
+    except ValueError:
+        if not _bow_logging_parallelization_variable_once:
+            logging.error("Envvar PUC_NSG_BOW_METRIC_PARALLEL was defined but couldn't be casted to int")
+    except KeyError:
+        pass
+
+    if not _bow_logging_parallelization_variable_once:
+        logging.debug("BOW metrics are going to be calculated using parallelization (envvar PUC_NSG_BOW_METRIC_PARALLEL): %s", metrics_parallel)
+
+    _bow_logging_parallelization_variable_once = True
     urls = set()
     max_pairs_to_be_generated = min(limit_max_alignments_per_url, len(parallel_urls) - 1) * len(parallel_urls)
 
-    def tokenize_urls(src_url, trg_url, level):
-        utils.set_up_logging(level=level)
+    def tokenize_urls(src_url, trg_url, level=None):
+        if level is not None:
+            utils.set_up_logging(level=level)
 
         resource_idx_src_url = utils.get_idx_resource(src_url) if apply_resource_forward else 0
         resource_idx_trg_url = utils.get_idx_resource(trg_url) if apply_resource_forward else 0
@@ -273,9 +289,12 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
         return tokenized_src_url, tokenized_trg_url
 
-    tokenized_urls = \
-        joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
-        joblib.delayed(tokenize_urls)(src_url, trg_url, logging.root.level) for src_url, trg_url in parallel_urls)
+    if metrics_parallel:
+        tokenized_urls = \
+            joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)( \
+            joblib.delayed(tokenize_urls)(src_url, trg_url, level=logging.root.level) for src_url, trg_url in parallel_urls)
+    else:
+        tokenized_urls = [tokenize_urls(src_url, trg_url) for src_url, trg_url in parallel_urls]
 
     def get_metrics(src_url, trg_url, idx_pair_src_url, idx_pair_trg_url, level=None):
         if level is not None:
@@ -294,21 +313,6 @@ def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments
 
         return trg_url, (metric1, metric2)
 
-    global _bow_logging_parallelization_variable_once
-    metrics_parallel = False # Parallelization disabled by default since it seems to be slower due to sorted()
-
-    try:
-        metrics_parallel = bool(int(os.environ["PUC_NSG_BOW_METRIC_PARALLEL"]))
-    except ValueError:
-        if not _bow_logging_parallelization_variable_once:
-            logging.error("Envvar PUC_NSG_BOW_METRIC_PARALLEL was defined but couldn't be casted to int")
-    except KeyError:
-        pass
-
-    if not _bow_logging_parallelization_variable_once:
-        logging.debug("BOW metrics are going to be calculated using parallelization (envvar PUC_NSG_BOW_METRIC_PARALLEL): %s", metrics_parallel)
-
-    _bow_logging_parallelization_variable_once = True
     duplicated_pairs = 0
 
     for idx_pair_src_url, parallel_urls_pair in enumerate(parallel_urls):
