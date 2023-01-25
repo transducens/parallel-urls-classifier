@@ -74,12 +74,13 @@ def apply_model(model, tokenizer, tokens, encode=False):
     return output
 
 def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
-                           auxiliary_tasks=[]):
+                           auxiliary_tasks=[], lang_id_add_solo_urls_too=False):
     urls = {"urls": []}
     initial_urls = []
 
     # Tasks
     task_language_identification = "language-identification" in auxiliary_tasks
+    add_only_urls_too = not task_language_identification or lang_id_add_solo_urls_too
 
     for url in fd:
         url = url.strip().split('\t')
@@ -113,9 +114,11 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
 
             continue
 
-        urls["urls"].append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
-                                                                        #  (or other special tokens) since they are automatically added
-                                                                        #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
+        if add_only_urls_too:
+            urls["urls"].append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
+                                                                            #  (or other special tokens) since they are automatically added
+                                                                            #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
+
         initial_urls.append((url[0], url[1]))
 
         if task_language_identification:
@@ -128,17 +131,24 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
             if "target-language-identification" not in urls:
                 urls["target-language-identification"] = []
 
-            urls["target-language-identification"].append(0) # Result for the URLs without language identificators
+            if add_only_urls_too:
+                urls["target-language-identification"].append(0) # Result for the URLs without language identificators
+
             urls["target-language-identification"].append(target)
 
         if add_symmetric_samples:
-            urls["urls"].append(f"{trg_url}{tokenizer.sep_token}{src_url}")
+            if add_only_urls_too:
+                urls["urls"].append(f"{trg_url}{tokenizer.sep_token}{src_url}")
+
             initial_urls.append((url[1], url[0]))
 
             if task_language_identification:
                 urls["urls"].append(f"{trg_url_lang}{tokenizer.sep_token}{src_url_lang}{tokenizer.sep_token}"
                                     f"{trg_url}{tokenizer.sep_token}{src_url}")
-                urls["target-language-identification"].append(0) # If languages are not provided, target will be 0
+
+                if add_only_urls_too:
+                    urls["target-language-identification"].append(0) # If languages are not provided, target will be 0
+
                 urls["target-language-identification"].append(target) # Symmetry doesn't affect the result in this task
 
         if len(urls["urls"]) >= batch_size:

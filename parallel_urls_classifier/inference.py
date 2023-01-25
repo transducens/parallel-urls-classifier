@@ -42,8 +42,8 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
             if criteria:
                 labels["urls_classification"] = inputs_and_outputs["labels"]
         if "language-identification" in tasks:
-            if "urls_classification" not in tasks:
-                raise Exception("Task 'language-identification' needs task 'urls_classification', and it seems it is not enabled")
+            #if "urls_classification" not in tasks:
+            #    raise Exception("Task 'language-identification' needs task 'urls_classification', and it seems it is not enabled")
 
             if criteria:
                 # labels: [lang. id. output, parallel pair of URLs and lang. id. output]

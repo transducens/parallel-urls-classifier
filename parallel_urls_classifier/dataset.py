@@ -107,6 +107,10 @@ class SmartBatchingURLsDataset(Dataset):
         self.labels["urls_classification"][len(non_parallel_urls):] = 1
         disable_balance = False
 
+        if len(self.labels["urls_classification"]) != len(self.tokens):
+            raise Exception("Number of input entries from the main task is different of the labels len: "
+                            f"{len(self.tokens)} vs {len(self.labels['urls_classification'])}")
+
         if "labels_language_identification" in tasks_data:
             logger.debug("Loading labels for task: language-identification")
 
@@ -118,7 +122,8 @@ class SmartBatchingURLsDataset(Dataset):
             self.labels["language-identification"] = np.zeros((len(self.tokens), 2)) # Content: lang id, parallel URLs and lang id
 
             for idx, (label, lang_id_label) in enumerate(zip(self.labels["urls_classification"], tasks_data["labels_language_identification"])):
-                self.labels["language-identification"][idx] = (lang_id_label, label * lang_id_label)
+                self.labels["language-identification"][idx][0] = lang_id_label
+                self.labels["language-identification"][idx][1] = lang_id_label * label
 
         # Imbalanced strategy?
         if imbalanced_strategy:
@@ -149,6 +154,9 @@ class SmartBatchingURLsDataset(Dataset):
         self.labels["urls_classification"] = torch.from_numpy(self.labels["urls_classification"])
         self.labels["urls_classification"] = \
             self.labels["urls_classification"].type(torch.float) if regression else self.labels["urls_classification"].type(torch.long)
+
+        #if "language-identification" in self.labels:
+        #    self.labels["language-identification"] = torch.from_numpy(self.labels["language-identification"]).type(torch.float)
 
     def __len__(self):
         return len(self.tokens)
@@ -307,7 +315,7 @@ class SmartBatchingCollate:
         output["labels"] = torch.tensor(targets)
 
         if targets_lang_id is not None:
-            output["labels_task_language_identification"] = torch.tensor(targets_lang_id)
+            output["labels_task_language_identification"] = torch.tensor(np.array(targets_lang_id))
 
         return output
 
@@ -369,11 +377,6 @@ class MaxTokensCollate:
                            "storage because of the previous iteration but we hit the last batch and has to be processed: "
                            "this might cause an OOM if using GPU: %d extra tokens", self._current_tokens - self._max_tokens)
 
-            if len(self._current_batch) != 2:
-                # We expect batch size to be 2: stored element and last element
-                # This can't happen with 1 element since max_tokens >= max_length_tokens_model (tokens are either truncated or removed)
-                logger.error("The expected batch size is 2, but got %d (bug?)", len(self._current_batch))
-
         if force_return or max_tokens_processed or last_batch:
             # Return dynamic batch when max_tokens criteria is met or last batch is being processed
             sequences, targets, targets_lang_id = list(zip(*self._current_batch))
@@ -384,6 +387,7 @@ class MaxTokensCollate:
                 "url_tokens": input_ids,
                 "url_attention_mask": attention_mask,
             }
+
             output["labels"] = torch.tensor(targets)
 
             if targets_lang_id[0] is not None:

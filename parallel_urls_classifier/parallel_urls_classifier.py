@@ -262,12 +262,15 @@ def main(args):
     lower = args.lowercase
     auxiliary_tasks = args.auxiliary_tasks if args.auxiliary_tasks else []
     auxiliary_tasks_weights = args.auxiliary_tasks_weights
+    auxiliary_tasks_flags = args.auxiliary_tasks_flags if args.auxiliary_tasks_flags else []
     freeze_embeddings_layer = args.freeze_embeddings_layer
     waiting_time = args.waiting_time
     remove_instead_of_truncate = args.remove_instead_of_truncate
     optimizer_str = args.optimizer
     optimizer_args = args.optimizer_args # Content might vary depending on the value of optimizer_str
     best_dev_metric = args.best_dev_metric
+    task_dev_metric = args.task_dev_metric
+    do_not_train_main_task = args.do_not_train_main_task
 
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
@@ -287,7 +290,7 @@ def main(args):
         logger.debug("Auxiliary tasks weights: %s", str(auxiliary_tasks_weights))
 
     auxiliary_tasks = sorted(list(set(utils.get_tuple_if_is_not_tuple(auxiliary_tasks))))
-    all_tasks = ["urls_classification"] + auxiliary_tasks
+    all_tasks = ([] if do_not_train_main_task else ["urls_classification"]) + auxiliary_tasks
 
     if not block_size:
         block_size = batch_size
@@ -359,11 +362,12 @@ def main(args):
         logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
 
     all_tasks_kwargs = {}
-    all_tasks_kwargs["urls_classification"] = {
-        "num_labels": num_labels,
-    }
     total_auxiliary_tasks = 0
 
+    if "urls_classification" in all_tasks:
+        all_tasks_kwargs["urls_classification"] = {
+            "num_labels": num_labels,
+        }
     if "mlm" in auxiliary_tasks:
         all_tasks_kwargs["mlm"] = {}
 
@@ -490,7 +494,8 @@ def main(args):
                                                           remove_positional_data=remove_positional_data_from_resource,
                                                           separator=url_separator, lower=lower,
                                                           stringify_instead_of_tokenization=stringify_instead_of_tokenization),
-                    add_symmetric_samples=symmetric_samples, auxiliary_tasks=auxiliary_tasks)
+                    add_symmetric_samples=symmetric_samples, auxiliary_tasks=auxiliary_tasks,
+                    lang_id_add_solo_urls_too="language-identification_add-solo-urls-too" in auxiliary_tasks_flags)
 
         for batch_urls in batch:
             input_data.extend(batch_urls["urls"])
@@ -606,7 +611,7 @@ def main(args):
         elif head_task == "mlm":
             criterion = nn.CrossEntropyLoss()
         elif head_task == "language-identification":
-            criterion = nn.CrossEntropyLoss() # We don't want BCELoss since it applies softmax, and we want to apply sigmoid to each output before normalization
+            criterion = nn.MSELoss() # We apply MSELoss since we have 2 independent sub-tasks
         else:
             raise Exception(f"Unknown head task: {head_task}")
 
@@ -740,6 +745,9 @@ def main(args):
         metrics_auxiliary_tasks.append("language-identification.langid")
         metrics_auxiliary_tasks.append("language-identification.urls_classification")
 
+    if task_dev_metric not in metrics_auxiliary_tasks:
+        raise Exception(f"Selected task not found in the available tasks: '{task_dev_metric}' not in {str(metrics_auxiliary_tasks)}")
+
     # Start training!
     while not stop_training:
         logger.info("Epoch %d", epoch + 1)
@@ -782,7 +790,6 @@ def main(args):
                                                criteria=criteria, tasks_weights=auxiliary_tasks_weights, device=device)
 
                 # Main task
-                outputs_argmax = results["urls_classification"]["outputs_classification"]
                 loss = results["_internal"]["total_loss"] # Multiple losses if auxiliary tasks were used
                 loss /= total_blocks_per_batch # Gradient accumulation
 
@@ -798,6 +805,8 @@ def main(args):
                     labels = torch.round(labels).type(torch.long)
 
                 if "urls_classification" in all_tasks:
+                    outputs_argmax = results["urls_classification"]["outputs_classification"]
+
                     batch_outputs["urls_classification"].extend(outputs_argmax.tolist())
                     batch_labels["urls_classification"].extend(labels.tolist())
                 if "mlm" in all_tasks:
@@ -832,16 +841,15 @@ def main(args):
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-            batch_labels_tensor = torch.as_tensor(batch_labels["urls_classification"])
-            current_batch_size = batch_labels_tensor.reshape(-1).shape[0]
-
             for aux_task in all_tasks:
                 all_outputs[aux_task].extend(batch_outputs[aux_task])
                 all_labels[aux_task].extend(batch_labels[aux_task])
 
             # Get metrics
             log = (idx + 1) % show_statistics_every_batches == 0
-            metrics = get_metrics_task_specific("urls_classification", torch.as_tensor(batch_outputs["urls_classification"]),
+            batch_labels_tensor = torch.as_tensor(batch_labels[task_dev_metric])
+            current_batch_size = batch_labels_tensor.shape[0]
+            metrics = get_metrics_task_specific(task_dev_metric, torch.as_tensor(batch_outputs[task_dev_metric]),
                                                 batch_labels_tensor, current_batch_size, classes=classes, batch_idx=idx, log=log)
 
             if log:
@@ -972,7 +980,7 @@ def main(args):
             epoch_macro_f1 = metrics["macro_f1"]
             epoch_mcc = metrics["mcc"]
 
-            if aux_task == "urls_classification":
+            if aux_task == task_dev_metric:
                 epoch_loss /= idx + 1
                 final_loss += epoch_loss
                 final_acc += epoch_acc
@@ -1013,7 +1021,7 @@ def main(args):
             logger.info("[dev:epoch#%d] MCC (task '%s'): %.2f %%", epoch + 1, aux_task, dev_mcc * 100.0)
 
             # TODO TBD get best model using multiple metrics from different tasks? E.g. macro F1 of main task and language identification task
-            if aux_task == "urls_classification":
+            if aux_task == task_dev_metric:
                 # Get best dev and train result (check out best_values_minimize and best_values_maximize if you modify these values)
                 if best_dev_metric == "loss":
                     dev_target = dev_loss
@@ -1122,11 +1130,11 @@ def main(args):
     dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
                                       device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
-    if "urls_classification" in metrics_auxiliary_tasks:
+    if task_dev_metric in metrics_auxiliary_tasks:
         # Remove and add main task in order to be the last task: we want the main task to be the last
         #  in order to plot info from the main task, if necessary
-        metrics_auxiliary_tasks.remove("urls_classification")
-        metrics_auxiliary_tasks.append("urls_classification")
+        metrics_auxiliary_tasks.remove(task_dev_metric)
+        metrics_auxiliary_tasks.append(task_dev_metric)
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
@@ -1248,29 +1256,45 @@ def initialization():
         parser.add_argument('non_parallel_urls_dev_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with non-parallel URLs (TSV format)")
         parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with non-parallel URLs (TSV format)")
 
-    parser.add_argument('--batch-size', type=int, default=16, help="Batch size. Elements which will be processed before proceed to train, but the whole batch will be processed in blocks in order to avoid OOM errors")
+    parser.add_argument('--batch-size', type=int, default=16,
+                        help="Batch size. Elements which will be processed before proceed to train, but the whole batch will "
+                             "be processed in blocks in order to avoid OOM errors")
     parser.add_argument('--block-size', type=int, help="Block size. Elements which will be provided to the model at once")
-    parser.add_argument('--max-tokens', type=int, default=-1, help="Process batches in groups tokens size (fairseq style). Batch size is still relevant since the value is used when batches are needed (e.g. sampler from dataset)")
+    parser.add_argument('--max-tokens', type=int, default=-1,
+                        help="Process batches in groups tokens size (fairseq style). "
+                             "Batch size is still relevant since the value is used when batches are needed (e.g. sampler from dataset)")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
     parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
-    parser.add_argument('--dataset-workers', type=int, default=-1, help="No. workers when loading the data in the dataset. When negative, all available CPUs will be used")
+    parser.add_argument('--dataset-workers', type=int, default=-1,
+                        help="No. workers when loading the data in the dataset. When negative, all available CPUs will be used")
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")
     parser.add_argument('--max-length-tokens', type=int, default=256, help="Max. length for the generated tokens")
     parser.add_argument('--model-input', help="Model input path which will be loaded")
     parser.add_argument('--model-output', help="Model output path where the model will be stored")
     parser.add_argument('--inference', action="store_true",
-                        help="Do not train, just apply inference (flag --model-input is recommended). If this option is set, it will not be necessary to provide the input dataset")
+                        help="Do not train, just apply inference (flag --model-input is recommended). "
+                             "If this option is set, it will not be necessary to provide the input dataset")
     parser.add_argument('--inference-from-stdin', action="store_true", help="Read inference from stdin")
-    parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
-    parser.add_argument('--threshold', type=float, default=-np.inf, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
-    parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none", help="Strategy for dealing with imbalanced data")
+    parser.add_argument('--parallel-likelihood', action="store_true",
+                        help="Print parallel likelihood instead of classification string (inference)")
+    parser.add_argument('--threshold', type=float, default=-np.inf,
+                        help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
+    parser.add_argument('--imbalanced-strategy', type=str, choices=["none", "over-sampling", "weighted-loss"], default="none",
+                        help="Strategy for dealing with imbalanced data")
     parser.add_argument('--patience', type=int, default=0, help="Patience before stopping the training")
-    parser.add_argument('--train-until-patience', action="store_true", help="Train until patience value is reached (--epochs will be ignored in order to stop, but will still be used for other actions like LR scheduler)")
-    parser.add_argument('--do-not-load-best-model', action="store_true", help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
+    parser.add_argument('--train-until-patience', action="store_true",
+                        help="Train until patience value is reached (--epochs will be ignored in order to stop, but will still be "
+                             "used for other actions like LR scheduler)")
+    parser.add_argument('--do-not-load-best-model', action="store_true",
+                        help="Do not load best model for final dev and test evaluation (--model-output is necessary)")
     parser.add_argument('--overwrite-output-model', action="store_true", help="Overwrite output model if it exists (initial loading)")
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
-    parser.add_argument('--remove-positional-data-from-resource', action="store_true", help="Remove content after '#' in the resorce (e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
-    parser.add_argument('--add-symmetric-samples', action="store_true", help="Add symmetric samples for training (if (src, trg) URL pair is provided, (trg, src) URL pair will be provided as well)")
+    parser.add_argument('--remove-positional-data-from-resource', action="store_true",
+                        help="Remove content after '#' in the resorce "
+                             "(e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
+    parser.add_argument('--add-symmetric-samples', action="store_true",
+                        help="Add symmetric samples for training (if (src, trg) URL pair is provided, "
+                             "(trg, src) URL pair will be provided as well)")
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
     parser.add_argument('--log-directory', help="Directory where different log files will be stored")
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
@@ -1282,22 +1306,48 @@ def initialization():
                         help="Args. for the optimizer (in order to see the specific configuration for a optimizer, use -h and set --optimizer)")
     parser.add_argument('--lr-scheduler', choices=lr_scheduler_conf["choices"], default=lr_scheduler_conf["default"], help="LR scheduler")
     parser.add_argument('--lr-scheduler-args', **lr_scheduler_conf["options"],
-                        help="Args. for LR scheduler (in order to see the specific configuration for a LR scheduler, use -h and set --lr-scheduler)")
-    parser.add_argument('--re-initialize-last-n-layers', type=int, default=3, help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
+                        help="Args. for LR scheduler (in order to see the specific configuration for a LR scheduler, "
+                             "use -h and set --lr-scheduler)")
+    parser.add_argument('--re-initialize-last-n-layers', type=int, default=3,
+                        help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")
-    parser.add_argument('--stringify-instead-of-tokenization', action="store_true", help="Preprocess URLs applying custom stringify instead of tokenization")
+    parser.add_argument('--stringify-instead-of-tokenization', action="store_true",
+                        help="Preprocess URLs applying custom stringify instead of tokenization")
     parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs while preprocessing")
-    parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm", "language-identification"], help="Tasks which will try to help to the main task (multitasking)")
-    parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*', help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, but if any is provided, as many weights as auxiliary tasks will have to be provided")
+    parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm", "language-identification"],
+                        help="Tasks which will try to help to the main task (multitasking)")
+    parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*',
+                        help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, "
+                             "but if any is provided, as many weights as auxiliary tasks will have to be provided")
     parser.add_argument('--freeze-embeddings-layer', action="store_true", help="Freeze embeddings layer")
-    parser.add_argument('--remove-instead-of-truncate', action="store_true", help="Remove pairs of URLs which would need to be truncated (if not enabled, truncation will be applied). This option will be only applied to the training set")
-    parser.add_argument('--best-dev-metric', default="Macro-F1", choices=["loss", "Macro-F1", "MCC"], help="Which metric should be maximized or minimized when dev is being evaluated in order to save the best model")
+    parser.add_argument('--remove-instead-of-truncate', action="store_true",
+                        help="Remove pairs of URLs which would need to be truncated (if not enabled, truncation will be applied). "
+                             "This option will be only applied to the training set")
+    parser.add_argument('--best-dev-metric', default="Macro-F1", choices=["loss", "Macro-F1", "MCC"],
+                        help="Which metric should be maximized or minimized when dev is being evaluated in order to save the best model")
+    parser.add_argument('--task-dev-metric', default="urls_classification",
+                        choices=["urls_classification", "language-identification.langid", "language-identification.urls_classification"],
+                        help="Task which will be used in order to save the best model. It will also be used in order to replace the main "
+                             "task if --do-not-train-main-task is set")
 
-    parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (not fully guaranteed). Set a negative number in order to disable this feature")
+    parser.add_argument('--auxiliary-tasks-flags', type=str, nargs='*', choices=["language-identification_add-solo-urls-too"],
+                        help="Set of options which will set up some aspects of the auxiliary tasks")
+    # language-identification_add-solo-urls-too -> if task "language-identification", with this option set, model will be trained not only
+    #                                              with "src_lang<sep>trg_lang<sep>src_url<sep>trg_url", but also with "src_url<sep>trg_url"
+    #                                              but there will have twice times input data
+
+    parser.add_argument('--do-not-train-main-task', action="store_true",
+                        help="Main task (URLs classification) will not be trained. Auxiliary task will be needed")
+
+    parser.add_argument('--seed', type=int, default=71213,
+                        help="Seed in order to have deterministic results (not fully guaranteed). "
+                             "Set a negative number in order to disable this feature")
     parser.add_argument('--plot', action="store_true", help="Plot statistics (matplotlib pyplot) in real time")
     parser.add_argument('--plot-path', help="If set, the plot will be stored instead of displayed")
-    parser.add_argument('--lock-file', help="If set, and the file does not exist, it will be created once the training finishes. If does exist, the training will not be executed")
+    parser.add_argument('--lock-file',
+                        help="If set, and the file does not exist, it will be created once the training finishes. "
+                             "If does exist, the training will not be executed")
     parser.add_argument('--waiting-time', type=int, default=20, help="Waiting time, if needed for letting the user react")
 
 
