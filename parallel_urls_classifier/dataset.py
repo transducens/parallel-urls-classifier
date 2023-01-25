@@ -155,8 +155,8 @@ class SmartBatchingURLsDataset(Dataset):
         self.labels["urls_classification"] = \
             self.labels["urls_classification"].type(torch.float) if regression else self.labels["urls_classification"].type(torch.long)
 
-        #if "language-identification" in self.labels:
-        #    self.labels["language-identification"] = torch.from_numpy(self.labels["language-identification"]).type(torch.float)
+        if "language-identification" in self.labels:
+            self.labels["language-identification"] = torch.from_numpy(self.labels["language-identification"]).type(torch.float)
 
     def __len__(self):
         return len(self.tokens)
