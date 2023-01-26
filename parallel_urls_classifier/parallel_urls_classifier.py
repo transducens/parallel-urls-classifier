@@ -444,7 +444,8 @@ def main(args):
         interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
                               parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
-                              remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower)
+                              remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower,
+                              auxiliary_tasks=auxiliary_tasks)
 
         # Stop execution
         return
@@ -550,10 +551,10 @@ def main(args):
                                                      tasks_data=dataset_train_tasks_data)
     dataset_dev = dataset.SmartBatchingURLsDataset(parallel_urls_dev, non_parallel_urls_dev, tokenizer,
                                                    max_length_tokens, regression=regression, set_desc="dev",
-                                                     tasks_data=dataset_dev_tasks_data)
+                                                   tasks_data=dataset_dev_tasks_data)
     dataset_test = dataset.SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer,
                                                     max_length_tokens, regression=regression, set_desc="test",
-                                                     tasks_data=dataset_test_tasks_data)
+                                                    tasks_data=dataset_test_tasks_data)
 
     logger.debug("Allocated memory after encoding the data: %d", utils.get_current_allocated_memory_size())
     logger.debug("Total tokens (train): %d", dataset_train.total_tokens)

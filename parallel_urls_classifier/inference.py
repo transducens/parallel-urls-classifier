@@ -240,16 +240,25 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
 @torch.no_grad()
 def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                           inference_from_stdin=False, remove_authority=False, remove_positional_data_from_resource=False,
-                          parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True):
+                          parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True,
+                          auxiliary_tasks=[]):
     logger.info("Inference mode enabled")
 
+    for aux_task in auxiliary_tasks:
+        if aux_task == "language-identification":
+            pass
+        else:
+            raise Exception(f"Not supported or unknown task: {aux_task}")
+
     if not inference_from_stdin:
-        logger.info("Insert 2 blank lines in order to end")
+        logger.info("Insert %d blank lines in order to end", 2 if len(auxiliary_tasks) == 0 else 4)
 
     logger_tokens.debug("preprocessed_urls\tmodel_input\ttokens\ttokens2str\tunk_chars\t"
                         "initial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
 
     model.eval()
+
+    all_tasks = ["urls_classification"] + auxiliary_tasks
 
     while True:
         if inference_from_stdin:
@@ -259,7 +268,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower),
-                            return_urls=True))
+                            return_urls=True, auxiliary_tasks=auxiliary_tasks, lang_id_output_expected=False))
 
             except StopIteration:
                 break
@@ -267,6 +276,13 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             initial_src_urls = [u[0] for u in initial_urls]
             initial_trg_urls = [u[1] for u in initial_urls]
         else:
+            src_url_lang = ''
+            trg_url_lang = ''
+
+            if "language-identification" in auxiliary_tasks:
+                src_url_lang = input("src url lang: ").strip()
+                trg_url_lang = input("trg url lang: ").strip()
+
             initial_src_urls = [input("src url: ").strip()]
             initial_trg_urls = [input("trg url: ").strip()]
 
@@ -275,11 +291,17 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             src_url = initial_src_urls[0]
             trg_url = initial_trg_urls[0]
-            target_urls = next(utils.tokenize_batch_from_fd([f"{src_url}\t{trg_url}"],
-                               tokenizer, batch_size,
+            data = f"{src_url}\t{trg_url}"
+
+            if "language-identification" in auxiliary_tasks:
+                data = f"{src_url_lang}\t{trg_url_lang}\t{data}"
+
+            data = [data]
+            target_urls = next(utils.tokenize_batch_from_fd(data, tokenizer, batch_size,
                                f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                      remove_positional_data=remove_positional_data_from_resource,
-                                                                     separator=url_separator, lower=lower)))
+                                                                     separator=url_separator, lower=lower),
+                               auxiliary_tasks=auxiliary_tasks, lang_id_output_expected=False))
 
         target_urls = target_urls["urls"]
 
@@ -308,31 +330,41 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                                               sp_unk_vs_tokens_len, sp_unk_vs_one_len_tokens)
 
         # Inference
-        results = inference_with_heads(model, ["urls_classification"], tokenizer, {"urls": urls, "attention_mask": attention_mask},
+        results = inference_with_heads(model, all_tasks, tokenizer, {"urls": urls, "attention_mask": attention_mask},
                                        amp_context_manager)
 
-        # Get results only for main task
-        outputs = results["urls_classification"]["outputs"].cpu()
-        outputs_argmax = results["urls_classification"]["outputs_classification"]
-        regression = results["urls_classification"]["regression"]
+        # Get results of each task
 
-        #if len(outputs_argmax.shape) == 0:
-        #    outputs_argmax = np.array([outputs_argmax])
+        for task in all_tasks:
+            outputs = results[task]["outputs"].cpu()
+            outputs_argmax = results[task]["outputs_classification"]
 
-        assert outputs.numpy().shape[0] == len(initial_src_urls), "Output samples does not match with the length of src URLs " \
-                                                                  f"({outputs.numpy().shape[0]} vs {len(initial_src_urls)})"
-        assert outputs.numpy().shape[0] == len(initial_trg_urls), "Output samples does not match with the length of trg URLs " \
-                                                                  f"({outputs.numpy().shape[0]} vs {len(initial_trg_urls)})"
+            #if len(outputs_argmax.shape) == 0:
+            #    outputs_argmax = np.array([outputs_argmax])
 
-        if parallel_likelihood:
-            for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
-                likelihood = data if regression else data[1] # parallel
+            if outputs.numpy().shape[0] != len(initial_src_urls):
+                raise Exception("Output samples does not match with the length of src URLs "
+                                f"({outputs.numpy().shape[0]} vs {len(initial_src_urls)})")
+            if outputs.numpy().shape[0] != len(initial_trg_urls):
+                raise Exception("Output samples does not match with the length of trg URLs "
+                                f"({outputs.numpy().shape[0]} vs {len(initial_trg_urls)})")
 
-                if likelihood >= threshold:
-                    print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
-        else:
-            for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
-                print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
+            if parallel_likelihood:
+                for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
+                    if task == "urls_classification":
+                        regression = results[task]["regression"]
+                        likelihood = data if regression else data[1] # parallel
+
+                        if likelihood >= threshold:
+                            print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
+                    else:
+                        print(f"{data}\t{initial_src_url}\t{initial_trg_url}")
+            else:
+                for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
+                    if task == "urls_classification":
+                        print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
+                    else:
+                        print(f"{argmax}\t{initial_src_url}\t{initial_trg_url}")
 
 @torch.no_grad()
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
