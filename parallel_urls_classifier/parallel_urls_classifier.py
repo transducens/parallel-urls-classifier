@@ -458,6 +458,13 @@ def main(args):
         # Stop execution
         return
 
+    if regression:
+        if imbalanced_strategy == "weighted-loss":
+            logger.warning("Incompatible weight strategy ('%s'): regression can't be applied with the selected strategy: "
+                           "it will not be applied", imbalanced_strategy)
+
+            imbalanced_strategy = "none"
+
     # Unfreeze heads layers
     for task in all_tasks:
         head = model.get_head(task)
@@ -605,10 +612,11 @@ def main(args):
 
             logger.debug("Classes weights (task '%s'): %s", head_task, str(classes_weights))
 
+            # https://medium.com/dejunhuang/learning-day-57-practical-5-loss-function-crossentropyloss-vs-bceloss-in-pytorch-softmax-vs-bd866c8a0d23
             if regression:
                 # Regression
-                criterion = nn.BCEWithLogitsLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized
-                                                                                       #  (i.e. sigmoid is applied in the loss function)
+                criterion = nn.BCEWithLogitsLoss(reduction="mean") # Raw input, not normalized
+                                                                   #  (i.e. sigmoid is applied in the loss function)
             else:
                 # Binary classification
                 criterion = nn.CrossEntropyLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized

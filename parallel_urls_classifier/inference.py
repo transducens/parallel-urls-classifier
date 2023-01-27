@@ -78,6 +78,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                 if regression:
                     # Regression
                     #outputs = torch.sigmoid(outputs).squeeze(1)
+                    outputs = outputs.squeeze(1)
                     # TODO use threshold instead of torch.round
                     outputs_classification = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
                 else:
