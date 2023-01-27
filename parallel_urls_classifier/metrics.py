@@ -150,19 +150,8 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, batch_idx
     }
 
 def get_metrics_task_specific(task, outputs, labels, current_batch_size, classes=2, batch_idx=-1, log=False):
-    if task == "urls_classification":
+    if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
         metrics = get_metrics(outputs, labels, current_batch_size, classes=classes, batch_idx=batch_idx, log=log, task=task)
-    elif task.startswith("language-identification."):
-        if task.endswith(".langid"):
-            # Evaluate sub-task: language-identification
-            metrics = get_metrics(outputs[:,0], labels[:,0], current_batch_size, classes=2, batch_idx=batch_idx, log=log, task=task)
-        elif task.endswith(".urls_classification"):
-            # Evaluate sub-task: URLs classification
-            metrics = get_metrics(outputs[:,1], labels[:,1], current_batch_size, classes=classes, batch_idx=batch_idx, log=log, task=task)
-        else:
-            raise Exception(f"Unexpected format for 'language-identification' task name: {aux_task}")
-    elif task == "language-identification":
-        raise Exception("Unexpected task 'language-identification': it is expected to receive a sub-task")
     elif task == "mlm":
         # TODO how can we evaluate MLM beyond the loss?
         logger.warning("Task '%s' is not being evaluated: returning empty metrics", task)

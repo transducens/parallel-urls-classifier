@@ -12,7 +12,7 @@ import parallel_urls_classifier.preprocess as preprocess
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+#import torch.nn.functional as F
 import transformers
 
 logger = logging.getLogger("parallel_urls_classifier")
@@ -42,15 +42,11 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
             if criteria:
                 labels["urls_classification"] = inputs_and_outputs["labels"]
         if "language-identification" in tasks:
-            #if "urls_classification" not in tasks:
-            #    raise Exception("Task 'language-identification' needs task 'urls_classification', and it seems it is not enabled")
-
             if criteria:
-                # labels: [lang. id. output, parallel pair of URLs and lang. id. output]
-                #labels["language-identification"] = \
-                #    torch.cat([inputs_and_outputs["labels_task_language_identification"],
-                #               torch.mul(inputs_and_outputs["labels_task_language_identification"], inputs_and_outputs["labels"])], dim=1)
                 labels["language-identification"] = inputs_and_outputs["labels_task_language_identification"]
+        if "langid-and-urls_classification" in tasks:
+            if criteria:
+                labels["langid-and-urls_classification"] = inputs_and_outputs["labels_task_language_identification_and_urls_classification"]
         if "mlm" in tasks:
             # MLM is applied at the same time with all the other tasks
 
@@ -76,28 +72,26 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
             loss_weight = tasks_weights[head_task] if tasks_weights else 1.0
 
             # Calcule loss
-            if head_task == "urls_classification":
-                # Main task
-
-                regression = outputs.cpu().detach().numpy().shape[1] == 1
+            if head_task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+                regression = outputs.cpu().detach().numpy().shape[-1] == 1
 
                 if regression:
                     # Regression
-                    outputs = torch.sigmoid(outputs).squeeze(1)
+                    #outputs = torch.sigmoid(outputs).squeeze(1)
                     # TODO use threshold instead of torch.round
-                    outputs_argmax = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+                    outputs_classification = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
                 else:
                     # Binary classification
-                    outputs = F.softmax(outputs, dim=1)
-                    outputs_argmax = torch.argmax(outputs.cpu(), dim=1)
+                    #outputs = F.softmax(outputs, dim=1)
+                    outputs_classification = torch.argmax(outputs.cpu(), dim=1)
 
                 if criterion:
                     loss = criterion(outputs, labels[head_task])
                     loss *= loss_weight
 
-                results["urls_classification"] = {
+                results[head_task] = {
                     "outputs": outputs,
-                    "outputs_classification": outputs_argmax,
+                    "outputs_classification": outputs_classification,
                     "loss_detach": loss.cpu().detach() if criterion else None,
                     "regression": regression,
                 }
@@ -108,20 +102,6 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
 
                 results["mlm"] = {
                     "outputs": outputs,
-                    "loss_detach": loss.cpu().detach() if criterion else None,
-                }
-            elif head_task == "language-identification":
-                outputs = torch.sigmoid(outputs)
-                # TODO use threshold instead of torch.round
-                outputs_classification = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
-
-                if criterion:
-                    loss = criterion(outputs, labels[head_task])
-                    loss *= loss_weight
-
-                results["language-identification"] = {
-                    "outputs": outputs,
-                    "outputs_classification": outputs_classification,
                     "loss_detach": loss.cpu().detach() if criterion else None,
                 }
             else:
@@ -181,28 +161,31 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
 
             # Tasks
             for task in tasks:
-                if task == "urls_classification":
-                    loss_urls_classification = results["urls_classification"]["loss_detach"] # TODO propagate somehow? Statistics?
-                    outputs_argmax = results["urls_classification"]["outputs_classification"]
-                    regression = results["urls_classification"]["regression"]
-                    labels = inputs_and_outputs["labels"].cpu()
+                if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+                    loss_task = results[task]["loss_detach"] # TODO propagate somehow? Statistics?
+                    outputs_classification = results[task]["outputs_classification"].cpu()
+                    regression = results[task]["regression"]
+
+                    if task == "urls_classification":
+                        labels = inputs_and_outputs["labels"]
+                    elif task == "language-identification":
+                        labels = inputs_and_outputs["labels_task_language_identification"]
+                    elif task == "langid-and-urls_classification":
+                        labels = inputs_and_outputs["labels_task_language_identification_and_urls_classification"]
+                    else:
+                        raise Exception(f"Unknown/not supported task: {task}")
+
+                    labels = labels.cpu()
 
                     if regression:
                         labels = torch.round(labels).type(torch.long)
 
-                    all_outputs["urls_classification"].extend(outputs_argmax.tolist())
-                    all_labels["urls_classification"].extend(labels.tolist())
+                    all_outputs[task].extend(outputs_classification.tolist())
+                    all_labels[task].extend(labels.tolist())
                 elif task == "mlm":
                     # TODO propagate somehow? Statistics?
                     loss_mlm = results["mlm"]["loss_detach"]
                     outputs_mlm = results["mlm"]["outputs"].cpu()
-                elif task == "language-identification":
-                    loss_language_identification = results["language-identification"]["loss_detach"] # TODO propagate somehow? Statistics?
-                    outputs_language_identification = results["language-identification"]["outputs_classification"].cpu()
-                    labels = inputs_and_outputs["labels_task_language_identification"].cpu()
-
-                    all_outputs["language-identification"].extend(outputs_language_identification.tolist())
-                    all_labels["language-identification"].extend(labels.tolist())
                 else:
                     raise Exception(f"Unknown task: {task}")
 
@@ -226,11 +209,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
         if task == "mlm":
             continue
 
-        if task == "language-identification":
-            for _task in (f"{task}.langid", f"{task}.urls_classification"):
-                metrics[_task] = get_metrics_task_specific(_task, all_outputs[task], all_labels[task], len(all_labels[task]), classes=classes)
-        else:
-            metrics[task] = get_metrics_task_specific(task, all_outputs[task], all_labels[task], len(all_labels[task]), classes=classes)
+        metrics[task] = get_metrics_task_specific(task, all_outputs[task], all_labels[task], len(all_labels[task]), classes=classes)
 
     return {
         "loss": total_loss,
@@ -245,13 +224,13 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     logger.info("Inference mode enabled")
 
     for aux_task in auxiliary_tasks:
-        if aux_task == "language-identification":
+        if aux_task in ("language-identification", "langid-and-urls_classification"):
             pass
         else:
             raise Exception(f"Not supported or unknown task: {aux_task}")
 
     if not inference_from_stdin:
-        logger.info("Insert %d blank lines in order to end", 2 if len(auxiliary_tasks) == 0 else 4)
+        logger.info("Insert blank lines in order to end")
 
     logger_tokens.debug("preprocessed_urls\tmodel_input\ttokens\ttokens2str\tunk_chars\t"
                         "initial_tokens_vs_detokenized\tinitial_tokens_vs_detokenized_len_1")
@@ -259,6 +238,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     model.eval()
 
     all_tasks = ["urls_classification"] + auxiliary_tasks
+    task_langid = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
 
     while True:
         if inference_from_stdin:
@@ -276,15 +256,12 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             initial_src_urls = [u[0] for u in initial_urls]
             initial_trg_urls = [u[1] for u in initial_urls]
         else:
-            src_url_lang = ''
-            trg_url_lang = ''
-
-            if "language-identification" in auxiliary_tasks:
-                src_url_lang = input("src url lang: ").strip()
-                trg_url_lang = input("trg url lang: ").strip()
-
             initial_src_urls = [input("src url: ").strip()]
             initial_trg_urls = [input("trg url: ").strip()]
+
+            if task_langid:
+                src_url_lang = input("src url lang: ").strip()
+                trg_url_lang = input("trg url lang: ").strip()
 
             if not initial_src_urls[0] and not initial_trg_urls[0]:
                 break
@@ -293,8 +270,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             trg_url = initial_trg_urls[0]
             data = f"{src_url}\t{trg_url}"
 
-            if "language-identification" in auxiliary_tasks:
-                data = f"{src_url_lang}\t{trg_url_lang}\t{data}"
+            if task_langid:
+                data += f"\t{src_url_lang}\t{trg_url_lang}"
 
             data = [data]
             target_urls = next(utils.tokenize_batch_from_fd(data, tokenizer, batch_size,
@@ -351,20 +328,20 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             if parallel_likelihood:
                 for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
-                    if task == "urls_classification":
+                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
                         regression = results[task]["regression"]
                         likelihood = data if regression else data[1] # parallel
 
                         if likelihood >= threshold:
-                            print(f"{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
+                            print(f"{task}\t{likelihood:.4f}\t{initial_src_url}\t{initial_trg_url}")
                     else:
-                        print(f"{data}\t{initial_src_url}\t{initial_trg_url}")
+                        print(f"{task}\t{data}\t{initial_src_url}\t{initial_trg_url}")
             else:
                 for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
-                    if task == "urls_classification":
-                        print(f"{'parallel' if argmax == 1 else 'non-parallel'}\t{initial_src_url}\t{initial_trg_url}")
+                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+                        print(f"{task}\t{'positive' if argmax == 1 else 'negative'}\t{initial_src_url}\t{initial_trg_url}")
                     else:
-                        print(f"{argmax}\t{initial_src_url}\t{initial_trg_url}")
+                        print(f"{task}\t{argmax}\t{initial_src_url}\t{initial_trg_url}")
 
 @torch.no_grad()
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,

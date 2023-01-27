@@ -107,6 +107,8 @@ class MultitaskModel(transformers.PreTrainedModel):
                 heads[task] = transformers.AutoModelForMaskedLM
             elif task == "language-identification":
                 heads[task] = transformers.AutoModelForSequenceClassification
+            elif task == "langid-and-urls_classification":
+                heads[task] = transformers.AutoModelForSequenceClassification
             else:
                 raise Exception(f"Unknown task: {task}")
 

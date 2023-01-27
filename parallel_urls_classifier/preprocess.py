@@ -8,6 +8,8 @@ from parallel_urls_classifier.tokenizer import tokenize
 
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+logger = logging.getLogger("parallel_urls_classifier")
+
 _stringify_url_replace_chars = ['.', '-', '_', '=', '?', '\n', '\r', '\t']
 def stringify_url(url, separator=' '):
     url = url.split('/')
@@ -22,11 +24,16 @@ def stringify_url(url, separator=' '):
 
 def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_data=False, separator=' ',
                    stringify_instead_of_tokenization=False, remove_protocol=True, lower=False,
-                   tokenization=True):
-    urls = []
-
+                   tokenization=True, start_urls_idx=None, end_urls_idx=None):
     if isinstance(url, str):
         url = [url]
+
+        if start_urls_idx is not None or end_urls_idx is not None:
+            logger.warning("Provided URL is not a list, but a string, and start:end idxs were provided: "
+                           "URL will be split and a substring will be the result instead of a set of URLs")
+
+    start_urls_idx = 0 if start_urls_idx is None else start_urls_idx
+    end_urls_idx = len(url) if end_urls_idx is None else end_urls_idx
 
     if remove_protocol_and_authority:
         if not remove_protocol:
@@ -34,7 +41,9 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
 
         remove_protocol = True # Just for logic, but it will have no effect
 
-    for u in url:
+    urls = [u for u in url[0:start_urls_idx]] # Append all initial elements from the provided data
+
+    for u in url[start_urls_idx:end_urls_idx]:
         u = u.rstrip('/')
 
         if remove_protocol_and_authority:
@@ -69,6 +78,10 @@ def preprocess_url(url, remove_protocol_and_authority=False, remove_positional_d
             # Tokenize
             u = ' '.join(tokenize(u))
 
+        urls.append(u)
+
+    # Append all initial elements from the provided data
+    for u in url[end_urls_idx:]:
         urls.append(u)
 
     return urls

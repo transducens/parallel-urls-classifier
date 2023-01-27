@@ -376,10 +376,18 @@ def main(args):
         total_auxiliary_tasks += 1
     if "language-identification" in auxiliary_tasks:
         all_tasks_kwargs["language-identification"] = {
-            "num_labels": 2, # We will have 2 outputs: 1st will be the language identification of all the data and 2nd the urls_classification task and 1st output "multiplication"
+            "num_labels": num_labels,
         }
 
         logger.info("Using auxiliary task: language-identification")
+
+        total_auxiliary_tasks += 1
+    if "langid-and-urls_classification" in auxiliary_tasks:
+        all_tasks_kwargs["langid-and-urls_classification"] = {
+            "num_labels": num_labels,
+        }
+
+        logger.info("Using auxiliary task: langid-and-urls_classification")
 
         total_auxiliary_tasks += 1
 
@@ -449,13 +457,6 @@ def main(args):
 
         # Stop execution
         return
-
-    if regression:
-        if imbalanced_strategy == "weighted-loss":
-            logger.warning("Incompatible weight strategy ('%s'): regression can't be applied with the selected strategy: "
-                           "it will not be applied", imbalanced_strategy)
-
-            imbalanced_strategy = "none"
 
     # Unfreeze heads layers
     for task in all_tasks:
@@ -588,31 +589,32 @@ def main(args):
     #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
     #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
 
-    classes_weights = torch.as_tensor(sklearn.utils.class_weight.compute_class_weight("balanced",
-                                                                                      classes=np.unique(dataset_train.labels["urls_classification"]),
-                                                                                      y=dataset_train.labels["urls_classification"].numpy()),
-                                      dtype=torch.float)
-    loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
     training_steps_per_epoch = len(dataloader_train)
     training_steps = training_steps_per_epoch * epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
     criteria = {}
 
-    logger.debug("Classes weights: %s", str(classes_weights))
-
     # Get criterion for each head task
     for head_task in all_tasks:
-        if head_task == "urls_classification":
+        if head_task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+            classes_weights = \
+                torch.as_tensor(sklearn.utils.class_weight.compute_class_weight("balanced",
+                                                                                classes=np.unique(dataset_train.labels[head_task]),
+                                                                                y=dataset_train.labels[head_task].numpy()),
+                                dtype=torch.float)
+            loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
+
+            logger.debug("Classes weights (task '%s'): %s", head_task, str(classes_weights))
+
             if regression:
                 # Regression
-                criterion = nn.MSELoss()
+                criterion = nn.BCEWithLogitsLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized
+                                                                                       #  (i.e. sigmoid is applied in the loss function)
             else:
                 # Binary classification
-                criterion = nn.CrossEntropyLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized (i.e. softmax hasn't been applied)
-                # TODO change to BCELoss? bceloss vs crossentropyloss -> BCELoss seems to fit here
+                criterion = nn.CrossEntropyLoss(weight=loss_weight, reduction="mean") # Raw input, not normalized
+                                                                                      #  (i.e. softmax is applied in the loss function)
         elif head_task == "mlm":
             criterion = nn.CrossEntropyLoss()
-        elif head_task == "language-identification":
-            criterion = nn.MSELoss() # We apply MSELoss since we have 2 independent sub-tasks
         else:
             raise Exception(f"Unknown head task: {head_task}")
 
@@ -621,8 +623,13 @@ def main(args):
         criteria[head_task] = criterion
 
     if llrd:
-        #model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.0) # Adam
-        model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01) # AdamW
+        if optimizer_str == "adam":
+            model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.0)
+        else:
+            if optimizer_str != "adamw":
+                logger.warning("Using LLRD with the configuration of AdamW optimizer even '%s' was selected", optimizer_str)
+
+            model_parameters = utils.get_model_parameters_applying_llrd(model, learning_rate, weight_decay=0.01) # AdamW
     else:
         model_parameters = filter(lambda p: p.requires_grad, model.parameters())
 
@@ -739,13 +746,6 @@ def main(args):
     # Tasks and sub-tasks
     metrics_auxiliary_tasks = copy.deepcopy(all_tasks)
 
-    while "language-identification" in metrics_auxiliary_tasks:
-        metrics_auxiliary_tasks.remove("language-identification")
-
-    if "language-identification" in auxiliary_tasks:
-        metrics_auxiliary_tasks.append("language-identification.langid")
-        metrics_auxiliary_tasks.append("language-identification.urls_classification")
-
     if task_dev_metric not in metrics_auxiliary_tasks:
         raise Exception(f"Selected task not found in the available tasks: '{task_dev_metric}' not in {str(metrics_auxiliary_tasks)}")
 
@@ -818,6 +818,12 @@ def main(args):
 
                     batch_outputs["language-identification"].extend(_outputs.tolist())
                     batch_labels["language-identification"].extend(_labels.tolist())
+                if "langid-and-urls_classification" in all_tasks:
+                    _outputs = results["langid-and-urls_classification"]["outputs_classification"]
+                    _labels = inputs_and_outputs["labels_task_language_identification_and_urls_classification"].cpu().detach()
+
+                    batch_outputs["langid-and-urls_classification"].extend(_outputs.tolist())
+                    batch_labels["langid-and-urls_classification"].extend(_labels.tolist())
 
                 if cuda_amp:
                     amp_grad_scaler.scale(loss).backward()
@@ -848,15 +854,9 @@ def main(args):
 
             # Get metrics
             log = (idx + 1) % show_statistics_every_batches == 0
-
-            _task_dev_metric = task_dev_metric
-
-            if task_dev_metric in ("language-identification.langid", "language-identification.urls_classification"):
-                _task_dev_metric = "language-identification"
-
-            batch_labels_tensor = torch.as_tensor(batch_labels[_task_dev_metric])
+            batch_labels_tensor = torch.as_tensor(batch_labels[task_dev_metric])
             current_batch_size = batch_labels_tensor.shape[0]
-            metrics = get_metrics_task_specific(task_dev_metric, torch.as_tensor(batch_outputs[_task_dev_metric]),
+            metrics = get_metrics_task_specific(task_dev_metric, torch.as_tensor(batch_outputs[task_dev_metric]),
                                                 batch_labels_tensor, current_batch_size, classes=classes, batch_idx=idx, log=log)
 
             if log:
@@ -870,20 +870,15 @@ def main(args):
                         logger.debug("[train:batch#%d] Loss task '%s': %f", idx + 1, t, v)
 
                     for aux_task in auxiliary_tasks:
-                        if aux_task not in ("language-identification",):
+                        if aux_task in ("mlm",):
                             continue
 
-                        if aux_task == "language-identification":
-                            _outputs = torch.as_tensor(batch_outputs[aux_task])
-                            _labels = torch.as_tensor(batch_labels[aux_task])
+                        _outputs = torch.as_tensor(batch_outputs[aux_task])
+                        _labels = torch.as_tensor(batch_labels[aux_task])
 
-                            # We don't want the metrics, just the log
-                            get_metrics_task_specific(f"{aux_task}.langid", _outputs, _labels, current_batch_size,
-                                                      classes=classes, batch_idx=idx, log=log)
-                            get_metrics_task_specific(f"{aux_task}.urls_classification", _outputs, _labels, current_batch_size,
-                                                      classes=classes, batch_idx=idx, log=log)
-                        else:
-                            raise Exception(f"Unknown task: {aux_task}")
+                        # We don't want the metrics, just the log
+                        get_metrics_task_specific(aux_task, _outputs, _labels, current_batch_size,
+                                                  classes=classes, batch_idx=idx, log=log)
 
             show_statistics = (epoch == 0 and idx == 0) or (idx + 1) % show_statistics_every_batches == 0
             epoch_loss += loss_value
@@ -957,30 +952,13 @@ def main(args):
         logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
 
         for aux_task in metrics_auxiliary_tasks:
-            if aux_task == "urls_classification":
-                pass
-            elif aux_task == "mlm":
+            if aux_task in ("mlm",):
                 continue
-            elif aux_task == "language-identification":
-                raise Exception("Unexpected task 'language-identification': it is expected to receive a sub-task")
-            elif aux_task == "language-identification.langid":
-                pass
-            elif aux_task == "language-identification.urls_classification":
-                pass
-            else:
-                raise Exception(f"Unknown task: {aux_task}")
 
-            if aux_task.startswith("language-identification."):
-                all_outputs["language-identification"] = torch.as_tensor(all_outputs["language-identification"])
-                all_labels["language-identification"] = torch.as_tensor(all_labels["language-identification"])
-                metrics = get_metrics_task_specific(aux_task, all_outputs["language-identification"], all_labels["language-identification"],
-                                                    len(all_labels["language-identification"]), classes=classes)
-            else:
-                all_outputs[aux_task] = torch.as_tensor(all_outputs[aux_task])
-                all_labels[aux_task] = torch.as_tensor(all_labels[aux_task])
-                metrics = get_metrics_task_specific(aux_task, all_outputs[aux_task], all_labels[aux_task],
-                                                    len(all_labels[aux_task]), classes=classes)
-
+            all_outputs[aux_task] = torch.as_tensor(all_outputs[aux_task])
+            all_labels[aux_task] = torch.as_tensor(all_labels[aux_task])
+            metrics = get_metrics_task_specific(aux_task, all_outputs[aux_task], all_labels[aux_task],
+                                                len(all_labels[aux_task]), classes=classes)
             epoch_acc = metrics["acc"]
             epoch_acc_per_class = metrics["acc_per_class"]
             epoch_acc_per_class_abs = metrics["f1"]
@@ -1322,7 +1300,7 @@ def initialization():
     parser.add_argument('--stringify-instead-of-tokenization', action="store_true",
                         help="Preprocess URLs applying custom stringify instead of tokenization")
     parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs while preprocessing")
-    parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm", "language-identification"],
+    parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm", "language-identification", "langid-and-urls_classification"],
                         help="Tasks which will try to help to the main task (multitasking)")
     parser.add_argument('--auxiliary-tasks-weights', type=float, nargs='*',
                         help="Weights for the loss of the auxiliary tasks. If none is provided, the weights will be 1, "
@@ -1334,7 +1312,7 @@ def initialization():
     parser.add_argument('--best-dev-metric', default="Macro-F1", choices=["loss", "Macro-F1", "MCC"],
                         help="Which metric should be maximized or minimized when dev is being evaluated in order to save the best model")
     parser.add_argument('--task-dev-metric', default="urls_classification",
-                        choices=["urls_classification", "language-identification.langid", "language-identification.urls_classification"],
+                        choices=["urls_classification", "language-identification", "langid-and-urls_classification"],
                         help="Task which will be used in order to save the best model. It will also be used in order to replace the main "
                              "task if --do-not-train-main-task is set")
 

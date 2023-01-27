@@ -79,7 +79,7 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
     initial_urls = []
 
     # Tasks
-    task_language_identification = "language-identification" in auxiliary_tasks
+    task_language_identification = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
     add_only_urls_too = not task_language_identification or lang_id_add_solo_urls_too
 
     for url in fd:
@@ -437,7 +437,13 @@ def get_data_from_batch(batch, block_size, device):
     urls = batch["url_tokens"]
     attention_mask = batch["url_attention_mask"]
     labels = batch["labels"]
-    labels_language_identification = batch["labels_task_language_identification"] if "labels_task_language_identification" in batch else None
+    labels_language_identification = None
+    labels_langid_and_urls_classification = None
+
+    if "labels_task_language_identification" in batch:
+        labels_language_identification = batch["labels_task_language_identification"]
+    if "labels_task_language_identification_and_urls_classification" in batch:
+        labels_langid_and_urls_classification = batch["labels_task_language_identification_and_urls_classification"]
 
     # Split in batch_size batches
     start = 0
@@ -459,6 +465,8 @@ def get_data_from_batch(batch, block_size, device):
 
             if labels_language_identification is not None:
                 inputs_and_outputs["labels_task_language_identification"] = labels_language_identification[start:end].to(device)
+            if labels_langid_and_urls_classification is not None:
+                inputs_and_outputs["labels_task_language_identification_and_urls_classification"] = labels_langid_and_urls_classification[start:end].to(device)
 
             yield inputs_and_outputs
 
