@@ -80,7 +80,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                     #outputs = torch.sigmoid(outputs).squeeze(1)
                     outputs = outputs.squeeze(1)
                     # TODO use threshold instead of torch.round
-                    outputs_classification = torch.round(outputs).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
+                    outputs_classification = torch.round(torch.sigmoid(outputs)).type(torch.int64).cpu() # Workaround for https://github.com/pytorch/pytorch/issues/54774
                 else:
                     # Binary classification
                     #outputs = F.softmax(outputs, dim=1)
@@ -110,7 +110,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
 
             # Sum loss (we don't want to define multiple losses at the same time in order to avoid high memory allocation)
             if criterion:
-                if not results["_internal"]["total_loss"]:
+                if results["_internal"]["total_loss"] is None:
                     results["_internal"]["total_loss"] = loss
                 else:
                     results["_internal"]["total_loss"] += loss

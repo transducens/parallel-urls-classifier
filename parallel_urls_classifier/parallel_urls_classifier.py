@@ -395,7 +395,7 @@ def main(args):
         logger.info("Not using any auxiliary task")
 
     if total_auxiliary_tasks != len(auxiliary_tasks):
-        # We forgot something (e.g. update the code according a new auxiliary tasks)
+        # We forgot something (e.g. update the code according to the new auxiliary tasks)
         raise Exception("The specified auxiliary tasks could not be loaded (bug): "
                         f"{' '.join(auxiliary_tasks)} ({len(auxiliary_tasks)})")
 
@@ -533,15 +533,15 @@ def main(args):
                 logger.warning("Your data seems to be imbalanced and you did not select any imbalanced data strategy")
                 break
 
-    # Prepare datasets data
+    # Prepare datasets data (NOTICE that we need non-parallel + parallel since it is the expected order used in the dataset module)
     dataset_train_tasks_data = {
-        "labels_language_identification": parallel_urls_train_target_lang_id + non_parallel_urls_train_target_lang_id,
+        "labels_language_identification": non_parallel_urls_train_target_lang_id + parallel_urls_train_target_lang_id,
     }
     dataset_dev_tasks_data = {
-        "labels_language_identification": parallel_urls_dev_target_lang_id + non_parallel_urls_dev_target_lang_id,
+        "labels_language_identification": non_parallel_urls_dev_target_lang_id + parallel_urls_dev_target_lang_id,
     }
     dataset_test_tasks_data = {
-        "labels_language_identification": parallel_urls_test_target_lang_id + non_parallel_urls_test_target_lang_id,
+        "labels_language_identification": non_parallel_urls_test_target_lang_id + parallel_urls_test_target_lang_id,
     }
 
     if len(parallel_urls_train_target_lang_id) == 0 and len(non_parallel_urls_train_target_lang_id) == 0:
@@ -751,11 +751,8 @@ def main(args):
     epoch_train_acc_classes, epoch_dev_acc_classes = {0: [], 1: []}, {0: [], 1: []}
     epoch_train_macro_f1, epoch_dev_macro_f1 = [], []
 
-    # Tasks and sub-tasks
-    metrics_auxiliary_tasks = copy.deepcopy(all_tasks)
-
-    if task_dev_metric not in metrics_auxiliary_tasks:
-        raise Exception(f"Selected task not found in the available tasks: '{task_dev_metric}' not in {str(metrics_auxiliary_tasks)}")
+    if task_dev_metric not in all_tasks:
+        raise Exception(f"Selected task not found in the available tasks: '{task_dev_metric}' not in {str(all_tasks)}")
 
     # Start training!
     while not stop_training:
@@ -790,7 +787,6 @@ def main(args):
 
             # Process in block_size blocks in order to avoid OOM errors, but use batch_size for update the model
             for inputs_and_outputs in utils.get_data_from_batch(batch, None if max_tokens else block_size, None):
-                labels = inputs_and_outputs["labels"]
                 total_train_tokens += sum([len(urls[urls != tokenizer.pad_token_id]) for urls in inputs_and_outputs["urls"]])
                 total_train_tokens_with_padding += sum([len(urls) for urls in inputs_and_outputs["urls"]])
 
@@ -808,27 +804,26 @@ def main(args):
                 else:
                     loss_value += loss.cpu().detach().numpy()
 
-                labels = labels.cpu()
-
-                if regression:
-                    labels = torch.round(labels).type(torch.long)
-
                 if "urls_classification" in all_tasks:
                     outputs_argmax = results["urls_classification"]["outputs_classification"]
+                    _labels = inputs_and_outputs["labels"].cpu().detach()
+                    _labels = torch.round(_labels).type(torch.long) if regression else _labels
 
                     batch_outputs["urls_classification"].extend(outputs_argmax.tolist())
-                    batch_labels["urls_classification"].extend(labels.tolist())
+                    batch_labels["urls_classification"].extend(_labels.tolist())
                 if "mlm" in all_tasks:
                     pass
                 if "language-identification" in all_tasks:
                     _outputs = results["language-identification"]["outputs_classification"]
                     _labels = inputs_and_outputs["labels_task_language_identification"].cpu().detach()
+                    _labels = torch.round(_labels).type(torch.long) if regression else _labels
 
                     batch_outputs["language-identification"].extend(_outputs.tolist())
                     batch_labels["language-identification"].extend(_labels.tolist())
                 if "langid-and-urls_classification" in all_tasks:
                     _outputs = results["langid-and-urls_classification"]["outputs_classification"]
                     _labels = inputs_and_outputs["labels_task_language_identification_and_urls_classification"].cpu().detach()
+                    _labels = torch.round(_labels).type(torch.long) if regression else _labels
 
                     batch_outputs["langid-and-urls_classification"].extend(_outputs.tolist())
                     batch_labels["langid-and-urls_classification"].extend(_labels.tolist())
@@ -959,7 +954,10 @@ def main(args):
 
         logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
 
-        for aux_task in metrics_auxiliary_tasks:
+        dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
+                                          device, amp_context_manager, classes=classes, max_tokens=max_tokens)
+
+        for aux_task in all_tasks:
             if aux_task in ("mlm",):
                 continue
 
@@ -989,9 +987,6 @@ def main(args):
                         epoch + 1, aux_task, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
             logger.info("[train:epoch#%d] Macro F1 (task '%s'): %.2f %%", epoch + 1, aux_task, epoch_macro_f1 * 100.0)
             logger.info("[train:epoch#%d] MCC (task '%s'): %.2f %%", epoch + 1, aux_task, epoch_mcc * 100.0)
-
-            dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
-                                              device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
             # Dev metrics
             dev_loss = dev_inference_metrics["loss"]
@@ -1123,18 +1118,16 @@ def main(args):
     dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
                                       device, amp_context_manager, classes=classes, max_tokens=max_tokens)
 
-    if task_dev_metric in metrics_auxiliary_tasks:
-        # Remove and add main task in order to be the last task: we want the main task to be the last
-        #  in order to plot info from the main task, if necessary
-        metrics_auxiliary_tasks.remove(task_dev_metric)
-        metrics_auxiliary_tasks.append(task_dev_metric)
+    metrics_auxiliary_tasks = copy.deepcopy(all_tasks)
+
+    metrics_auxiliary_tasks.remove(task_dev_metric) # Remove in order to be added as last element later
 
     # Dev metrics
     dev_loss = dev_inference_metrics["loss"]
 
     logger.info("[dev] Avg. loss: %f", dev_loss)
 
-    for aux_task in metrics_auxiliary_tasks:
+    for aux_task in metrics_auxiliary_tasks + [task_dev_metric]:
         dev_acc = dev_inference_metrics["metrics"][aux_task]["acc"]
         dev_acc_per_class = dev_inference_metrics["metrics"][aux_task]["acc_per_class"]
         dev_acc_per_class_abs_precision = dev_inference_metrics["metrics"][aux_task]["precision"]
@@ -1160,7 +1153,7 @@ def main(args):
 
     logger.info("[test] Avg. loss: %f", test_loss)
 
-    for aux_task in metrics_auxiliary_tasks: # We want the main task to be the last in order to plot info from the main task, if necessary
+    for aux_task in metrics_auxiliary_tasks + [task_dev_metric]:
         test_acc = test_inference_metrics["metrics"][aux_task]["acc"]
         test_acc_per_class = test_inference_metrics["metrics"][aux_task]["acc_per_class"]
         test_acc_per_class_abs_precision = test_inference_metrics["metrics"][aux_task]["precision"]
