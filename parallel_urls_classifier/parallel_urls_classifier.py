@@ -535,13 +535,22 @@ def main(args):
 
     # Prepare datasets data (NOTICE that we need non-parallel + parallel since it is the expected order used in the dataset module)
     dataset_train_tasks_data = {
-        "labels_language_identification": non_parallel_urls_train_target_lang_id + parallel_urls_train_target_lang_id,
+        "labels_language_identification": {
+            "non-parallel": non_parallel_urls_train_target_lang_id,
+            "parallel": parallel_urls_train_target_lang_id,
+        }
     }
     dataset_dev_tasks_data = {
-        "labels_language_identification": non_parallel_urls_dev_target_lang_id + parallel_urls_dev_target_lang_id,
+        "labels_language_identification": {
+            "non-parallel": non_parallel_urls_dev_target_lang_id,
+            "parallel": parallel_urls_dev_target_lang_id,
+        }
     }
     dataset_test_tasks_data = {
-        "labels_language_identification": non_parallel_urls_test_target_lang_id + parallel_urls_test_target_lang_id,
+        "labels_language_identification": {
+            "non-parallel": non_parallel_urls_test_target_lang_id,
+            "parallel": parallel_urls_test_target_lang_id,
+        }
     }
 
     if len(parallel_urls_train_target_lang_id) == 0 and len(non_parallel_urls_train_target_lang_id) == 0:
