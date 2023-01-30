@@ -305,7 +305,7 @@ class SmartBatchingCollate:
     def __call__(self, batch):
         targets_lang_id = None
         sequences = [b["url_tokens"] for b in batch]
-        targets = [b["labels"] for b in batch]
+        targets = [b["label"] for b in batch]
         targets_lang_id = None
         targets_lang_id_and_urls_classification = None
 
