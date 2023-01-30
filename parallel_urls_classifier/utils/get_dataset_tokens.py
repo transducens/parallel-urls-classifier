@@ -25,7 +25,7 @@ def main(args):
 
     print(f"src_url\ttrg_url\tpre_tokenized_urls\tno_tokens")
 
-    batch = utils.tokenize_batch_from_fd(dataset, tokenizer, args.batch_size,
+    batch = utils.tokenize_batch_from_iterator(dataset, tokenizer, args.batch_size,
                                          f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=args.remove_authority,
                                                                                lower=lower),
                                          return_urls=True)

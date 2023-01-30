@@ -497,7 +497,7 @@ def main(args):
              (file_parallel_urls_test, False, parallel_urls_test, parallel_urls_test_target_lang_id),
              (file_non_parallel_urls_test, False, non_parallel_urls_test, non_parallel_urls_test_target_lang_id)):
         # We add symmetric examples in dev as well in order to be sure we get a robust model, but not in test
-        batch = utils.tokenize_batch_from_fd(
+        batch = utils.tokenize_batch_from_iterator(
                     fd, tokenizer, batch_size,
                     f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                           remove_positional_data=remove_positional_data_from_resource,

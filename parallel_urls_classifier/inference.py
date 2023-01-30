@@ -245,7 +245,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         if inference_from_stdin:
             try:
                 target_urls, initial_urls = \
-                    next(utils.tokenize_batch_from_fd(sys.stdin, tokenizer, batch_size,
+                    next(utils.tokenize_batch_from_iterator(sys.stdin, tokenizer, batch_size,
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower),
@@ -275,7 +275,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                 data += f"\t{src_url_lang}\t{trg_url_lang}"
 
             data = [data]
-            target_urls = next(utils.tokenize_batch_from_fd(data, tokenizer, batch_size,
+            target_urls = next(utils.tokenize_batch_from_iterator(data, tokenizer, batch_size,
                                f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                      remove_positional_data=remove_positional_data_from_resource,
                                                                      separator=url_separator, lower=lower),
@@ -355,7 +355,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     src_urls = [src_url.replace('\t', ' ') for src_url in src_urls]
     trg_urls = [trg_url.replace('\t', ' ') for trg_url in trg_urls]
     str_urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
-    urls_generator = utils.tokenize_batch_from_fd(str_urls, tokenizer, batch_size,
+    urls_generator = utils.tokenize_batch_from_iterator(str_urls, tokenizer, batch_size,
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower))

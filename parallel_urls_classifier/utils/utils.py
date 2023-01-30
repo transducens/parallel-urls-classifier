@@ -73,8 +73,8 @@ def apply_model(model, tokenizer, tokens, encode=False):
 
     return output
 
-def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
-                           auxiliary_tasks=[], lang_id_add_solo_urls_too=False, lang_id_output_expected=True):
+def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
+                                 auxiliary_tasks=[], lang_id_add_solo_urls_too=False, lang_id_output_expected=True):
     urls = {"urls": []}
     initial_urls = []
 
@@ -82,7 +82,7 @@ def tokenize_batch_from_fd(fd, tokenizer, batch_size, f=None, return_urls=False,
     task_language_identification = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
     add_only_urls_too = not task_language_identification or lang_id_add_solo_urls_too
 
-    for url in fd:
+    for url in iterator:
         url = url.strip().split('\t')
 
         if task_language_identification:
