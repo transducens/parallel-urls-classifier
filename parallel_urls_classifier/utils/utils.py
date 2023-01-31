@@ -75,8 +75,16 @@ def apply_model(model, tokenizer, tokens, encode=False):
 
 def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
                                  auxiliary_tasks=[], lang_id_add_solo_urls_too=False, lang_id_output_expected=True):
-    urls = {"urls": []}
-    initial_urls = []
+    def reset():
+        urls = {
+            "urls": [],
+            "labels": [],
+        }
+        initial_urls = []
+
+        return urls, initial_urls
+
+    urls, initial_urls = reset()
 
     # Tasks
     task_language_identification = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
@@ -87,15 +95,15 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
 
         if task_language_identification:
             if lang_id_output_expected:
-                if len(url) != 5:
-                    raise Exception("It was expected 5 values per line (src_url, trg_url, src_url_lang, trg_url_lang, lang_id_output), "
-                                    f"but got {len(url)} values")
-            elif len(url) != 4:
-                raise Exception("It was expected 4 values per line (src_url, trg_url, src_url_lang, trg_url_lang), "
+                if len(url) != 6:
+                    raise Exception("It was expected 6 values per line (src_url, trg_url, parallel_urls_output, src_url_lang, "
+                                    f"trg_url_lang, lang_id_output), but got {len(url)} values")
+            elif len(url) != 5:
+                raise Exception("It was expected 5 values per line (src_url, trg_url, parallel_urls_output, src_url_lang, trg_url_lang), "
                                 f"but got {len(url)} values")
         else:
-            if len(url) != 2:
-                raise Exception(f"It was expected 2 values per line (src_url, trg_url), but got {len(url)} values")
+            if len(url) != 3:
+                raise Exception(f"It was expected 3 values per line (src_url, trg_url, parallel_urls_output), but got {len(url)} values")
 
         if f:
             src_url, trg_url = f(url[0]), f(url[1])
@@ -113,6 +121,11 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
         else:
             src_url, trg_url = url[0], url[1]
 
+        parallel_urls_output = int(url[2])
+
+        if parallel_urls_output not in (0, 1):
+            raise Exception(f"Unexpected value for 'parallel_urls_output': expected value is (0, 1), but got '{parallel_urls_output}'")
+
         if tokenizer.sep_token in src_url or tokenizer.sep_token in trg_url:
             logger.warning("URLs skipped since they contain the separator token: ('%s', '%s')", src_url, trg_url)
 
@@ -122,16 +135,18 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
             urls["urls"].append(f"{src_url}{tokenizer.sep_token}{trg_url}") # We don't need to add [CLS] and final [SEP]
                                                                             #  (or other special tokens) since they are automatically added
                                                                             #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
+            urls["labels"].append(parallel_urls_output)
 
         initial_urls.append((url[0], url[1]))
 
         if task_language_identification:
-            src_url_lang, trg_url_lang = url[2], url[3]
-            target = int(url[4]) if lang_id_output_expected else None
+            src_url_lang, trg_url_lang = url[3], url[4]
+            target = int(url[5]) if lang_id_output_expected else None
 
             urls["urls"].append(f"{src_url_lang}{tokenizer.sep_token}{trg_url_lang}{tokenizer.sep_token}"
                                 f"{src_url}{tokenizer.sep_token}{trg_url}") # We first add the lang ids in order to avoid to lose them if
                                                                             #  the URLs are too long
+            urls["labels"].append(parallel_urls_output)
 
             if lang_id_output_expected:
                 if "target-language-identification" not in urls:
@@ -145,12 +160,14 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
         if add_symmetric_samples:
             if add_only_urls_too:
                 urls["urls"].append(f"{trg_url}{tokenizer.sep_token}{src_url}")
+                urls["labels"].append(parallel_urls_output)
 
             initial_urls.append((url[1], url[0]))
 
             if task_language_identification:
                 urls["urls"].append(f"{trg_url_lang}{tokenizer.sep_token}{src_url_lang}{tokenizer.sep_token}"
                                     f"{trg_url}{tokenizer.sep_token}{src_url}")
+                urls["labels"].append(parallel_urls_output)
 
                 if lang_id_output_expected:
                     if add_only_urls_too:
@@ -164,8 +181,7 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
             else:
                 yield urls
 
-            urls = {"urls": []}
-            initial_urls = []
+            urls, initial_urls = reset()
 
     if len(urls["urls"]) != 0:
         if return_urls:
@@ -173,8 +189,7 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
         else:
             yield urls
 
-        urls = {"urls": []}
-        initial_urls = []
+        urls, initial_urls = reset()
 
 def get_current_allocated_memory_size():
     process = psutil.Process(os.getpid())

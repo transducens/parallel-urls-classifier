@@ -59,7 +59,7 @@ def pad_sequence(sequence_batch, pad_token_id, max_length=0):
 class SmartBatchingURLsDataset(Dataset):
     # Code based on https://www.kaggle.com/code/rhtsingh/speeding-up-transformer-w-optimization-strategies?scriptVersionId=67176227&cellId=2
 
-    def __init__(self, parallel_urls, non_parallel_urls, tokenizer, max_length, regression=False, sampler_better_randomness=True,
+    def __init__(self, input_data, output_data, tokenizer, max_length, regression=False, sampler_better_randomness=True,
                  remove_instead_of_truncate=False, set_desc='', imbalanced_strategy='', tasks_data={}):
         super(SmartBatchingURLsDataset, self).__init__()
 
@@ -69,14 +69,12 @@ class SmartBatchingURLsDataset(Dataset):
         self.sampler_better_randomness = sampler_better_randomness
         self.dataloader = None
         self.set_desc = set_desc
-        self.tokens = []
-
-        #self.data = torch.stack(non_parallel_urls + parallel_urls).squeeze(1) # Problem here when creating a new tmp array -> big arrays will lead to run out of memory...
-        #self.data = non_parallel_urls + parallel_urls
+        self.labels = {
+            "urls_classification": np.array(output_data)
+        }
 
         # Tokenize data (we need to tokenize one by one because the length of all the provided URLs will not be the same)
-        for urls in (non_parallel_urls, parallel_urls):
-            self.tokens.extend(utils.encode(tokenizer, urls, max_length=max_length, return_tensors=None, truncation=False)["input_ids"])
+        self.tokens = utils.encode(tokenizer, input_data, max_length=max_length, return_tensors=None, truncation=False)["input_ids"]
 
         # Truncate or remove
         if remove_instead_of_truncate:
@@ -98,15 +96,6 @@ class SmartBatchingURLsDataset(Dataset):
             self.tokens = [pair[:max_length] for pair in self.tokens]
 
         self._total_tokens = sum([len(t) for t in self.tokens])
-        #self.attention_mask = data["attention_mask"]
-        #self.tokens = [tokenizer.convert_tokens_to_ids(tokenizer.tokenize(url)) for url in non_parallel_urls + parallel_urls]
-        self.labels = {"urls_classification": np.zeros(len(self.tokens))}
-
-        #self.size_gb = self.data.element_size() * self.data.nelement() / 1000 / 1000 / 1000
-
-        #self.labels[:len(non_parallel_urls)] = 0
-        # Set to 1 the parallel URLs
-        self.labels["urls_classification"][len(non_parallel_urls):] = 1
         disable_balance = False
 
         if len(self.labels["urls_classification"]) != len(self.tokens):
@@ -116,35 +105,17 @@ class SmartBatchingURLsDataset(Dataset):
         if "labels_language_identification" in tasks_data:
             logger.debug("Loading labels for task: language-identification and/or langid-and-urls_classification")
 
-            if (len(tasks_data["labels_language_identification"]["non-parallel"]) + \
-                len(tasks_data["labels_language_identification"]["parallel"])) != len(self.labels["urls_classification"]):
+            if len(tasks_data["labels_language_identification"]) != len(self.labels["urls_classification"]):
                 raise Exception("Number of labels from the main task is different for the lang. id. task: "
                                 f"{len(self.labels['urls_classification'])} vs {len(tasks_data['labels_language_identification'])}")
 
             disable_balance = True
             self.labels["language-identification"] = np.zeros(len(self.tokens))
             self.labels["langid-and-urls_classification"] = np.zeros(len(self.tokens))
-            lang_id_label_ref = tasks_data["labels_language_identification"]["non-parallel"]
-            lang_id_label_needs_change = True
-            lang_id_label_idx = 0
 
-            if len(tasks_data["labels_language_identification"]["non-parallel"]) == 0:
-                lang_id_label_ref = tasks_data["labels_language_identification"]["parallel"]
-                lang_id_label_needs_change = False
-
-            for idx, label in enumerate(self.labels["urls_classification"]):
-                if lang_id_label_needs_change and ((idx + 1) % len(tasks_data["labels_language_identification"]["non-parallel"])) == 0:
-                    # We've read non-parallel first, but now we need to read parallel data as well
-                    lang_id_label = lang_id_label_ref[lang_id_label_idx] # Take the last non-parallel sample
-                    lang_id_label_ref = tasks_data["labels_language_identification"]["parallel"]
-                    lang_id_label_needs_change = False
-                    lang_id_label_idx = -1
-                else:
-                    lang_id_label = lang_id_label_ref[lang_id_label_idx]
-
+            for idx, (label, lang_id_label) in enumerate(zip(self.labels["urls_classification"], tasks_data["labels_language_identification"])):
                 self.labels["language-identification"][idx] = lang_id_label
                 self.labels["langid-and-urls_classification"][idx] = lang_id_label * label
-                lang_id_label_idx += 1
 
         # Imbalanced strategy?
         if imbalanced_strategy:

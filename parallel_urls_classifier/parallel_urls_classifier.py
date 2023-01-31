@@ -198,28 +198,22 @@ def main(args):
     apply_inference = args.inference
 
     if not apply_inference:
-        file_parallel_urls_train = args.parallel_urls_train_filename
-        file_non_parallel_urls_train = args.non_parallel_urls_train_filename
-        file_parallel_urls_dev = args.parallel_urls_dev_filename
-        file_non_parallel_urls_dev = args.non_parallel_urls_dev_filename
-        file_parallel_urls_test = args.parallel_urls_test_filename
-        file_non_parallel_urls_test = args.non_parallel_urls_test_filename
+        file_dataset_train = args.dataset_train_filename
+        file_dataset_dev =   args.dataset_dev_filename
+        file_dataset_test =  args.dataset_test_filename
 
     # Task: parallel URLs
-    parallel_urls_train = []
-    non_parallel_urls_train = []
-    parallel_urls_dev = []
-    non_parallel_urls_dev = []
-    parallel_urls_test = []
-    non_parallel_urls_test = []
+    dataset_urls_train = []
+    dataset_urls_dev = []
+    dataset_urls_test = []
+    dataset_urls_parallel_output_train = []
+    dataset_urls_parallel_output_dev = []
+    dataset_urls_parallel_output_test = []
 
     # Task: language identification
-    parallel_urls_train_target_lang_id = []
-    non_parallel_urls_train_target_lang_id = []
-    parallel_urls_dev_target_lang_id = []
-    non_parallel_urls_dev_target_lang_id = []
-    parallel_urls_test_target_lang_id = []
-    non_parallel_urls_test_target_lang_id = []
+    dataset_target_lang_id_train = []
+    dataset_target_lang_id_dev = []
+    dataset_target_lang_id_test = []
 
     # Args
     batch_size = args.batch_size
@@ -357,9 +351,9 @@ def main(args):
     logger.info("Device: %s", device)
 
     if not apply_inference:
-        logger.debug("Train URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_train, file_non_parallel_urls_train)
-        logger.debug("Dev URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_dev, file_non_parallel_urls_dev)
-        logger.debug("Test URLs file (parallel, non-parallel): (%s, %s)", file_parallel_urls_test, file_non_parallel_urls_test)
+        logger.debug("Train data file: %s", file_dataset_train)
+        logger.debug("Dev data file: %s", file_dataset_dev)
+        logger.debug("Test data file: %s", file_dataset_test)
 
     all_tasks_kwargs = {}
     total_auxiliary_tasks = 0
@@ -489,13 +483,10 @@ def main(args):
     logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
 
     # Read data from input files
-    for fd, symmetric_samples, input_data, target_lang_id in \
-            ((file_parallel_urls_train, add_symmetric_samples, parallel_urls_train, parallel_urls_train_target_lang_id),
-             (file_non_parallel_urls_train, add_symmetric_samples, non_parallel_urls_train, non_parallel_urls_train_target_lang_id),
-             (file_parallel_urls_dev, add_symmetric_samples, parallel_urls_dev, parallel_urls_dev_target_lang_id),
-             (file_non_parallel_urls_dev, add_symmetric_samples, non_parallel_urls_dev, non_parallel_urls_dev_target_lang_id),
-             (file_parallel_urls_test, False, parallel_urls_test, parallel_urls_test_target_lang_id),
-             (file_non_parallel_urls_test, False, non_parallel_urls_test, non_parallel_urls_test_target_lang_id)):
+    for set_desc, fd, symmetric_samples, input_data, output_data, target_lang_id in \
+            (("train", file_dataset_train, add_symmetric_samples, dataset_urls_train, dataset_urls_parallel_output_train, dataset_target_lang_id_train),
+             ("dev", file_dataset_dev, add_symmetric_samples, dataset_urls_dev, dataset_urls_parallel_output_dev, dataset_target_lang_id_dev),
+             ("test", file_dataset_test, False, dataset_urls_test, dataset_urls_parallel_output_test, dataset_target_lang_id_test)):
         # We add symmetric examples in dev as well in order to be sure we get a robust model, but not in test
         batch = utils.tokenize_batch_from_iterator(
                     fd, tokenizer, batch_size,
@@ -508,22 +499,31 @@ def main(args):
 
         for batch_urls in batch:
             input_data.extend(batch_urls["urls"])
+            output_data.extend(batch_urls["labels"])
+
+            if len(input_data) != len(output_data):
+                raise Exception(f"Different lengths for input and output data in {set_desc} set: {len(input_data)} vs {len(output_data)}")
 
             if "target-language-identification" in batch_urls:
                 target_lang_id.extend(batch_urls["target-language-identification"])
 
-    logger.debug("Allocated memory after tokenization: %d", utils.get_current_allocated_memory_size())
-    logger.info("%d pairs of parallel URLs loaded (train)", len(parallel_urls_train))
-    logger.info("%d pairs of non-parallel URLs loaded (train)", len(non_parallel_urls_train))
-    logger.info("%d pairs of parallel URLs loaded (dev)", len(parallel_urls_dev))
-    logger.info("%d pairs of non-parallel URLs loaded (dev)", len(non_parallel_urls_dev))
-    logger.info("%d pairs of parallel URLs loaded (test)", len(parallel_urls_test))
-    logger.info("%d pairs of non-parallel URLs loaded (test)", len(non_parallel_urls_test))
+        non_parallel_urls = len([l for l in output_data if l == 0])
+        parallel_urls = len([l for l in output_data if l == 1])
 
-    min_train_samples = min(len(non_parallel_urls_train), len(parallel_urls_train))
-    classes_count = np.array([len(non_parallel_urls_train), len(parallel_urls_train)]) # non-parallel URLs label is 0, and
-                                                                                       #  parallel URLs label is 1
-    min_classes_weights = min_train_samples / classes_count
+        if non_parallel_urls + parallel_urls != len(input_data):
+            raise Exception(f"Number of non-parallel + parallel URLs doesn't match the input data ({set_desc} set): "
+                            f"{non_parallel_urls} + {parallel_urls} != {len(input_data)}")
+
+        logger.info("%d pairs of parallel URLs loaded (%s)", parallel_urls, set_desc)
+        logger.info("%d pairs of non-parallel URLs loaded (%s)", non_parallel_urls, set_desc)
+
+        if set_desc == "train":
+            min_train_samples = min(non_parallel_urls, parallel_urls)
+            classes_count = np.array([non_parallel_urls, parallel_urls]) # non-parallel URLs label is 0, and
+                                                                                   #  parallel URLs label is 1
+            min_classes_weights = min_train_samples / classes_count
+
+    logger.debug("Allocated memory after tokenization: %d", utils.get_current_allocated_memory_size())
 
     if imbalanced_strategy == "none":
         # Is the data imbalanced? If so, warn about it
@@ -533,43 +533,34 @@ def main(args):
                 logger.warning("Your data seems to be imbalanced and you did not select any imbalanced data strategy")
                 break
 
-    # Prepare datasets data (NOTICE that we need non-parallel + parallel since it is the expected order used in the dataset module)
+    # Prepare datasets data
     dataset_train_tasks_data = {
-        "labels_language_identification": {
-            "non-parallel": non_parallel_urls_train_target_lang_id,
-            "parallel": parallel_urls_train_target_lang_id,
-        }
+        "labels_language_identification": dataset_target_lang_id_train,
     }
     dataset_dev_tasks_data = {
-        "labels_language_identification": {
-            "non-parallel": non_parallel_urls_dev_target_lang_id,
-            "parallel": parallel_urls_dev_target_lang_id,
-        }
+        "labels_language_identification": dataset_target_lang_id_dev,
     }
     dataset_test_tasks_data = {
-        "labels_language_identification": {
-            "non-parallel": non_parallel_urls_test_target_lang_id,
-            "parallel": parallel_urls_test_target_lang_id,
-        }
+        "labels_language_identification": dataset_target_lang_id_test,
     }
 
-    if len(parallel_urls_train_target_lang_id) == 0 and len(non_parallel_urls_train_target_lang_id) == 0:
+    if len(dataset_target_lang_id_train) == 0:
         del dataset_train_tasks_data["labels_language_identification"]
-    if len(parallel_urls_dev_target_lang_id) == 0 and len(non_parallel_urls_dev_target_lang_id) == 0:
+    if len(dataset_target_lang_id_dev) == 0:
         del dataset_dev_tasks_data["labels_language_identification"]
-    if len(parallel_urls_test_target_lang_id) == 0 and len(non_parallel_urls_test_target_lang_id) == 0:
+    if len(dataset_target_lang_id_test) == 0:
         del dataset_test_tasks_data["labels_language_identification"]
 
     # Datasets
-    dataset_train = dataset.SmartBatchingURLsDataset(parallel_urls_train, non_parallel_urls_train, tokenizer,
+    dataset_train = dataset.SmartBatchingURLsDataset(dataset_urls_train, dataset_urls_parallel_output_train, tokenizer,
                                                      max_length_tokens, regression=regression, set_desc="train",
                                                      remove_instead_of_truncate=remove_instead_of_truncate,
                                                      imbalanced_strategy=imbalanced_strategy,
                                                      tasks_data=dataset_train_tasks_data)
-    dataset_dev = dataset.SmartBatchingURLsDataset(parallel_urls_dev, non_parallel_urls_dev, tokenizer,
+    dataset_dev = dataset.SmartBatchingURLsDataset(dataset_urls_dev, dataset_urls_parallel_output_dev, tokenizer,
                                                    max_length_tokens, regression=regression, set_desc="dev",
                                                    tasks_data=dataset_dev_tasks_data)
-    dataset_test = dataset.SmartBatchingURLsDataset(parallel_urls_test, non_parallel_urls_test, tokenizer,
+    dataset_test = dataset.SmartBatchingURLsDataset(dataset_urls_test, dataset_urls_parallel_output_test, tokenizer,
                                                     max_length_tokens, regression=regression, set_desc="test",
                                                     tasks_data=dataset_test_tasks_data)
 
@@ -579,18 +570,12 @@ def main(args):
     logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
 
     # Remove data in order to free memory
-    del parallel_urls_train
-    del non_parallel_urls_train
-    del parallel_urls_dev
-    del non_parallel_urls_dev
-    del parallel_urls_test
-    del non_parallel_urls_test
-    del parallel_urls_train_target_lang_id
-    del non_parallel_urls_train_target_lang_id
-    del parallel_urls_dev_target_lang_id
-    del non_parallel_urls_dev_target_lang_id
-    del parallel_urls_test_target_lang_id
-    del non_parallel_urls_test_target_lang_id
+    del dataset_urls_train
+    del dataset_urls_dev
+    del dataset_urls_test
+    del dataset_target_lang_id_train
+    del dataset_target_lang_id_dev
+    del dataset_target_lang_id_test
     del dataset_train_tasks_data
     del dataset_dev_tasks_data
     del dataset_test_tasks_data
@@ -1244,12 +1229,9 @@ def initialization():
     optimizer_conf = get_options_from_argv("--optimizer", "adamw", _optimizer_args)
 
     if not inference:
-        parser.add_argument('parallel_urls_train_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with parallel URLs (TSV format)")
-        parser.add_argument('parallel_urls_dev_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with parallel URLs (TSV format)")
-        parser.add_argument('parallel_urls_test_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with parallel URLs (TSV format)")
-        parser.add_argument('non_parallel_urls_train_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with non-parallel URLs (TSV format)")
-        parser.add_argument('non_parallel_urls_dev_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with non-parallel URLs (TSV format)")
-        parser.add_argument('non_parallel_urls_test_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with non-parallel URLs (TSV format)")
+        parser.add_argument('dataset_train_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with train data (TSV format)")
+        parser.add_argument('dataset_dev_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with dev data (TSV format)")
+        parser.add_argument('dataset_test_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with test data (TSV format)")
 
     parser.add_argument('--batch-size', type=int, default=16,
                         help="Batch size. Elements which will be processed before proceed to train, but the whole batch will "
