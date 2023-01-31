@@ -53,6 +53,7 @@ logger = logging.getLogger("parallel_urls_classifier")
 logger_verbose = {"tokens": logging}
 
 # Other
+DEBUG = bool(int(os.environ["PUC_DEBUG"])) if "PUC_DEBUG" in os.environ else False
 _lr_scheduler_args = {
     "none": {},
     "linear": {
@@ -189,31 +190,118 @@ def get_amp_context_manager(cuda_amp, use_cuda):
 
     return amp_context_manager, amp_grad_scaler, _cuda_amp
 
-# TODO TBD use https://pypi.org/project/imbalanced-learn/ for unbalanced data instead of custom implementation
+def load_dataset(filename_dataset, set_desc, shard_id, symmetric_samples, **kwargs):
+    logger.debug("Allocated memory before starting tokenization (%s): %d", set_desc, utils.get_current_allocated_memory_size())
+
+    file_dataset = open(filename_dataset[shard_id], mode="rt", errors="backslashreplace")
+    input_data = []
+    output_data = []
+    target_lang_id = []
+
+    # Read data from input files
+    batch = utils.tokenize_batch_from_iterator(
+                file_dataset, kwargs["tokenizer"], kwargs["batch_size"],
+                f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=kwargs["remove_authority"],
+                                                      remove_positional_data=kwargs["remove_positional_data_from_resource"],
+                                                      separator=kwargs["url_separator"], lower=kwargs["lower"],
+                                                      stringify_instead_of_tokenization=kwargs["stringify_instead_of_tokenization"]),
+                add_symmetric_samples=symmetric_samples, auxiliary_tasks=kwargs["auxiliary_tasks"],
+                lang_id_add_solo_urls_too="language-identification_add-solo-urls-too" in kwargs["auxiliary_tasks_flags"])
+
+    for batch_urls in batch:
+        input_data.extend(batch_urls["urls"])
+        output_data.extend(batch_urls["labels"])
+
+        if len(input_data) != len(output_data):
+            raise Exception(f"Different lengths for input and output data in {set_desc} set: {len(input_data)} vs {len(output_data)}")
+
+        if "target-language-identification" in batch_urls:
+            target_lang_id.extend(batch_urls["target-language-identification"])
+
+    non_parallel_urls = len([l for l in output_data if l == 0])
+    parallel_urls = len([l for l in output_data if l == 1])
+
+    if non_parallel_urls + parallel_urls != len(input_data):
+        raise Exception(f"Number of non-parallel + parallel URLs doesn't match the input data ({set_desc}): "
+                        f"{non_parallel_urls} + {parallel_urls} != {len(input_data)}")
+
+    logger.info("%d pairs of parallel URLs loaded (%s)", parallel_urls, set_desc)
+    logger.info("%d pairs of non-parallel URLs loaded (%s)", non_parallel_urls, set_desc)
+
+    if set_desc == "train":
+        min_train_samples = min(non_parallel_urls, parallel_urls)
+        classes_count = np.array([non_parallel_urls, parallel_urls]) # non-parallel URLs label is 0, and
+                                                                     #  parallel URLs label is 1
+        min_classes_weights = min_train_samples / classes_count
+
+        if kwargs["imbalanced_strategy"] == "none":
+            # Is the data imbalanced? If so, warn about it
+
+            for cw in min_classes_weights:
+                if cw < 0.9:
+                    logger.warning("Your data seems to be imbalanced and you did not select any imbalanced data strategy")
+                    break
+
+    logger.debug("Allocated memory after tokenization (%s): %d", set_desc, utils.get_current_allocated_memory_size())
+
+    # Prepare datasets data
+    dataset_tasks_data = {
+        "labels_language_identification": target_lang_id,
+    }
+
+    # Datasets
+    dataset_instance = dataset.SmartBatchingURLsDataset(input_data, output_data, kwargs["tokenizer"],
+                                                        kwargs["max_length_tokens"], regression=kwargs["regression"], set_desc=set_desc,
+                                                        remove_instead_of_truncate=kwargs["remove_instead_of_truncate"],
+                                                        imbalanced_strategy=kwargs["imbalanced_strategy"],
+                                                        tasks_data=dataset_tasks_data)
+
+    logger.debug("Allocated memory after encoding the data: %d", utils.get_current_allocated_memory_size())
+
+    if set_desc == "train":
+        logger.debug("Total tokens in file %d (train): %d", shard_id + 1, dataset_instance.total_tokens)
+    else:
+        logger.debug("Total tokens (%s): %d", set_desc, dataset_instance.total_tokens)
+
+    # Remove data in order to free memory
+    del input_data
+    del output_data
+    del target_lang_id
+    del dataset_tasks_data
+
+    logger.debug("Allocated memory after removing pairs of URLs (str): %d", utils.get_current_allocated_memory_size())
+
+    dataloader_instance = dataset_instance.get_dataloader(kwargs["batch_size"], kwargs["device"], kwargs["force_cpu"],
+                                                          kwargs["dataset_workers"], max_tokens=kwargs["max_tokens"])
+
+    file_dataset.close()
+
+    return dataset_instance, dataloader_instance
 
 def main(args):
     # https://discuss.pytorch.org/t/calculating-f1-score-over-batched-data/83348
     #logger.warning("Some metrics are calculated on each batch and averaged, so the values might not be fully correct (e.g. F1)")
 
     apply_inference = args.inference
+    multiple_shards = False
 
     if not apply_inference:
-        file_dataset_train = args.dataset_train_filename
-        file_dataset_dev =   args.dataset_dev_filename
-        file_dataset_test =  args.dataset_test_filename
+        filename_dataset_train = args.dataset_train_filename.split(':')
+        filename_dataset_dev = args.dataset_dev_filename.split(':')
+        filename_dataset_test = args.dataset_test_filename.split(':')
 
-    # Task: parallel URLs
-    dataset_urls_train = []
-    dataset_urls_dev = []
-    dataset_urls_test = []
-    dataset_urls_parallel_output_train = []
-    dataset_urls_parallel_output_dev = []
-    dataset_urls_parallel_output_test = []
+        if len(filename_dataset_train) > 1:
+            multiple_shards = True
 
-    # Task: language identification
-    dataset_target_lang_id_train = []
-    dataset_target_lang_id_dev = []
-    dataset_target_lang_id_test = []
+            logger.info("Multiple train files were provided: %d: one per epoch will be used using round-robin", len(filename_dataset_train))
+        if len(filename_dataset_dev) > 1:
+            logger.warning("Multiple dev files were provided, but only the first one will be used")
+        if len(filename_dataset_test) > 1:
+            logger.warning("Multiple test files were provided, but only the first one will be used")
+
+        # Discard dev/test files if needed
+        filename_dataset_dev = filename_dataset_dev[:1]
+        filename_dataset_test = filename_dataset_test[:1]
 
     # Args
     batch_size = args.batch_size
@@ -265,6 +353,8 @@ def main(args):
     best_dev_metric = args.best_dev_metric
     task_dev_metric = args.task_dev_metric
     do_not_train_main_task = args.do_not_train_main_task
+    dataset_workers = args.dataset_workers
+    pre_load_shards = args.pre_load_shards
 
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
@@ -351,9 +441,9 @@ def main(args):
     logger.info("Device: %s", device)
 
     if not apply_inference:
-        logger.debug("Train data file: %s", file_dataset_train)
-        logger.debug("Dev data file: %s", file_dataset_dev)
-        logger.debug("Test data file: %s", file_dataset_test)
+        logger.debug("Train data file/s: %s", ' '.join(filename_dataset_train))
+        logger.debug("Dev data file: %s", filename_dataset_dev[0])
+        logger.debug("Test data file: %s", filename_dataset_test[0])
 
     all_tasks_kwargs = {}
     total_auxiliary_tasks = 0
@@ -480,128 +570,88 @@ def main(args):
     if fine_tuning and re_initialize_last_n_layers > 0:
         utils.do_reinit(model.get_base_model().base_model, re_initialize_last_n_layers)
 
-    logger.debug("Allocated memory before starting tokenization: %d", utils.get_current_allocated_memory_size())
-
-    # Read data from input files
-    for set_desc, fd, symmetric_samples, input_data, output_data, target_lang_id in \
-            (("train", file_dataset_train, add_symmetric_samples, dataset_urls_train, dataset_urls_parallel_output_train, dataset_target_lang_id_train),
-             ("dev", file_dataset_dev, add_symmetric_samples, dataset_urls_dev, dataset_urls_parallel_output_dev, dataset_target_lang_id_dev),
-             ("test", file_dataset_test, False, dataset_urls_test, dataset_urls_parallel_output_test, dataset_target_lang_id_test)):
-        # We add symmetric examples in dev as well in order to be sure we get a robust model, but not in test
-        batch = utils.tokenize_batch_from_iterator(
-                    fd, tokenizer, batch_size,
-                    f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
-                                                          remove_positional_data=remove_positional_data_from_resource,
-                                                          separator=url_separator, lower=lower,
-                                                          stringify_instead_of_tokenization=stringify_instead_of_tokenization),
-                    add_symmetric_samples=symmetric_samples, auxiliary_tasks=auxiliary_tasks,
-                    lang_id_add_solo_urls_too="language-identification_add-solo-urls-too" in auxiliary_tasks_flags)
-
-        for batch_urls in batch:
-            input_data.extend(batch_urls["urls"])
-            output_data.extend(batch_urls["labels"])
-
-            if len(input_data) != len(output_data):
-                raise Exception(f"Different lengths for input and output data in {set_desc} set: {len(input_data)} vs {len(output_data)}")
-
-            if "target-language-identification" in batch_urls:
-                target_lang_id.extend(batch_urls["target-language-identification"])
-
-        non_parallel_urls = len([l for l in output_data if l == 0])
-        parallel_urls = len([l for l in output_data if l == 1])
-
-        if non_parallel_urls + parallel_urls != len(input_data):
-            raise Exception(f"Number of non-parallel + parallel URLs doesn't match the input data ({set_desc} set): "
-                            f"{non_parallel_urls} + {parallel_urls} != {len(input_data)}")
-
-        logger.info("%d pairs of parallel URLs loaded (%s)", parallel_urls, set_desc)
-        logger.info("%d pairs of non-parallel URLs loaded (%s)", non_parallel_urls, set_desc)
-
-        if set_desc == "train":
-            min_train_samples = min(non_parallel_urls, parallel_urls)
-            classes_count = np.array([non_parallel_urls, parallel_urls]) # non-parallel URLs label is 0, and
-                                                                                   #  parallel URLs label is 1
-            min_classes_weights = min_train_samples / classes_count
-
-    logger.debug("Allocated memory after tokenization: %d", utils.get_current_allocated_memory_size())
-
-    if imbalanced_strategy == "none":
-        # Is the data imbalanced? If so, warn about it
-
-        for cw in min_classes_weights:
-            if cw < 0.9:
-                logger.warning("Your data seems to be imbalanced and you did not select any imbalanced data strategy")
-                break
-
-    # Prepare datasets data
-    dataset_train_tasks_data = {
-        "labels_language_identification": dataset_target_lang_id_train,
-    }
-    dataset_dev_tasks_data = {
-        "labels_language_identification": dataset_target_lang_id_dev,
-    }
-    dataset_test_tasks_data = {
-        "labels_language_identification": dataset_target_lang_id_test,
+    # Load first shard
+    dataset_static_args = {
+        "regression": regression,
+        "remove_instead_of_truncate": remove_instead_of_truncate,
+        "imbalanced_strategy": imbalanced_strategy,
+        "batch_size": batch_size,
+        "device": device,
+        "force_cpu": force_cpu,
+        "dataset_workers": dataset_workers,
+        "max_tokens": max_tokens,
+        "remove_authority": remove_authority,
+        "remove_positional_data_from_resource": remove_positional_data_from_resource,
+        "url_separator": url_separator,
+        "lower": lower,
+        "stringify_instead_of_tokenization": stringify_instead_of_tokenization,
+        "auxiliary_tasks": auxiliary_tasks,
+        "auxiliary_tasks_flags": auxiliary_tasks_flags,
+        "tokenizer": tokenizer,
+        "max_length_tokens": max_length_tokens,
     }
 
-    if len(dataset_target_lang_id_train) == 0:
-        del dataset_train_tasks_data["labels_language_identification"]
-    if len(dataset_target_lang_id_dev) == 0:
-        del dataset_dev_tasks_data["labels_language_identification"]
-    if len(dataset_target_lang_id_test) == 0:
-        del dataset_test_tasks_data["labels_language_identification"]
+    load_all_shards = []
+    training_steps_per_epoch = 0
+    count_labels_task_per_class = {}
 
-    # Datasets
-    dataset_train = dataset.SmartBatchingURLsDataset(dataset_urls_train, dataset_urls_parallel_output_train, tokenizer,
-                                                     max_length_tokens, regression=regression, set_desc="train",
-                                                     remove_instead_of_truncate=remove_instead_of_truncate,
-                                                     imbalanced_strategy=imbalanced_strategy,
-                                                     tasks_data=dataset_train_tasks_data)
-    dataset_dev = dataset.SmartBatchingURLsDataset(dataset_urls_dev, dataset_urls_parallel_output_dev, tokenizer,
-                                                   max_length_tokens, regression=regression, set_desc="dev",
-                                                   tasks_data=dataset_dev_tasks_data)
-    dataset_test = dataset.SmartBatchingURLsDataset(dataset_urls_test, dataset_urls_parallel_output_test, tokenizer,
-                                                    max_length_tokens, regression=regression, set_desc="test",
-                                                    tasks_data=dataset_test_tasks_data)
+    if pre_load_shards:
+        load_all_shards = list(range(1, len(filename_dataset_train)))
 
-    logger.debug("Allocated memory after encoding the data: %d", utils.get_current_allocated_memory_size())
-    logger.debug("Total tokens (train): %d", dataset_train.total_tokens)
-    logger.debug("Total tokens (dev): %d", dataset_dev.total_tokens)
-    logger.debug("Total tokens (test): %d", dataset_test.total_tokens)
+    for shard_id in load_all_shards + [0]: # We load the first shard the last one
+        if multiple_shards:
+            logger.info("Loading shard (train): %d", shard_id)
 
-    # Remove data in order to free memory
-    del dataset_urls_train
-    del dataset_urls_dev
-    del dataset_urls_test
-    del dataset_target_lang_id_train
-    del dataset_target_lang_id_dev
-    del dataset_target_lang_id_test
-    del dataset_train_tasks_data
-    del dataset_dev_tasks_data
-    del dataset_test_tasks_data
+        dataset_train, dataloader_train = \
+            load_dataset(filename_dataset_train, "train", shard_id, add_symmetric_samples, **dataset_static_args)
 
-    logger.debug("Allocated memory after removing pairs of URLs (str): %d", utils.get_current_allocated_memory_size())
+        training_steps_per_epoch += len(dataloader_train) # BE AWARE! "dataloader_train" might change per epoch due to sharding
 
-    dataloader_train = dataset_train.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
-    dataloader_dev = dataset_dev.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
-    dataloader_test = dataset_test.get_dataloader(batch_size, device, force_cpu, args.dataset_workers, max_tokens=max_tokens)
+        for head_task in all_tasks:
+            if head_task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+                if head_task not in count_labels_task_per_class:
+                    count_labels_task_per_class[head_task] = {}
 
-    #logger.info("Train URLs: %.2f GB", dataset_train.size_gb)
-    #logger.info("Dev URLs: %.2f GB", dataset_dev.size_gb)
-    #logger.info("Test URLs: %.2f GB", dataset_test.size_gb)
+                all_classes = np.unique(dataset_train.labels[head_task])
 
-    training_steps_per_epoch = len(dataloader_train)
-    training_steps = training_steps_per_epoch * epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
+                for c in all_classes:
+                    if c not in count_labels_task_per_class[head_task]:
+                        count_labels_task_per_class[head_task][c] = 0
+
+                    count_labels_task_per_class[head_task][c] += len([l for l in dataset_train.labels[head_task] if l == c])
+
+    dataset_dev, _ = \
+        load_dataset(filename_dataset_dev, "dev", 0, add_symmetric_samples, **dataset_static_args)
+    # We add symmetric examples in dev as well in order to be sure we get a robust model, but not in test
+    dataset_test, _ = \
+        load_dataset(filename_dataset_test, "test", 0, False, **dataset_static_args)
+
     criteria = {}
+    training_steps = training_steps_per_epoch * epochs # BE AWARE! "epochs" might be fake due to --train-until-patience
 
     # Get criterion for each head task
     for head_task in all_tasks:
         if head_task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
-            classes_weights = \
-                torch.as_tensor(sklearn.utils.class_weight.compute_class_weight("balanced",
-                                                                                classes=np.unique(dataset_train.labels[head_task]),
-                                                                                y=dataset_train.labels[head_task].numpy()),
-                                dtype=torch.float)
+            all_classes = sorted(count_labels_task_per_class[head_task].keys())
+            n_samples = sum([count_labels_task_per_class[head_task][c] for c in all_classes])
+            n_classes = len(all_classes)
+            classes_weights = [n_samples / (n_classes * count_labels_task_per_class[head_task][c]) for c in all_classes] # Same formula used in sklearn
+            classes_weights = torch.as_tensor(classes_weights, dtype=torch.float)
+
+            if DEBUG:
+                classes_weights_sklearn = \
+                    torch.as_tensor(sklearn.utils.class_weight.compute_class_weight("balanced",
+                                                                                    classes=np.unique(dataset_train.labels[head_task]),
+                                                                                    y=dataset_train.labels[head_task].numpy()),
+                                    dtype=torch.float)
+
+                if (classes_weights != classes_weights_sklearn).any().item():
+                    if not multiple_shards or pre_load_shards:
+                        logger.error("Own classes weights and sklearn version with different values: %s vs %s", classes_weights, pre_load_shards)
+                    else:
+                        logger.warning("Own classes weights and sklearn version with different values (it is expected due to loading "
+                                       "multiple shards): %s vs %s", classes_weights, pre_load_shards)
+
             loss_weight = classes_weights if imbalanced_strategy == "weighted-loss" else None
 
             logger.debug("Classes weights (task '%s'): %s", head_task, str(classes_weights))
@@ -670,6 +720,10 @@ def main(args):
         pass
     elif scheduler_str == "linear":
         scheduler_args = [int(lr_scheduler_args[0] * training_steps), training_steps]
+
+        if multiple_shards and not pre_load_shards:
+            logger.warning("LR scheduler: '%s': multiple train files were provided, but only the first "
+                           "one has been used for calculating the total number of steps, which affects the selecter LR scheduler", scheduler_str)
     elif scheduler_str == "CLR":
         scheduler_max_lr, scheduler_step_size, scheduler_mode, scheduler_gamma, scheduler_max_lr_factor, scheduler_step_size_factor \
             = lr_scheduler_args
@@ -686,6 +740,10 @@ def main(args):
 
             logger.warning("LR scheduler: '%s': provided step size is 0 or negative: setting value to %d", scheduler_str, scheduler_step_size)
 
+            if multiple_shards and not pre_load_shards:
+                logger.warning("LR scheduler: '%s': multiple train files were provided, but only the first "
+                               "one has been used for calculating the number of steps, which affects the selecter LR scheduler", scheduler_str)
+
         scheduler_args = [learning_rate, scheduler_max_lr]
         scheduler_kwargs = {
             "step_size_up": scheduler_step_size,
@@ -696,6 +754,10 @@ def main(args):
         }
     elif scheduler_str == "inverse_sqrt":
         scheduler_args = [int(lr_scheduler_args[0] * training_steps)]
+
+        if multiple_shards and not pre_load_shards:
+            logger.warning("LR scheduler: '%s': multiple train files were provided, but only the first "
+                           "one has been used for calculating the total number of steps, which affects the selecter LR scheduler", scheduler_str)
     else:
         raise Exception(f"Unknown LR scheduler: {scheduler}")
 
@@ -1085,6 +1147,15 @@ def main(args):
         elif not train_until_patience:
             stop_training = epoch >= epochs
 
+        # Load next shard, if any
+        if multiple_shards and not stop_training:
+            shard_id = epoch % len(filename_dataset_train)
+
+            logger.info("Loading next shard: %d", shard_id)
+
+            dataset_train, dataloader_train = \
+                load_dataset(filename_dataset_train, "train", shard_id, add_symmetric_samples, **dataset_static_args)
+
     final_loss /= epoch
     final_acc /= epoch
     final_acc_per_class /= epoch
@@ -1229,9 +1300,11 @@ def initialization():
     optimizer_conf = get_options_from_argv("--optimizer", "adamw", _optimizer_args)
 
     if not inference:
-        parser.add_argument('dataset_train_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with train data (TSV format)")
-        parser.add_argument('dataset_dev_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with dev data (TSV format)")
-        parser.add_argument('dataset_test_filename', type=argparse.FileType('rt', errors="backslashreplace"), help="Filename with test data (TSV format)")
+        parser.add_argument('dataset_train_filename', type=str,
+                            help="Filename with train data (TSV format). You can provide multiple files separated using ':' and "
+                                 "each of them will be used one for each epoch using round-robin strategy")
+        parser.add_argument('dataset_dev_filename', type=str, help="Filename with dev data (TSV format)")
+        parser.add_argument('dataset_test_filename', type=str, help="Filename with test data (TSV format)")
 
     parser.add_argument('--batch-size', type=int, default=16,
                         help="Batch size. Elements which will be processed before proceed to train, but the whole batch will "
@@ -1316,6 +1389,9 @@ def initialization():
 
     parser.add_argument('--do-not-train-main-task', action="store_true",
                         help="Main task (URLs classification) will not be trained. Auxiliary task will be needed")
+    parser.add_argument('--pre-load-shards', action="store_true",
+                        help="Load all shards at beginning one by one in order to get some statistics needed for some features. This "
+                             "option is optional, but if not set, some features might not work as expected (e.g. linear LR scheduelr)")
 
     parser.add_argument('--seed', type=int, default=71213,
                         help="Seed in order to have deterministic results (not fully guaranteed). "
