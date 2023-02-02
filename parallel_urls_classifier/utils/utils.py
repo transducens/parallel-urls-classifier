@@ -74,7 +74,8 @@ def apply_model(model, tokenizer, tokens, encode=False):
     return output
 
 def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
-                                 auxiliary_tasks=[], lang_id_add_solo_urls_too=False, lang_id_output_expected=True):
+                                 auxiliary_tasks=[], lang_id_add_solo_urls_too=False, lang_id_output_expected=True,
+                                 lang_id_target_applies_to_trg_side=False):
     def reset():
         urls = {
             "urls": [],
@@ -173,7 +174,11 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
                     if add_only_urls_too:
                         urls["target-language-identification"].append(0) # If languages are not provided, target will be 0
 
-                    urls["target-language-identification"].append(target) # Symmetry doesn't affect the result in this task
+                    if lang_id_target_applies_to_trg_side:
+                        urls["target-language-identification"].append(1) # Source is expected to be always correct in this situation
+                    else:
+                        # Target applies to both sides
+                        urls["target-language-identification"].append(target) # Symmetry doesn't affect the result in this task
 
         if len(urls["urls"]) >= batch_size:
             if return_urls:

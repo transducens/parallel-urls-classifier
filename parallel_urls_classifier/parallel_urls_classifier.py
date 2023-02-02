@@ -210,7 +210,8 @@ def load_dataset(filename_dataset, set_desc, shard_id, symmetric_samples, **kwar
                                                       separator=kwargs["url_separator"], lower=kwargs["lower"],
                                                       stringify_instead_of_tokenization=kwargs["stringify_instead_of_tokenization"]),
                 add_symmetric_samples=symmetric_samples, auxiliary_tasks=kwargs["auxiliary_tasks"],
-                lang_id_add_solo_urls_too="language-identification_add-solo-urls-too" in kwargs["auxiliary_tasks_flags"])
+                lang_id_add_solo_urls_too="language-identification_add-solo-urls-too" in kwargs["auxiliary_tasks_flags"],
+                lang_id_target_applies_to_trg_side="language-identification_target-applies-only-to-trg-side" in kwargs["auxiliary_tasks_flags"])
 
     for batch_urls in batch:
         input_data.extend(batch_urls["urls"])
@@ -1386,11 +1387,14 @@ def initialization():
                         help="Task which will be used in order to save the best model. It will also be used in order to replace the main "
                              "task if --do-not-train-main-task is set")
 
-    parser.add_argument('--auxiliary-tasks-flags', type=str, nargs='*', choices=["language-identification_add-solo-urls-too"],
+    parser.add_argument('--auxiliary-tasks-flags', type=str, nargs='*',
+                        choices=["language-identification_add-solo-urls-too", "language-identification_target-applies-only-to-trg-side"],
                         help="Set of options which will set up some aspects of the auxiliary tasks")
     # language-identification_add-solo-urls-too -> if task "language-identification", with this option set, model will be trained not only
-    #                                              with "src_lang<sep>trg_lang<sep>src_url<sep>trg_url", but also with "src_url<sep>trg_url"
-    #                                              but there will have twice times input data
+    #   with "src_lang<sep>trg_lang<sep>src_url<sep>trg_url", but also with "src_url<sep>trg_url" but there will have twice times input data
+    # language-identification_target-applies-only-to-trg-side -> by default, the target of task "language-identification" applies to both
+    #   sides and, if both sides are correct, the target is expected to be 1. This option makes the assumption that the target only applies
+    #   to the target side and source side is always correct
 
     parser.add_argument('--do-not-train-main-task', action="store_true",
                         help="Main task (URLs classification) will not be trained. Auxiliary task will be needed")

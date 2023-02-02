@@ -70,9 +70,9 @@ def main(args):
             if generator == "random":
                 random_func_generator = (lambda: '\t'.join(random.choices(wrong_set_of_langs, k=2)))
             elif generator == "random-src":
-                random_func_generator = (lambda: f"{join(random.choices(wrong_set_of_langs, k=1))}\t{trg_url_lang}")
+                random_func_generator = (lambda: f"{random.choice(wrong_set_of_langs)}\t{trg_url_lang}")
             elif generator == "random-trg":
-                random_func_generator = (lambda: f"{src_url_lang}\t{join(random.choices(wrong_set_of_langs, k=1))}")
+                random_func_generator = (lambda: f"{src_url_lang}\t{random.choice(wrong_set_of_langs)}")
             else:
                 raise Exception(f"Unknown 'random' generator: {generator}")
 
