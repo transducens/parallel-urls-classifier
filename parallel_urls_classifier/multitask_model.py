@@ -46,10 +46,6 @@ class MultitaskModel(nn.Module):
         self.task_models_dict = task_models_dict
         self.task_models_dict_modules = nn.ModuleDict(task_models_dict)
 
-    @classmethod
-    def get_task_model_path(cls, d, task):
-        return f"{d}.heads.{task}"
-
     def load_model(self, model_input):
         checkpoint = torch.load(model_input)
 
@@ -130,30 +126,6 @@ class MultitaskModel(nn.Module):
 
         return instance
 
-    @classmethod
-    def get_encoder_attr_name(cls, model):
-        """
-        The encoder transformer is named differently in each model "architecture".
-        This method lets us get the name of the encoder attribute
-        """
-        # General case
-        if model.base_model_prefix:
-            return model.base_model_prefix
-
-        # Specific case
-        model_class_name = model.__class__.__name__
-
-        if model_class_name.startswith("Bert"):
-            return "bert"
-        elif model_class_name.startswith("Roberta"):
-            return "roberta"
-        elif model_class_name.startswith("Albert"):
-            return "albert"
-        elif model_class_name.startswith("XLMRoberta"):
-            return "roberta"
-        else:
-            raise KeyError(f"Add support for new model {model_class_name}")
-
     def forward(self, task_name, *args, **kwargs):
         if "encoder_output" in kwargs and kwargs["encoder_output"] is not None:
             output = kwargs["encoder_output"]
@@ -179,6 +151,7 @@ class MultitaskModel(nn.Module):
 # Heads
 #  From https://github.com/nyu-mll/jiant/blob/de5437ae710c738a0481b13dc9d266dd558c43a4/jiant/proj/main/modeling/heads.py
 #  From https://github.com/huggingface/transformers/blob/820c46a707ddd033975bc3b0549eea200e64c7da/src/transformers/models/xlm_roberta/modeling_xlm_roberta.py#L1453
+#  From https://github.com/huggingface/transformers/blob/820c46a707ddd033975bc3b0549eea200e64c7da/src/transformers/models/xlm_roberta/modeling_xlm_roberta.py#L1139
 
 class ClassificationHead(nn.Module):
     def __init__(self, config):
@@ -213,9 +186,7 @@ class MLMHead(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.layer_norm = transformers.models.bert.modeling_bert.BertLayerNorm(
-            config.hidden_size, eps=config.layer_norm_eps
-        )
+        self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.activation = transformers.models.bert.modeling_bert.ACT2FN[config.hidden_act if config.hidden_act else "gelu"]
 
         self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=False)

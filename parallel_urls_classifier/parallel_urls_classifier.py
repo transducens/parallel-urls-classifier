@@ -490,26 +490,15 @@ def main(args):
     model = load_model(all_tasks, all_tasks_kwargs, model_input=model_input, pretrained_model=pretrained_model, device=device)
 
     if model_output:
-        model_tasks = model.get_tasks_names()
-        two_or_more_tasks = len(model_tasks) > 1
-        logger.info("Model will be stored: '%s.heads.%s%s%s'", model_output, '{' if two_or_more_tasks else '',
-                                                               ','.join(model_tasks), '}' if two_or_more_tasks else '')
+        logger.info("Model will be stored: %s", model_output)
 
-        all_output_paths = [model.__class__.get_task_model_path(model_output, t) for t in model_tasks]
-        _wait = False
+        if utils.exists(model_output):
+            if args.overwrite_output_model:
+                logger.warning("Provided output model does exist and it will be updated: waiting %d seconds before proceed", waiting_time)
 
-        for output_path in all_output_paths:
-            if utils.exists(output_path, f=os.path.isdir):
-                if args.overwrite_output_model:
-                    logger.warning("Provided output model does exist (file: '%s'): it will be updated: waiting %d seconds before proceed",
-                                    output_path, waiting_time)
-
-                    _wait = True
-                else:
-                    raise Exception(f"Provided output model does exist: '{output_path}'")
-
-        if _wait:
-            time.sleep(waiting_time)
+                time.sleep(waiting_time)
+            else:
+                raise Exception(f"Provided output model does exist: {model_output}")
 
     tokenizer = load_tokenizer(pretrained_model)
     fine_tuning = not args.do_not_fine_tune
@@ -558,13 +547,6 @@ def main(args):
                            "it will not be applied", imbalanced_strategy)
 
             imbalanced_strategy = "none"
-
-    # Unfreeze heads layers
-    for task in all_tasks:
-        head = model.get_head(task)
-
-        for param in head.parameters():
-            param.requires_grad = True
 
     # Unfreeze model layers
     for param in model.parameters():
