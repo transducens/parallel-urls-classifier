@@ -61,8 +61,20 @@ def main(args):
 
         if generator == "none":
             pass
-        elif generator == "random":
-            negative_pairs["random"] = set()
+        elif generator.startswith("random"):
+            if generator in negative_pairs:
+                logging.warning("Same generator for generating negative samples provided multiple times: %s", generator)
+
+            negative_pairs[generator] = set()
+
+            if generator == "random":
+                random_func_generator = (lambda: '\t'.join(random.choices(wrong_set_of_langs, k=2)))
+            elif generator == "random-src":
+                random_func_generator = (lambda: f"{join(random.choices(wrong_set_of_langs, k=1))}\t{trg_url_lang}")
+            elif generator == "random-trg":
+                random_func_generator = (lambda: f"{src_url_lang}\t{join(random.choices(wrong_set_of_langs, k=1))}")
+            else:
+                raise Exception(f"Unknown 'random' generator: {generator}")
 
             if len(wrong_set_of_langs) == 0:
                 logging.error("Negative samples generator 'random' needs wrong language ids, but none were provided")
@@ -70,17 +82,19 @@ def main(args):
                 for pair in pairs:
                     _pair = pair.split('\t')[:2]
                     random_pairs = set(
-                        ['\t'.join(_pair) + '\t' + '\t'.join(random.choices(wrong_set_of_langs, k=2)) + '\t0' \
+                        ['\t'.join(_pair) + '\t' + random_func_generator() + '\t0' \
                             for _ in range(max_negative_samples_alignments)])
 
                     for random_pair in random_pairs:
                         _random_pair = random_pair.split('\t')
+                        _src_url = _random_pair[2]
+                        _trg_url = _random_pair[3]
 
-                        if _random_pair[2] == src_url_lang and _random_pair[3] == trg_url_lang:
+                        if _src_url == src_url_lang and _trg_url == trg_url_lang:
                             # We don't want to add an actually positive sample (i.e. false negative)
                             pass
                         else:
-                            negative_pairs["random"].add(random_pair)
+                            negative_pairs[generator].add(random_pair)
         elif generator == "swap-langs":
             # max_negative_samples_alignments don't apply here
             negative_pairs["swap-langs"] = set()
@@ -127,7 +141,7 @@ def initialization():
     parser.add_argument('src_url_lang', help="Language of the URL of the 1st column")
     parser.add_argument('trg_url_lang', help="Language of the URL of the 2nd column")
 
-    parser.add_argument('--generator-technique', choices=["none", "random", "swap-langs", "same-lang-in-both-sides"],
+    parser.add_argument('--generator-technique', choices=["none", "random", "swap-langs", "same-lang-in-both-sides", "random-src", "random-trg"],
                         default=["random"], nargs='+',
                         help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")

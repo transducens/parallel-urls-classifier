@@ -121,7 +121,6 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
 
             if criteria and len(tasks) > 1:
                 # Move data to CPU (it will free up memory if device is cuda)
-                # TODO does this work as expected? Is it the inference slower?
                 labels[head_task] = labels[head_task].cpu()
 
                 #torch.cuda.empty_cache() # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879
@@ -129,7 +128,6 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
 
         if len(tasks) > 1:
             # Move data to CPU (it will free up memory if device is cuda)
-            # TODO does this work as expected? Is it the inference slower?
             urls = urls.cpu()
             attention_mask = attention_mask.cpu()
 
