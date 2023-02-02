@@ -77,6 +77,7 @@ _lr_scheduler_args = {
     }
 }
 _optimizer_args = {
+    "none": {},
     "adam": {
         "nargs": 4,
         "metavar": ("beta1", "beta2", "eps", "weight_decay"),
@@ -124,6 +125,9 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
 
         check_args(1, mandatory_args)
 
+        if optimizer is None:
+            raise Exception(f"Optimizer not provided, so the selected LR scheduler can't be configured: {scheduler}")
+
         def inverse_sqrt(current_step):
             num_warmup_steps = args[0]
 
@@ -158,11 +162,11 @@ def load_model(tasks, tasks_kwargs, model_input="", pretrained_model="", device=
     if model_input:
         logger.info("Loading model: '%s'", model_input)
 
-        multitask_model.from_pretrained_wrapper(model_input, device=device)
-    else:
-        # Move model to device
-        if device:
-            multitask_model = multitask_model.to(device)
+        multitask_model = multitask_model.load_model(model_input)
+
+    # Move model to device
+    if device:
+        multitask_model = multitask_model.to(device)
 
     return multitask_model
 
@@ -509,7 +513,13 @@ def main(args):
 
     tokenizer = load_tokenizer(pretrained_model)
     fine_tuning = not args.do_not_fine_tune
+    freeze_whole_model = args.freeze_whole_model
     model_embeddings_size = model.get_base_model().base_model.embeddings.word_embeddings.weight.shape[0]
+
+    if freeze_whole_model and fine_tuning:
+        logger.warning("The whole model won't be frozen since fine-tuning is enabled")
+
+        freeze_whole_model = False
 
     if url_separator_new_token:
         # Add new special token (URL separator)
@@ -556,9 +566,14 @@ def main(args):
         for param in head.parameters():
             param.requires_grad = True
 
+    # Unfreeze model layers
+    for param in model.parameters():
+        param.requires_grad = True
+
     # Freeze layers of the model, if needed
-    for param in model.get_base_model().parameters():
-        param.requires_grad = fine_tuning
+    if not fine_tuning:
+        for param in model.parameters() if freeze_whole_model else model.get_base_model().parameters():
+            param.requires_grad = False
 
     # Freeze embeddings layer, if needed
     for param in model.get_base_model().base_model.embeddings.parameters():
@@ -687,7 +702,12 @@ def main(args):
 
     logger.debug("Optimizer args: %s", optimizer_args)
 
-    if optimizer_str == "adam":
+    if optimizer_str == "none":
+        optimizer = None
+
+        logger.debug("Be aware that even with the optimizer disabled minor changes might be observed while training since the model is "
+                     "not in inference mode, so layers like Dropout have a random component which is enabled")
+    elif optimizer_str == "adam":
         optimizer_kwargs = {
             "betas": tuple(optimizer_args[0:2]),
             "eps": optimizer_args[2],
@@ -884,10 +904,11 @@ def main(args):
                     batch_outputs["langid-and-urls_classification"].extend(_outputs.tolist())
                     batch_labels["langid-and-urls_classification"].extend(_labels.tolist())
 
-                if cuda_amp:
-                    amp_grad_scaler.scale(loss).backward()
-                else:
-                    loss.backward()
+                if optimizer is not None:
+                    if cuda_amp:
+                        amp_grad_scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
 
                 for t in results.keys():
                     if t.startswith("_"):
@@ -992,7 +1013,8 @@ def main(args):
                 amp_grad_scaler.step(optimizer)
                 amp_grad_scaler.update()
             else:
-                optimizer.step()
+                if optimizer is not None:
+                    optimizer.step()
 
             if scheduler:
                 scheduler.step()
@@ -1094,7 +1116,7 @@ def main(args):
 
                     # Store model
                     if model_output:
-                        model.save_pretrained_wrapper(model_output)
+                        model.save_model(model_output)
 
                     current_patience = 0
                 else:
@@ -1178,7 +1200,7 @@ def main(args):
 
         logger.info("Loading best model (dev score): %s", str(best_dev))
 
-        model.from_pretrained_wrapper(model_output, device=device)
+        model = load_model(all_tasks, all_tasks_kwargs, model_input=model_output, pretrained_model=pretrained_model, device=device)
 
     dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
                                       device, amp_context_manager, classes=classes, max_tokens=max_tokens)
@@ -1314,7 +1336,8 @@ def initialization():
                         help="Process batches in groups tokens size (fairseq style). "
                              "Batch size is still relevant since the value is used when batches are needed (e.g. sampler from dataset)")
     parser.add_argument('--epochs', type=int, default=3, help="Epochs")
-    parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning (default weights)")
+    parser.add_argument('--do-not-fine-tune', action="store_true", help="Do not apply fine-tuning to the base model (default weights)")
+    parser.add_argument('--freeze-whole-model', action="store_true", help="Do not apply fine-tuning to the whole model, not only the base model")
     parser.add_argument('--dataset-workers', type=int, default=-1,
                         help="No. workers when loading the data in the dataset. When negative, all available CPUs will be used")
     parser.add_argument('--pretrained-model', default="xlm-roberta-base", help="Pretrained model")

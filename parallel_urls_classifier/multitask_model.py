@@ -4,17 +4,17 @@ import logging
 
 import parallel_urls_classifier.utils.utils as utils
 
+import torch
 import torch.nn as nn
 import transformers
 
 logger = logging.getLogger("parallel_urls_classifier")
 
 # Adapted from https://colab.research.google.com/github/zphang/zphang.github.io/blob/master/files/notebooks/Multi_task_Training_with_Transformers_NLP.ipynb#scrollTo=aVX5hFlzmLka
-class MultitaskModel(transformers.PreTrainedModel):
-    config_class = None
-    #is_parallelizable = True # TODO ?
-    base_model_prefix = "encoder"
-    main_input_name = "input_ids"
+#class MultitaskModel(transformers.PreTrainedModel):
+class MultitaskModel(nn.Module):
+    # Not using class from https://github.com/huggingface/transformers/blob/8298e4ec0291ee0d8bfd4fc620d3ab824e8b7bb4/src/transformers/modeling_utils.py#L972
+    #  since it is very difficult to create the model we want to: https://github.com/huggingface/transformers/issues/18969
 
     def __init__(self, config):
         """
@@ -22,9 +22,8 @@ class MultitaskModel(transformers.PreTrainedModel):
         to take better advantage of Trainer features
         """
         cls = self.__class__
-        cls.config_class = config.__class__
 
-        super().__init__(config)
+        super().__init__()
 
         self.config = config
 
@@ -37,7 +36,9 @@ class MultitaskModel(transformers.PreTrainedModel):
         # Load base model and tasks
         heads, heads_config = cls.get_task_heads(self.tasks_names, self.tasks_kwargs, pretrained_model)
         shared_encoder, task_models_dict = cls.get_base_and_heads(heads, heads_config, config, pretrained_model)
-        self.encoder = shared_encoder
+        #self.encoder = shared_encoder
+        self._base_model_prefix = shared_encoder.base_model_prefix
+        self.set_base_model(shared_encoder) # Workaround for https://github.com/huggingface/transformers/issues/18969
 
         self.update_task_models(task_models_dict)
 
@@ -49,51 +50,19 @@ class MultitaskModel(transformers.PreTrainedModel):
     def get_task_model_path(cls, d, task):
         return f"{d}.heads.{task}"
 
-    def from_pretrained_wrapper(self, model_input, device=None):
-        cls = self.__class__
-        shared_encoder = None
+    def load_model(self, model_input):
+        checkpoint = torch.load(model_input)
 
-        for task, task_head in self.task_models_dict.items():
-            task_path = cls.get_task_model_path(model_input, task)
+        self.get_base_model().load_state_dict(checkpoint["encoder"])
+        self.task_models_dict_modules.load_state_dict(checkpoint["tasks"])
 
-            if not utils.exists(task_path, f=os.path.isdir):
-                raise Exception(f"Provided input model does not exist (task: {task}): '{task_path}'")
+        return self
 
-            self.task_models_dict[task] = self.task_models_dict[task].from_pretrained(task_path)
-            encoder_attr_name = cls.get_encoder_attr_name(self.task_models_dict[task])
-
-            # REMEMBER: I've tried to remove the base model and only store the head relevant content, but when loading the structure is not the same and an exception is raised
-
-            if shared_encoder is None:
-                shared_encoder = getattr(self.task_models_dict[task], encoder_attr_name)
-                self.encoder = shared_encoder
-            else:
-                # Replace base model in the head
-                setattr(self.task_models_dict[task], encoder_attr_name, shared_encoder)
-
-            self.task_models_dict[task].to(device)
-
-        self.update_task_models(self.task_models_dict)
-
-        two_or_more_tasks = len(self.get_tasks_names()) > 1
-        logger.info("Model(s) loaded: %s.heads.%s%s%s", model_input,
-                    '{' if two_or_more_tasks else '', ','.join(self.get_tasks_names()),
-                    '}' if two_or_more_tasks else '')
-
-    def save_pretrained_wrapper(self, model_output):
-        cls = self.__class__
-
-        for task, task_head in self.task_models_dict.items():
-            task_path = cls.get_task_model_path(model_output, task)
-
-            # REMEMBER: I've tried to remove the base model and only store the head relevant content, but when loading the structure is not the same and an exception is raised
-
-            self.task_models_dict[task].save_pretrained(task_path)
-
-        two_or_more_tasks = len(self.get_tasks_names()) > 1
-        logger.info("Model(s) saved: %s.heads.%s%s%s", model_output,
-                    '{' if two_or_more_tasks else '', ','.join(self.get_tasks_names()),
-                    '}' if two_or_more_tasks else '')
+    def save_model(self, model_output):
+        torch.save({
+            "encoder": self.get_base_model().state_dict(),
+            "tasks": self.task_models_dict_modules.state_dict(),
+        }, model_output)
 
     @classmethod
     def get_task_heads(cls, tasks, tasks_kwargs, model_source):
@@ -102,13 +71,15 @@ class MultitaskModel(transformers.PreTrainedModel):
 
         for task in tasks:
             if task == "urls_classification":
-                heads[task] = transformers.AutoModelForSequenceClassification
+                heads[task] = ClassificationHead
             elif task == "mlm":
-                heads[task] = transformers.AutoModelForMaskedLM
+                logger.warning("MLM head implementation is for Roberta and BERT like models (i.e. it is slightly different from models like Albert)")
+
+                heads[task] = MLMHead
             elif task == "language-identification":
-                heads[task] = transformers.AutoModelForSequenceClassification
+                heads[task] = ClassificationHead
             elif task == "langid-and-urls_classification":
-                heads[task] = transformers.AutoModelForSequenceClassification
+                heads[task] = ClassificationHead
             else:
                 raise Exception(f"Unknown task: {task}")
 
@@ -118,7 +89,10 @@ class MultitaskModel(transformers.PreTrainedModel):
         return heads, heads_config
 
     def get_base_model(self):
-        return self.encoder
+        return getattr(self, self._base_model_prefix)
+
+    def set_base_model(self, model):
+        return setattr(self, self._base_model_prefix, model)
 
     def get_head(self, task):
         return self.task_models_dict_modules[task]
@@ -128,20 +102,11 @@ class MultitaskModel(transformers.PreTrainedModel):
 
     @classmethod
     def get_base_and_heads(cls, heads, heads_config, config, model_name):
-        shared_encoder = None
+        shared_encoder = transformers.AutoModel.from_pretrained(model_name)
         task_models_dict = {}
 
-        for task_name, model_type in heads.items():
-            model = model_type.from_pretrained(model_name, config=heads_config[task_name])
-            encoder_attr_name = cls.get_encoder_attr_name(model)
-
-            if shared_encoder is None:
-                shared_encoder = getattr(model, encoder_attr_name)
-            else:
-                # Replace base model in the head
-                setattr(model, encoder_attr_name, shared_encoder)
-
-            task_models_dict[task_name] = model
+        for task_name, head_cls in heads.items():
+            task_models_dict[task_name] = head_cls(heads_config[task_name])
 
         return shared_encoder, task_models_dict
 
@@ -190,4 +155,81 @@ class MultitaskModel(transformers.PreTrainedModel):
             raise KeyError(f"Add support for new model {model_class_name}")
 
     def forward(self, task_name, *args, **kwargs):
-        return self.task_models_dict_modules[task_name](*args, **kwargs)
+        if "encoder_output" in kwargs and kwargs["encoder_output"] is not None:
+            output = kwargs["encoder_output"]
+        else:
+            # If necessary, remove attrs which doesn't match with transformers models
+            if "encoder_output" in kwargs:
+                del kwargs["encoder_output"]
+
+            output = self.get_base_model()(*args, **kwargs)
+
+            try:
+                output = getattr(output, "last_hidden_state")
+            except AttributeError:
+                output = output[0]
+
+        logits = self.task_models_dict_modules[task_name](output)
+
+        return {
+            "logits": logits,
+            "encoder_output": output,
+        }
+
+# Heads
+#  From https://github.com/nyu-mll/jiant/blob/de5437ae710c738a0481b13dc9d266dd558c43a4/jiant/proj/main/modeling/heads.py
+#  From https://github.com/huggingface/transformers/blob/820c46a707ddd033975bc3b0549eea200e64c7da/src/transformers/models/xlm_roberta/modeling_xlm_roberta.py#L1453
+
+class ClassificationHead(nn.Module):
+    def __init__(self, config):
+        """From RobertaClassificationHead"""
+        super().__init__()
+
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        classifier_dropout = (
+            config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
+        )
+        self.dropout = nn.Dropout(classifier_dropout)
+        self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
+        self.num_labels = config.num_labels
+
+    def forward(self, features, pool_in_first_token=True):
+        pooled = features
+
+        if pool_in_first_token:
+            pooled = features[:, 0, :]  # take <s> token (equiv. to [CLS])
+
+        x = self.dropout(pooled)
+        x = self.dense(x)
+        x = torch.tanh(x)
+        x = self.dropout(x)
+        logits = self.out_proj(x)
+
+        return logits
+
+class MLMHead(nn.Module):
+    """From RobertaLMHead"""
+
+    def __init__(self, config):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.layer_norm = transformers.models.bert.modeling_bert.BertLayerNorm(
+            config.hidden_size, eps=config.layer_norm_eps
+        )
+        self.activation = transformers.models.bert.modeling_bert.ACT2FN[config.hidden_act if config.hidden_act else "gelu"]
+
+        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.bias = nn.Parameter(torch.zeros(config.vocab_size), requires_grad=True)
+
+        # Need a link between the two variables so that the bias is correctly resized with
+        # `resize_token_embeddings`
+        self.decoder.bias = self.bias
+
+    def forward(self, unpooled):
+        x = self.dense(unpooled)
+        x = self.activation(x)
+        x = self.layer_norm(x)
+
+        # project back to size of vocabulary with bias
+        logits = self.decoder(x) + self.bias
+        return logits

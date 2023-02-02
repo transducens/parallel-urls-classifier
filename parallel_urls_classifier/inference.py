@@ -59,6 +59,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
         # Move to device
         urls = urls.to(device)
         attention_mask = attention_mask.to(device)
+        encoder_output = None
 
         for head_task in tasks:
             if criteria:
@@ -66,8 +67,9 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
                 labels[head_task] = labels[head_task].to(device)
 
             # Inference
-            model_outputs = model(head_task, urls, attention_mask) # TODO can we avoid to run the base model multiple times if we have common input?
-            outputs = model_outputs.logits # Get head result
+            model_outputs = model(head_task, urls, attention_mask, encoder_output=encoder_output)
+            outputs = model_outputs["logits"] # Get head result
+            encoder_output = model_outputs["encoder_output"]
             criterion = criteria[head_task] if criteria else None
             loss_weight = tasks_weights[head_task] if tasks_weights else 1.0
 
