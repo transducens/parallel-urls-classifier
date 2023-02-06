@@ -45,7 +45,7 @@ def main(args):
         if len(pair_urls) != 2:
             raise Exception(f"Pair #{idx} doesn't have 2 fields, but {len(pair_urls)}")
 
-        pairs.add('\t'.join(pair_urls) + f"\t{src_url_lang}\t{trg_url_lang}" * 2 if add_actual_langs else 1 + "\t1")
+        pairs.add('\t'.join(pair_urls) + (f"\t{src_url_lang}\t{trg_url_lang}" * 2 if add_actual_langs else 1) + "\t1")
 
     negative_pairs = {}
 
@@ -91,8 +91,8 @@ def main(args):
 
                     for random_pair in random_pairs:
                         _random_pair = random_pair.split('\t')
-                        _src_url = _random_pair[2]
-                        _trg_url = _random_pair[3]
+                        _src_url = _random_pair[end_idx_pairs + 0]
+                        _trg_url = _random_pair[end_idx_pairs + 1]
 
                         if _src_url == src_url_lang and _trg_url == trg_url_lang:
                             # We don't want to add an actually positive sample (i.e. false negative)
