@@ -184,19 +184,19 @@ def main(args):
     skipped_urls = 0
     no_parallel_urls = 0
 
-    for idx, url_pair in enumerate(input_file_parallel_urls):
+    for idx, url_pair in enumerate(input_file_parallel_urls, 1):
         url_pair = url_pair.strip().split('\t')
 
         if len(url_pair) != 2:
-            raise Exception(f"The provided line does not have 2 tab-separated values but {len(url_pair)} (line #{idx + 1})")
+            raise Exception(f"The provided line does not have 2 tab-separated values but {len(url_pair)} (line #{idx})")
 
         if len(url_pair[0]) == 0 or len(url_pair[1]) == 0:
-            logging.warning("Skipping line #%d because there are empty values", idx + 1)
+            logging.warning("Skipping line #%d because there are empty values", idx)
             skipped_urls += 1
 
             continue
         if len(url_pair[0]) > 1000 or len(url_pair[1]) > 1000:
-            logging.warning("Skipping line #%d because there are URLs too long (%d and %d)", idx + 1, len(url_pair[0]), len(url_pair[1]))
+            logging.warning("Skipping line #%d because there are URLs too long (%d and %d)", idx, len(url_pair[0]), len(url_pair[1]))
             skipped_urls += 1
 
             continue
@@ -225,7 +225,7 @@ def main(args):
             raise Exception(f"Unknown 'check_same' option: {check_same}")
 
         if src_check != trg_check:
-            logging.debug("Skipping line #%d because the URLs didn't pass the check (%s vs %s)", idx + 1, src_check, trg_check)
+            logging.debug("Skipping line #%d because the URLs didn't pass the check (%s vs %s)", idx, src_check, trg_check)
             skipped_urls += 1
 
             continue
@@ -235,13 +235,18 @@ def main(args):
         if domain not in parallel_urls:
             parallel_urls[domain] = set()
 
+        _no_parallel_urls_before = len(parallel_urls[domain])
         parallel_urls[domain].add((url_pair[0], url_pair[1]))
+        _no_parallel_urls_after = len(parallel_urls[domain])
 
-        no_parallel_urls += 1
+        no_parallel_urls += 1 if _no_parallel_urls_before != _no_parallel_urls_after else 0
 
     len_domains = len(parallel_urls.keys())
+    total_read_urls = idx
 
-    logging.info("Skipped lines: %d out of %d (%.2f %%)", skipped_urls, idx + 1, skipped_urls * 100.0 / (idx + 1))
+    logging.info("Skipped lines: %d out of %d (%.2f %%) due to checks; %d out of %d (%.2f %%) due to duplicates",
+                 skipped_urls, total_read_urls, skipped_urls * 100.0 / total_read_urls,
+                 no_parallel_urls, total_read_urls, no_parallel_urls * 100.0 / total_read_urls)
     logging.info("Loaded URLs (positive samples): %d", no_parallel_urls)
     logging.info("Total domains (positive samples): %d", len_domains)
 

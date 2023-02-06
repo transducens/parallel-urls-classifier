@@ -1400,7 +1400,7 @@ def initialization():
                         help="Main task (URLs classification) will not be trained. Auxiliary task will be needed")
     parser.add_argument('--pre-load-shards', action="store_true",
                         help="Load all shards at beginning one by one in order to get some statistics needed for some features. This "
-                             "option is optional, but if not set, some features might not work as expected (e.g. linear LR scheduelr)")
+                             "option is optional, but if not set, some features might not work as expected (e.g. linear LR scheduler)")
 
     parser.add_argument('--seed', type=int, default=71213,
                         help="Seed in order to have deterministic results (not fully guaranteed). "

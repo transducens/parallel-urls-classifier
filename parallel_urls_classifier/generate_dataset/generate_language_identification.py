@@ -20,6 +20,7 @@ def main(args):
     max_negative_samples_alignments = args.max_negative_samples_alignments
     wrong_set_of_langs = [] if args.wrong_set_of_langs is None else args.wrong_set_of_langs
     seed = args.seed
+    add_actual_langs = not args.do_not_add_actual_langs
 
     if seed >= 0:
         random.seed(seed)
@@ -44,7 +45,7 @@ def main(args):
         if len(pair_urls) != 2:
             raise Exception(f"Pair #{idx} doesn't have 2 fields, but {len(pair_urls)}")
 
-        pairs.add('\t'.join(pair_urls) + f"\t{src_url_lang}\t{trg_url_lang}\t1")
+        pairs.add('\t'.join(pair_urls) + f"\t{src_url_lang}\t{trg_url_lang}" * 2 if add_actual_langs else 1 + "\t1")
 
     negative_pairs = {}
 
@@ -54,6 +55,9 @@ def main(args):
         logging.warning("Negative samples will not be generated since --max-negative-samples-alignments <= 0")
 
     logging.info("Generating negative samples...")
+
+    start_idx_pairs = 0
+    end_idx_pairs = 4 if add_actual_langs else 2
 
     # Negative samples
     for generator in generator_technique:
@@ -80,9 +84,9 @@ def main(args):
                 logging.error("Negative samples generator 'random' needs wrong language ids, but none were provided")
             else:
                 for pair in pairs:
-                    _pair = pair.split('\t')[:2]
+                    _pair = pair.split('\t')[start_idx_pairs:end_idx_pairs]
                     random_pairs = set(
-                        ['\t'.join(_pair) + '\t' + random_func_generator() + '\t0' \
+                        ['\t'.join(_pair) + '\t' + random_func_generator() + "\t0" \
                             for _ in range(max_negative_samples_alignments)])
 
                     for random_pair in random_pairs:
@@ -100,12 +104,12 @@ def main(args):
             negative_pairs["swap-langs"] = set()
 
             for pair in pairs:
-                negative_pairs["swap-langs"].add('\t'.join(pair.split('\t')[:2]) + f"\t{trg_url_lang}\t{src_url_lang}\t0")
+                negative_pairs["swap-langs"].add('\t'.join(pair.split('\t')[start_idx_pairs:end_idx_pairs]) + f"\t{trg_url_lang}\t{src_url_lang}\t0")
         elif generator == "same-lang-in-both-sides":
             negative_pairs["same-lang-in-both-sides"] = set()
 
             for pair in pairs:
-                _pair = '\t'.join(pair.split('\t')[:2])
+                _pair = '\t'.join(pair.split('\t')[start_idx_pairs:end_idx_pairs])
 
                 if max_negative_samples_alignments == 1:
                     if random.random() < 0.5:
@@ -147,6 +151,7 @@ def initialization():
     parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")
     parser.add_argument('--wrong-set-of-langs', nargs='*', default=["en", "fr", "tr", "sl", "hr", "mk", "is", "mt", "bg"],
                         help="Set of language identifiers which are wrong for src and trg URLs. This will be useful for some operations (e.g. generate negative samples using 'random')")
+    parser.add_argument('--do-not-add-actual-langs', action='store_true', help="Do not add additional columns with the actual languages")
 
     parser.add_argument('--seed', type=int, default=71213, help="Seed in order to have deterministic results (fully guaranteed if you also set PYTHONHASHSEED envvar). Set a negative number in order to disable this feature")
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging mode")
