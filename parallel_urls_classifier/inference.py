@@ -250,7 +250,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower),
-                            return_urls=True, auxiliary_tasks=auxiliary_tasks, lang_id_output_expected=False))
+                            return_urls=True, auxiliary_tasks=auxiliary_tasks))
 
             except StopIteration:
                 break
@@ -280,7 +280,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                      remove_positional_data=remove_positional_data_from_resource,
                                                                      separator=url_separator, lower=lower),
-                               auxiliary_tasks=auxiliary_tasks, lang_id_output_expected=False))
+                               auxiliary_tasks=auxiliary_tasks))
 
         target_urls = target_urls["urls"]
 
