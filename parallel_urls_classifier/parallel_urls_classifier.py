@@ -537,7 +537,7 @@ def main(args):
                               inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
                               parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
                               remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower,
-                              auxiliary_tasks=auxiliary_tasks)
+                              auxiliary_tasks=auxiliary_tasks, auxiliary_tasks_flags=auxiliary_tasks_flags)
 
         # Stop execution
         return
@@ -790,7 +790,7 @@ def main(args):
     final_loss = 0.0
     final_acc = 0.0
     final_acc_per_class = np.zeros(2)
-    final_acc_per_class_abs = np.zeros(2)
+    final_f1_per_class = np.zeros(2)
     final_macro_f1 = 0.0
     final_mcc = 0.0
     best_dev = np.inf * (1 if best_values_minimize else -1)
@@ -820,7 +820,7 @@ def main(args):
         epoch_loss = 0.0
         epoch_acc = 0.0
         epoch_acc_per_class = np.zeros(2)
-        epoch_acc_per_class_abs = np.zeros(2)
+        epoch_f1_per_class = np.zeros(2)
         epoch_macro_f1 = 0.0
         all_outputs = {aux_task: [] for aux_task in all_tasks}
         all_labels = {aux_task: [] for aux_task in all_tasks}
@@ -947,14 +947,14 @@ def main(args):
             epoch_loss += loss_value
             epoch_acc += metrics["acc"]
             epoch_acc_per_class += metrics["acc_per_class"]
-            epoch_acc_per_class_abs += metrics["f1"]
+            epoch_f1_per_class += metrics["f1"]
             epoch_macro_f1 += metrics["macro_f1"]
 
             if plot and show_statistics:
                 utils.append_from_tuple((batch_loss, epoch_loss / (idx + 1)),
                                         (batch_acc, epoch_acc * 100.0 / (idx + 1)),
-                                        (batch_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0 / (idx + 1)),
-                                        (batch_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0 / (idx + 1)),
+                                        (batch_acc_classes[0], epoch_f1_per_class[0] * 100.0 / (idx + 1)),
+                                        (batch_acc_classes[1], epoch_f1_per_class[1] * 100.0 / (idx + 1)),
                                         (batch_macro_f1, epoch_macro_f1 * 100.0 / (idx + 1)))
 
                 if epoch != 0 or idx != 0:
@@ -1028,7 +1028,7 @@ def main(args):
                                                 len(all_labels[aux_task]), classes=classes)
             epoch_acc = metrics["acc"]
             epoch_acc_per_class = metrics["acc_per_class"]
-            epoch_acc_per_class_abs = metrics["f1"]
+            epoch_f1_per_class = metrics["f1"]
             epoch_macro_f1 = metrics["macro_f1"]
             epoch_mcc = metrics["mcc"]
 
@@ -1037,15 +1037,15 @@ def main(args):
                 final_loss += epoch_loss
                 final_acc += epoch_acc
                 final_acc_per_class += epoch_acc_per_class
-                final_acc_per_class_abs += epoch_acc_per_class_abs
+                final_f1_per_class += epoch_f1_per_class
                 final_macro_f1 += epoch_macro_f1
                 final_mcc += epoch_mcc
 
             logger.info("[train:epoch#%d] Avg. loss: %f", epoch + 1, epoch_loss)
             logger.info("[train:epoch#%d] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                         epoch + 1, aux_task, epoch_acc * 100.0, epoch_acc_per_class[0] * 100.0, epoch_acc_per_class[1] * 100.0)
-            logger.info("[train:epoch#%d] Acc per class (task '%s'; non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
-                        epoch + 1, aux_task, epoch_acc_per_class_abs[0] * 100.0, epoch_acc_per_class_abs[1] * 100.0)
+            logger.info("[train:epoch#%d] Values per class (task '%s'; non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
+                        epoch + 1, aux_task, epoch_f1_per_class[0] * 100.0, epoch_f1_per_class[1] * 100.0)
             logger.info("[train:epoch#%d] Macro F1 (task '%s'): %.2f %%", epoch + 1, aux_task, epoch_macro_f1 * 100.0)
             logger.info("[train:epoch#%d] MCC (task '%s'): %.2f %%", epoch + 1, aux_task, epoch_mcc * 100.0)
 
@@ -1053,19 +1053,19 @@ def main(args):
             dev_loss = dev_inference_metrics["loss"]
             dev_acc = dev_inference_metrics["metrics"][aux_task]["acc"]
             dev_acc_per_class = dev_inference_metrics["metrics"][aux_task]["acc_per_class"]
-            dev_acc_per_class_abs_precision = dev_inference_metrics["metrics"][aux_task]["precision"]
-            dev_acc_per_class_abs_recall = dev_inference_metrics["metrics"][aux_task]["recall"]
-            dev_acc_per_class_abs_f1 = dev_inference_metrics["metrics"][aux_task]["f1"]
+            dev_precision_per_class = dev_inference_metrics["metrics"][aux_task]["precision"]
+            dev_recall_per_class = dev_inference_metrics["metrics"][aux_task]["recall"]
+            dev_f1_per_class = dev_inference_metrics["metrics"][aux_task]["f1"]
             dev_macro_f1 = dev_inference_metrics["metrics"][aux_task]["macro_f1"]
             dev_mcc = dev_inference_metrics["metrics"][aux_task]["mcc"]
 
             logger.info("[dev:epoch#%d] Avg. loss: %f", epoch + 1, dev_loss)
             logger.info("[dev:epoch#%d] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                         epoch + 1, aux_task, dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
-            logger.info("[dev:epoch#%d] Acc per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
+            logger.info("[dev:epoch#%d] Values per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
                         "(%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", epoch + 1, aux_task,
-                        dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
-                        dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
+                        dev_precision_per_class[0] * 100.0, dev_recall_per_class[0] * 100.0, dev_f1_per_class[0] * 100.0,
+                        dev_precision_per_class[1] * 100.0, dev_recall_per_class[1] * 100.0, dev_f1_per_class[1] * 100.0)
             logger.info("[dev:epoch#%d] Macro F1 (task '%s'): %.2f %%", epoch + 1, aux_task, dev_macro_f1 * 100.0)
             logger.info("[dev:epoch#%d] MCC (task '%s'): %.2f %%", epoch + 1, aux_task, dev_mcc * 100.0)
 
@@ -1110,13 +1110,13 @@ def main(args):
                 if plot:
                     utils.append_from_tuple((epoch_train_loss, epoch_loss),
                                             (epoch_train_acc, epoch_acc * 100.0),
-                                            (epoch_train_acc_classes[0], epoch_acc_per_class_abs[0] * 100.0),
-                                            (epoch_train_acc_classes[1], epoch_acc_per_class_abs[1] * 100.0),
+                                            (epoch_train_acc_classes[0], epoch_f1_per_class[0] * 100.0),
+                                            (epoch_train_acc_classes[1], epoch_f1_per_class[1] * 100.0),
                                             (epoch_train_macro_f1, epoch_macro_f1 * 100.0))
                     utils.append_from_tuple((epoch_dev_loss, dev_loss),
                                             (epoch_dev_acc, dev_acc * 100.0),
-                                            (epoch_dev_acc_classes[0], dev_acc_per_class_abs_f1[0] * 100.0),
-                                            (epoch_dev_acc_classes[1], dev_acc_per_class_abs_f1[1] * 100.0),
+                                            (epoch_dev_acc_classes[0], dev_f1_per_class[0] * 100.0),
+                                            (epoch_dev_acc_classes[1], dev_f1_per_class[1] * 100.0),
                                             (epoch_dev_macro_f1, dev_macro_f1 * 100.0))
 
                     plot_args = {
@@ -1164,15 +1164,15 @@ def main(args):
     final_loss /= epoch
     final_acc /= epoch
     final_acc_per_class /= epoch
-    final_acc_per_class_abs /= epoch
+    final_f1_per_class /= epoch
     final_macro_f1 /= epoch
     final_mcc /= epoch
 
     logger.info("[train] Avg. loss: %f", final_loss)
     logger.info("[train] Avg. acc: %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                 final_acc * 100.0, final_acc_per_class[0] * 100.0, final_acc_per_class[1] * 100.0)
-    logger.info("[train] Avg. acc per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
-                final_acc_per_class_abs[0] * 100.0, final_acc_per_class_abs[1] * 100.0)
+    logger.info("[train] Avg. values per class (non-parallel:f1, parallel:f1): (%.2f %%, %.2f %%)",
+                final_f1_per_class[0] * 100.0, final_f1_per_class[1] * 100.0)
     logger.info("[train] Avg. macro F1: %.2f %%", final_macro_f1 * 100.0)
     logger.info("[train] Avg. MCC: %.2f %%", final_mcc * 100.0)
 
@@ -1200,18 +1200,18 @@ def main(args):
     for aux_task in metrics_auxiliary_tasks + [task_dev_metric]:
         dev_acc = dev_inference_metrics["metrics"][aux_task]["acc"]
         dev_acc_per_class = dev_inference_metrics["metrics"][aux_task]["acc_per_class"]
-        dev_acc_per_class_abs_precision = dev_inference_metrics["metrics"][aux_task]["precision"]
-        dev_acc_per_class_abs_recall = dev_inference_metrics["metrics"][aux_task]["recall"]
-        dev_acc_per_class_abs_f1 = dev_inference_metrics["metrics"][aux_task]["f1"]
+        dev_precision_per_class = dev_inference_metrics["metrics"][aux_task]["precision"]
+        dev_recall_per_class = dev_inference_metrics["metrics"][aux_task]["recall"]
+        dev_f1_per_class = dev_inference_metrics["metrics"][aux_task]["f1"]
         dev_macro_f1 = dev_inference_metrics["metrics"][aux_task]["macro_f1"]
         dev_mcc = dev_inference_metrics["metrics"][aux_task]["mcc"]
 
         logger.info("[dev] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", aux_task,
                     dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
-        logger.info("[dev] Acc per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
+        logger.info("[dev] Values per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
                     "(%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", aux_task,
-                    dev_acc_per_class_abs_precision[0] * 100.0, dev_acc_per_class_abs_recall[0] * 100.0, dev_acc_per_class_abs_f1[0] * 100.0,
-                    dev_acc_per_class_abs_precision[1] * 100.0, dev_acc_per_class_abs_recall[1] * 100.0, dev_acc_per_class_abs_f1[1] * 100.0)
+                    dev_precision_per_class[0] * 100.0, dev_recall_per_class[0] * 100.0, dev_f1_per_class[0] * 100.0,
+                    dev_precision_per_class[1] * 100.0, dev_recall_per_class[1] * 100.0, dev_f1_per_class[1] * 100.0)
         logger.info("[dev] Macro F1 (task '%s'): %.2f %%", aux_task, dev_macro_f1 * 100.0)
         logger.info("[dev] MCC (task '%s'): %.2f %%", aux_task, dev_mcc * 100.0)
 
@@ -1226,18 +1226,18 @@ def main(args):
     for aux_task in metrics_auxiliary_tasks + [task_dev_metric]:
         test_acc = test_inference_metrics["metrics"][aux_task]["acc"]
         test_acc_per_class = test_inference_metrics["metrics"][aux_task]["acc_per_class"]
-        test_acc_per_class_abs_precision = test_inference_metrics["metrics"][aux_task]["precision"]
-        test_acc_per_class_abs_recall = test_inference_metrics["metrics"][aux_task]["recall"]
-        test_acc_per_class_abs_f1 = test_inference_metrics["metrics"][aux_task]["f1"]
+        test_precision_per_class = test_inference_metrics["metrics"][aux_task]["precision"]
+        test_recall_per_class = test_inference_metrics["metrics"][aux_task]["recall"]
+        test_f1_per_class = test_inference_metrics["metrics"][aux_task]["f1"]
         test_macro_f1 = test_inference_metrics["metrics"][aux_task]["macro_f1"]
         test_mcc = test_inference_metrics["metrics"][aux_task]["mcc"]
 
         logger.info("[test] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", aux_task,
                     test_acc * 100.0, test_acc_per_class[0] * 100.0, test_acc_per_class[1] * 100.0)
-        logger.info("[test] Acc per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
+        logger.info("[test] Values per class (task '%s'; non-parallel:precision|recall|f1, parallel:precision|recall|f1): "
                     "(%.2f %% | %.2f %% | %.2f %%, %.2f %% | %.2f %% | %.2f %%)", aux_task,
-                    test_acc_per_class_abs_precision[0] * 100.0, test_acc_per_class_abs_recall[0] * 100.0, test_acc_per_class_abs_f1[0] * 100.0,
-                    test_acc_per_class_abs_precision[1] * 100.0, test_acc_per_class_abs_recall[1] * 100.0, test_acc_per_class_abs_f1[1] * 100.0)
+                    test_precision_per_class[0] * 100.0, test_recall_per_class[0] * 100.0, test_f1_per_class[0] * 100.0,
+                    test_precision_per_class[1] * 100.0, test_recall_per_class[1] * 100.0, test_f1_per_class[1] * 100.0)
         logger.info("[test] Macro F1 (task '%s'): %.2f %%", aux_task, test_macro_f1 * 100.0)
         logger.info("[test] MCC (task '%s'): %.2f %%", aux_task, test_mcc * 100.0)
 

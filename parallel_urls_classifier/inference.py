@@ -222,7 +222,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
 def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                           inference_from_stdin=False, remove_authority=False, remove_positional_data_from_resource=False,
                           parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True,
-                          auxiliary_tasks=[]):
+                          auxiliary_tasks=[], auxiliary_tasks_flags=[]):
     logger.info("Inference mode enabled")
 
     for aux_task in auxiliary_tasks:
@@ -241,6 +241,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
     all_tasks = ["urls_classification"] + auxiliary_tasks
     task_langid = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
+    lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
 
     while True:
         if inference_from_stdin:
@@ -250,7 +251,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower),
-                            return_urls=True, auxiliary_tasks=auxiliary_tasks, inference=True))
+                            return_urls=True, auxiliary_tasks=auxiliary_tasks, inference=True,
+                            lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side))
 
             except StopIteration:
                 break
@@ -280,7 +282,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                      remove_positional_data=remove_positional_data_from_resource,
                                                                      separator=url_separator, lower=lower),
-                               auxiliary_tasks=auxiliary_tasks, inference=True))
+                               auxiliary_tasks=auxiliary_tasks, inference=True,
+                               lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side))
 
         target_urls = target_urls["urls"]
 
@@ -351,9 +354,11 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 @torch.no_grad()
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
-                              parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=False):
+                              parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=False,
+                              auxiliary_tasks_flags=[]):
     model.eval()
     all_results = []
+    lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
 
     # Process URLs
     src_urls = [src_url.replace('\t', ' ') for src_url in src_urls]
@@ -363,7 +368,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower),
-                            inference=True)
+                            inference=True, lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side)
 
     for target_urls in urls_generator:
         target_urls = target_urls["urls"]

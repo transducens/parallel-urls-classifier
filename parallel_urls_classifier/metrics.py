@@ -127,7 +127,7 @@ def get_metrics(outputs_argmax, labels, current_batch_size, classes=2, batch_idx
     if log:
         logger.debug("[train:batch#%d] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
                      batch_idx + 1, task, acc * 100.0, acc_per_class[0] * 100.0, acc_per_class[1] * 100.0)
-        logger.debug("[train:batch#%d] Acc per class (task '%s'; non-parallel->precision|recall|f1, parallel->precision|recall|f1): "
+        logger.debug("[train:batch#%d] Values per class (task '%s'; non-parallel->precision|recall|f1, parallel->precision|recall|f1): "
                      "(%d -> %.2f %% | %.2f %% | %.2f %%, %d -> %.2f %% | %.2f %% | %.2f %%)", batch_idx + 1, task,
                      no_values_per_class[0], precision[0] * 100.0, recall[0] * 100.0, f1[0] * 100.0,
                      no_values_per_class[1], precision[1] * 100.0, recall[1] * 100.0, f1[1] * 100.0)
