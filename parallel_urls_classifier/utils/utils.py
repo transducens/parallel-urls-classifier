@@ -74,7 +74,8 @@ def apply_model(model, tokenizer, tokens, encode=False):
     return output
 
 def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
-                                 auxiliary_tasks=[], lang_id_add_solo_urls_too=False, lang_id_target_applies_to_trg_side=False):
+                                 auxiliary_tasks=[], lang_id_add_solo_urls_too=False, lang_id_target_applies_to_trg_side=False,
+                                 inference=False):
     def reset():
         urls = {
             "urls": [],
@@ -88,19 +89,27 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
 
     # Tasks
     task_language_identification = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
-    add_only_urls_too = not task_language_identification or lang_id_add_solo_urls_too
+    _add_only_urls_too = not task_language_identification or lang_id_add_solo_urls_too
 
     for idx, url in enumerate(iterator, 1):
         url = url.strip().split('\t')
+        add_only_urls_too = _add_only_urls_too
 
-        if task_language_identification:
-            if len(url) != 7:
-                raise Exception("It was expected 7 values per line (src_url, trg_url, parallel_urls_output, true_src_url_lang, "
-                                "true_trg_url_lang, src_url_lang, trg_url_lang), "
-                                f"but got {len(url)} values")
+        if inference:
+            if len(url) not in (3, 5, 7):
+                raise Exception(f"Expected lengths are 3, 5 or 7, but got {len(url)}")
+
+            if len(url) == 3:
+                add_only_urls_too = True
         else:
-            if len(url) != 3:
-                raise Exception(f"It was expected 3 values per line (src_url, trg_url, parallel_urls_output), but got {len(url)} values")
+            if task_language_identification:
+                if len(url) != 7:
+                    raise Exception("It was expected 7 values per line (src_url, trg_url, parallel_urls_output, true_src_url_lang, "
+                                    "true_trg_url_lang, src_url_lang, trg_url_lang), "
+                                    f"but got {len(url)} values")
+            else:
+                if len(url) != 3:
+                    raise Exception(f"It was expected 3 values per line (src_url, trg_url, parallel_urls_output), but got {len(url)} values")
 
         if f:
             src_url, trg_url = f(url[0]), f(url[1])
@@ -136,10 +145,19 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
 
         initial_urls.append((url[0], url[1]))
 
-        if task_language_identification:
-            true_src_url_lang, true_trg_url_lang = url[3], url[4]
-            src_url_lang, trg_url_lang = url[5], url[6]
-            _src_url_lang = true_src_url_lang if lang_id_target_applies_to_trg_side else src_url_lang
+        if task_language_identification and len(url) in (5, 7):
+            if len(url) == 7:
+                true_src_url_lang, true_trg_url_lang = url[3], url[4]
+                src_url_lang, trg_url_lang = url[5], url[6]
+                _src_url_lang = true_src_url_lang if lang_id_target_applies_to_trg_side else src_url_lang
+                _target = int(src_url_lang == true_src_url_lang and trg_url_lang == true_trg_url_lang)
+                _target = int(trg_url_lang == true_trg_url_lang) if lang_id_target_applies_to_trg_side else _target
+            elif inference and len(url) == 5:
+                src_url_lang, trg_url_lang = url[3], url[4]
+                _src_url_lang = src_url_lang
+                _target = -1 # We don't know the target since inference=True
+            else:
+                raise Exception(f"Unexpected length: {len(url)}")
 
             urls["urls"].append(f"{_src_url_lang}{tokenizer.sep_token}{trg_url_lang}{tokenizer.sep_token}"
                                 f"{src_url}{tokenizer.sep_token}{trg_url}") # We first add the lang ids in order to avoid to lose them if
@@ -152,11 +170,6 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
             if add_only_urls_too:
                 urls["target-language-identification"].append(0) # Result for the URLs without language identificators
 
-            if lang_id_target_applies_to_trg_side:
-                _target = int(trg_url_lang == true_trg_url_lang)
-            else:
-                _target = int(src_url_lang == true_src_url_lang and trg_url_lang == true_trg_url_lang)
-
             urls["target-language-identification"].append(_target)
 
         if add_symmetric_samples:
@@ -166,8 +179,16 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
 
             initial_urls.append((url[1], url[0]))
 
-            if task_language_identification:
-                _trg_url_lang = true_trg_url_lang if lang_id_target_applies_to_trg_side else trg_url_lang
+            if task_language_identification and len(url) in (5, 7):
+                if len(url) == 7:
+                    _trg_url_lang = true_trg_url_lang if lang_id_target_applies_to_trg_side else trg_url_lang
+                    _target = int(src_url_lang == true_src_url_lang and trg_url_lang == true_trg_url_lang)
+                    _target = int(src_url_lang == true_src_url_lang) if lang_id_target_applies_to_trg_side else _target
+                elif inference and len(url) == 5:
+                    _trg_url_lang = trg_url_lang
+                    _target = -1 # We don't know the target since inference=True
+                else:
+                    raise Exception(f"Unexpected length: {len(url)}")
 
                 urls["urls"].append(f"{_trg_url_lang}{tokenizer.sep_token}{src_url_lang}{tokenizer.sep_token}"
                                     f"{trg_url}{tokenizer.sep_token}{src_url}")
@@ -175,11 +196,6 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
 
                 if add_only_urls_too:
                     urls["target-language-identification"].append(0) # If languages are not provided, target will be 0
-
-                if lang_id_target_applies_to_trg_side:
-                    _target = int(src_url_lang == true_src_url_lang)
-                else:
-                    _target = int(src_url_lang == true_src_url_lang and trg_url_lang == true_trg_url_lang)
 
                 urls["target-language-identification"].append(_target)
 

@@ -250,7 +250,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower),
-                            return_urls=True, auxiliary_tasks=auxiliary_tasks))
+                            return_urls=True, auxiliary_tasks=auxiliary_tasks, inference=True))
 
             except StopIteration:
                 break
@@ -280,7 +280,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                      remove_positional_data=remove_positional_data_from_resource,
                                                                      separator=url_separator, lower=lower),
-                               auxiliary_tasks=auxiliary_tasks))
+                               auxiliary_tasks=auxiliary_tasks, inference=True))
 
         target_urls = target_urls["urls"]
 
@@ -317,6 +317,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         for task in all_tasks:
             outputs = results[task]["outputs"].cpu()
             outputs_argmax = results[task]["outputs_classification"]
+
+            if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+                outputs = torch.sigmoid(outputs)
 
             #if len(outputs_argmax.shape) == 0:
             #    outputs_argmax = np.array([outputs_argmax])
@@ -359,7 +362,8 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     urls_generator = utils.tokenize_batch_from_iterator(str_urls, tokenizer, batch_size,
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
-                                                                  separator=url_separator, lower=lower))
+                                                                  separator=url_separator, lower=lower),
+                            inference=True)
 
     for target_urls in urls_generator:
         target_urls = target_urls["urls"]
@@ -374,7 +378,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                                     amp_context_manager)
 
         # Get results only for main task
-        outputs = results["urls_classification"]["outputs"].cpu()
+        outputs = torch.sigmoid(results["urls_classification"]["outputs"]).cpu()
         outputs_argmax = results["urls_classification"]["outputs_classification"]
         regression = results["urls_classification"]["regression"]
 
