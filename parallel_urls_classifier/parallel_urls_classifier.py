@@ -539,6 +539,8 @@ def main(args):
                               remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower,
                               auxiliary_tasks=auxiliary_tasks, auxiliary_tasks_flags=auxiliary_tasks_flags)
 
+        logger.info("Done!")
+
         # Stop execution
         return
 

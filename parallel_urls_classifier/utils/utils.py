@@ -96,11 +96,21 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
         add_only_urls_too = _add_only_urls_too
 
         if inference:
-            if len(url) not in (3, 5, 7):
-                raise Exception(f"Expected lengths are 3, 5 or 7, but got {len(url)}")
+            # Format:
+            #  2: src_url trg_url
+            #  3: src_url trg_url target[ignored]
+            #  4: src_url trg_url src_url_lang trg_url_lang
+            #  5: src_url trg_url target[ignored] src_url_lang trg_url_lang
+            #  6: src_url trg_url true_src_url_lang true_trg_url_lang src_url_lang trg_url_lang
+            #  7: src_url trg_url target[ignored] true_src_url_lang true_trg_url_lang src_url_lang trg_url_lang
+            if len(url) not in (2, 3, 4, 5, 6, 7):
+                raise Exception(f"Expected lengths are 2, 3, 4, 5, 6 or 7, but got {len(url)}")
 
-            if len(url) == 3:
+            if len(url) in (2, 3):
                 add_only_urls_too = True
+
+            if len(url) in (4, 5, 6, 7) and not task_language_identification:
+                raise Exception("Got lengths in (4, 5, 6, 7) but not langid task, so is unexpected")
         else:
             if task_language_identification:
                 if len(url) != 7:
@@ -127,10 +137,13 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
         else:
             src_url, trg_url = url[0], url[1]
 
-        parallel_urls_output = int(url[2])
+        if inference and len(url) in (2, 4, 6):
+            parallel_urls_output = -1 # We don't know the result since inference=True
+        else:
+            parallel_urls_output = int(url[2])
 
-        if parallel_urls_output not in (0, 1):
-            raise Exception(f"Unexpected value for 'parallel_urls_output': expected value is (0, 1), but got '{parallel_urls_output}'")
+            if parallel_urls_output not in (0, 1):
+                raise Exception(f"Unexpected value for 'parallel_urls_output': expected value is (0, 1), but got '{parallel_urls_output}'")
 
         if tokenizer.sep_token in src_url or tokenizer.sep_token in trg_url:
             logger.warning("URLs skipped since they contain the separator token: ('%s', '%s')", src_url, trg_url)
@@ -145,17 +158,17 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
 
         initial_urls.append((url[0], url[1]))
 
-        if task_language_identification and len(url) in (5, 7):
-            if len(url) == 7:
-                true_src_url_lang, true_trg_url_lang = url[3], url[4]
-                src_url_lang, trg_url_lang = url[5], url[6]
+        if task_language_identification and len(url) in (4, 5, 6, 7):
+            if len(url) in (6, 7):
+                true_src_url_lang, true_trg_url_lang = url[3 if len(url) == 7 else 2], url[4 if len(url) == 7 else 3]
+                src_url_lang, trg_url_lang = url[5 if len(url) == 7 else 4], url[6 if len(url) == 7 else 5]
                 _src_url_lang = true_src_url_lang if lang_id_target_applies_to_trg_side else src_url_lang
                 _target = int(src_url_lang == true_src_url_lang and trg_url_lang == true_trg_url_lang)
                 _target = int(trg_url_lang == true_trg_url_lang) if lang_id_target_applies_to_trg_side else _target
-            elif inference and len(url) == 5:
-                src_url_lang, trg_url_lang = url[3], url[4]
+            elif len(url) in (4, 5):
+                src_url_lang, trg_url_lang = url[3 if len(url) == 5 else 2], url[4 if len(url) == 5 else 3]
                 _src_url_lang = src_url_lang
-                _target = -1 # We don't know the target since inference=True
+                _target = -1 # We don't know the result since inference=True
             else:
                 raise Exception(f"Unexpected length: {len(url)}")
 
@@ -179,12 +192,12 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
 
             initial_urls.append((url[1], url[0]))
 
-            if task_language_identification and len(url) in (5, 7):
-                if len(url) == 7:
+            if task_language_identification and len(url) in (4, 5, 6, 7):
+                if len(url) in (6, 7):
                     _trg_url_lang = true_trg_url_lang if lang_id_target_applies_to_trg_side else trg_url_lang
                     _target = int(src_url_lang == true_src_url_lang and trg_url_lang == true_trg_url_lang)
                     _target = int(src_url_lang == true_src_url_lang) if lang_id_target_applies_to_trg_side else _target
-                elif inference and len(url) == 5:
+                elif len(url) in (4, 5):
                     _trg_url_lang = trg_url_lang
                     _target = -1 # We don't know the target since inference=True
                 else:
