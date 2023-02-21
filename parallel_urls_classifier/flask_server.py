@@ -22,6 +22,9 @@ app = Flask("parallel-urls-classifier-flask-server")
 global_conf = {} # Empty since it will be filled once main is run
 logger = logging.getLogger("parallel_urls_classifier")
 
+# Disable (less verbose) 3rd party logging
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
 @app.route('/', methods=['GET'])
 def info():
     available_routes = json.dumps(
@@ -61,7 +64,7 @@ def inference():
         return jsonify({"ok": "null", "err": f"could not get some mandatory field: 'src_urls' and 'trg_urls' are mandatory"})
 
     if not src_urls or not trg_urls:
-        logger.warning("Empty src or trg urls")
+        logger.warning("Empty src or trg urls: %s | %s", src_urls, trg_urls)
 
         return jsonify({"ok": "null", "err": "'src_url' and 'trg_url' are mandatory fields and can't be empty"})
 
@@ -169,6 +172,7 @@ def main(args):
     auxiliary_tasks = args.auxiliary_tasks
     target_task = args.target_task
     regression = args.regression
+    streamer_max_latency = args.streamer_max_latency
 
     if auxiliary_tasks is None:
         auxiliary_tasks = []
@@ -194,7 +198,7 @@ def main(args):
     global_conf["remove_positional_data_from_resource"] = args.remove_positional_data_from_resource
     global_conf["parallel_likelihood"] = args.parallel_likelihood
     global_conf["url_separator"] = args.url_separator
-    global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size, max_latency=0.1)
+    global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size, max_latency=streamer_max_latency)
     global_conf["disable_streamer"] = args.disable_streamer
     global_conf["expect_urls_base64"] = args.expect_urls_base64
     global_conf["lower"] = lower
@@ -233,6 +237,7 @@ def initialization():
     parser.add_argument('--target-task', type=str, default="urls_classification",
                         help="Task which will be used as primary task and whose results will be used")
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
+    parser.add_argument('--streamer-max-latency', type=float, default=0.1, help="Streamer max latency")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")

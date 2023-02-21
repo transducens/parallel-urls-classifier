@@ -272,10 +272,11 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             src_url = initial_src_urls[0]
             trg_url = initial_trg_urls[0]
-            data = f"{src_url}\t{trg_url}"
 
             if task_langid:
-                data += f"\t{src_url_lang}\t{trg_url_lang}"
+                data = f"{src_url}\t{trg_url}\t{src_url_lang}\t{trg_url_lang}"
+            else:
+                data = f"{src_url}\t{trg_url}"
 
             data = [data]
             target_urls = next(utils.tokenize_batch_from_iterator(data, tokenizer, batch_size,
@@ -354,7 +355,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
                               parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=False,
-                              auxiliary_tasks=[], auxiliary_tasks_flags=[]):
+                              auxiliary_tasks=[], auxiliary_tasks_flags=[], src_urls_lang=[], trg_urls_lang=[]):
     model.eval()
     all_results = {}
     lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
@@ -375,6 +376,15 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     src_urls = [src_url.replace('\t', ' ') for src_url in src_urls]
     trg_urls = [trg_url.replace('\t', ' ') for trg_url in trg_urls]
     str_urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
+
+    if len(src_urls_lang) != 0:
+        if len(src_urls_lang) != len(src_urls):
+            raise Exception(f"Unexpected different lengths: {len(src_urls_lang)} vs {len(src_urls)}")
+        if len(trg_urls_lang) != len(trg_urls):
+            raise Exception(f"Unexpected different lengths: {len(trg_urls_lang)} vs {len(trg_urls)}")
+
+        str_urls = list(map(lambda s: '\t'.join(s), zip(str_urls, src_urls_lang, trg_urls_lang)))
+
     urls_generator = utils.tokenize_batch_from_iterator(str_urls, tokenizer, batch_size,
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
