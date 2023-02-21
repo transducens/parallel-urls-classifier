@@ -19,22 +19,7 @@ from service_streamer import ThreadedStreamer
 
 app = Flask("parallel-urls-classifier-flask-server")
 
-global_conf = {
-    "model": None,
-    "tokenizer": None,
-    "device": None,
-    "batch_size": None,
-    "max_length_tokens": None,
-    "amp_context_manager": None,
-    "remove_authority": None,
-    "remove_positional_data_from_resource": None,
-    "parallel_likelihood": None,
-    "url_separator": None,
-    "streamer": None,
-    "disable_streamer": None,
-    "expect_urls_base64": None,
-    "lower": None,
-}
+global_conf = {} # Empty since it will be filled once main is run
 logger = logging.getLogger("parallel_urls_classifier")
 
 @app.route('/', methods=['GET'])
@@ -120,17 +105,23 @@ def inference():
     results = get_results(urls)
 
     # Return results
-
     if len(results) != len(src_urls):
-        logger.warning("Results length mismatch with the provided URLs: %d vs %d: %s vs %s", len(results), len(src_urls), results, src_urls)
+        logger.warning("Results length mismatch with the provided URLs (task '%s'): %d vs %d: %s vs %s",
+                        task, len(results), len(src_urls), results, src_urls)
 
-        return jsonify({"ok": "null", "err": f"results length mismatch with the provided URLs: {len(results)} vs {len(src_urls)}"})
+        return jsonify({
+            "ok": "null",
+            "err": f"results length mismatch with the provided URLs (task '{task}'): {len(results)} vs {len(src_urls)}",
+        })
 
     results = [str(r) for r in results]
 
     logger.debug("Results: %s", results)
 
-    return jsonify({"ok": results, "err": "null"})
+    return jsonify({
+        "ok": results,
+        "err": "null",
+    })
 
 def batch_prediction(urls):
     logger.debug("URLs batch size: %d", len(urls))
@@ -147,6 +138,8 @@ def batch_prediction(urls):
     parallel_likelihood = global_conf["parallel_likelihood"]
     url_separator = global_conf["url_separator"]
     lower = global_conf["lower"]
+    auxiliary_tasks = global_conf["auxiliary_tasks"]
+    target_task = global_conf["target_task"]
 
     for url in urls:
         src_url, trg_url = url.split('\t')
@@ -158,10 +151,12 @@ def batch_prediction(urls):
     results = puc_inference.non_interactive_inference(
         model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, src_urls, trg_urls,
         remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
-        parallel_likelihood=parallel_likelihood, url_separator=url_separator, lower=lower
+        parallel_likelihood=parallel_likelihood, url_separator=url_separator, lower=lower,
+        auxiliary_tasks=auxiliary_tasks,
     )
 
-    return results
+    return results[target_task] # TODO do we need a list if the streamer is used (it seems so)?
+                                # https://github.com/ShannonAI/service-streamer/issues/97
 
 def main(args):
     model_input = args.model_input
@@ -171,14 +166,23 @@ def main(args):
     pretrained_model = args.pretrained_model
     flask_port = args.flask_port
     lower = args.lowercase
+    auxiliary_tasks = args.auxiliary_tasks
+    target_task = args.target_task
+    regression = args.regression
+
+    if auxiliary_tasks is None:
+        auxiliary_tasks = []
 
     logger.debug("Device: %s", device)
 
-    if not global_conf["model"]:
-        global_conf["model"] = puc.load_model(["urls_classification"], {"urls_classification": {}}, model_input=model_input,
+    if "model" not in global_conf:
+        # model = load_model(all_tasks, all_tasks_kwargs, model_input=model_input, pretrained_model=pretrained_model, device=device)
+        all_tasks = ["urls_classification"] + auxiliary_tasks
+        all_tasks_kwargs = puc.load_tasks_kwargs(all_tasks, auxiliary_tasks, regression)
+        global_conf["model"] = puc.load_model(all_tasks, all_tasks_kwargs, model_input=model_input,
                                               pretrained_model=pretrained_model, device=device)
     else:
-        # We apply this step in order to try to avoid to load the model multiple times due to flask debug mode
+        # We apply this step in order to avoid loading the model multiple times due to flask debug mode
         pass
 
     global_conf["tokenizer"] = puc.load_tokenizer(pretrained_model)
@@ -187,13 +191,15 @@ def main(args):
     global_conf["max_length_tokens"] = args.max_length_tokens
     global_conf["amp_context_manager"], _, _ = puc.get_amp_context_manager(args.cuda_amp, use_cuda)
     global_conf["remove_authority"] = args.remove_authority
-    global_conf["remove_positional_data_from_resource"] = not args.do_not_remove_positional_data_from_resource
+    global_conf["remove_positional_data_from_resource"] = args.remove_positional_data_from_resource
     global_conf["parallel_likelihood"] = args.parallel_likelihood
     global_conf["url_separator"] = args.url_separator
-    global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size)
+    global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size, max_latency=0.1)
     global_conf["disable_streamer"] = args.disable_streamer
     global_conf["expect_urls_base64"] = args.expect_urls_base64
     global_conf["lower"] = lower
+    global_conf["auxiliary_tasks"] = auxiliary_tasks
+    global_conf["target_task"] = target_task
 
     # Some guidance
     logger.info("Example: curl http://127.0.0.1:%d/hello-world", flask_port)
@@ -214,7 +220,7 @@ def initialization():
     parser.add_argument('--parallel-likelihood', action="store_true", help="Print parallel likelihood instead of classification string (inference)")
     parser.add_argument('--threshold', type=float, default=-np.inf, help="Only print URLs which have a parallel likelihood greater than the provided threshold (inference)")
     parser.add_argument('--remove-authority', action="store_true", help="Remove protocol and authority from provided URLs")
-    parser.add_argument('--do-not-remove-positional-data-from-resource', action="store_true", help="Remove content after '#' in the resorce (e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
+    parser.add_argument('--remove-positional-data-from-resource', action="store_true", help="Remove content after '#' in the resorce (e.g. https://www.example.com/resource#position -> https://www.example.com/resource)")
     parser.add_argument('--force-cpu', action="store_true", help="Run on CPU (i.e. do not check if GPU is possible)")
     parser.add_argument('--url-separator', default='/', help="Separator to use when URLs are stringified")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
@@ -222,6 +228,11 @@ def initialization():
     parser.add_argument('--expect-urls-base64', action="store_true", help="Decode BASE64 URLs")
     parser.add_argument('--flask-port', type=int, default=5000, help="Flask port")
     parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs while preprocessing")
+    parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm", "language-identification", "langid-and-urls_classification"],
+                        help="Tasks which will try to help to the main task (multitasking)")
+    parser.add_argument('--target-task', type=str, default="urls_classification",
+                        help="Task which will be used as primary task and whose results will be used")
+    parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")

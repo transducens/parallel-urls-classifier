@@ -172,6 +172,48 @@ def load_model(tasks, tasks_kwargs, model_input="", pretrained_model="", device=
 
     return multitask_model
 
+def load_tasks_kwargs(all_tasks, auxiliary_tasks, regression):
+    all_tasks_kwargs = {}
+    total_auxiliary_tasks = 0
+    num_labels = 1 if regression else 2
+
+    if "urls_classification" in all_tasks:
+        all_tasks_kwargs["urls_classification"] = {
+            "num_labels": num_labels,
+        }
+    if "mlm" in auxiliary_tasks:
+        all_tasks_kwargs["mlm"] = {}
+
+        logger.info("Using auxiliary task: mlm")
+
+        total_auxiliary_tasks += 1
+    if "language-identification" in auxiliary_tasks:
+        all_tasks_kwargs["language-identification"] = {
+            "num_labels": num_labels,
+        }
+
+        logger.info("Using auxiliary task: language-identification")
+
+        total_auxiliary_tasks += 1
+    if "langid-and-urls_classification" in auxiliary_tasks:
+        all_tasks_kwargs["langid-and-urls_classification"] = {
+            "num_labels": num_labels,
+        }
+
+        logger.info("Using auxiliary task: langid-and-urls_classification")
+
+        total_auxiliary_tasks += 1
+
+    if total_auxiliary_tasks == 0:
+        logger.info("Not using any auxiliary task")
+
+    if total_auxiliary_tasks != len(auxiliary_tasks):
+        # We forgot something (e.g. update the code according to the new auxiliary tasks)
+        raise Exception("The specified auxiliary tasks could not be loaded (bug): "
+                        f"{' '.join(auxiliary_tasks)} ({len(auxiliary_tasks)})")
+
+    return all_tasks_kwargs
+
 def load_tokenizer(pretrained_model):
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
 
@@ -397,7 +439,6 @@ def main(args):
     if lock_file:
         logger.debug("Lock file will be created if the training finishes: %s", lock_file)
 
-    num_labels = 1 if regression else 2
     classes = 2
     amp_context_manager, amp_grad_scaler, cuda_amp = get_amp_context_manager(cuda_amp, use_cuda)
 
@@ -452,44 +493,7 @@ def main(args):
         logger.debug("Dev data file: %s", filename_dataset_dev[0])
         logger.debug("Test data file: %s", filename_dataset_test[0])
 
-    all_tasks_kwargs = {}
-    total_auxiliary_tasks = 0
-
-    if "urls_classification" in all_tasks:
-        all_tasks_kwargs["urls_classification"] = {
-            "num_labels": num_labels,
-        }
-    if "mlm" in auxiliary_tasks:
-        all_tasks_kwargs["mlm"] = {}
-
-        logger.info("Using auxiliary task: mlm")
-
-        total_auxiliary_tasks += 1
-    if "language-identification" in auxiliary_tasks:
-        all_tasks_kwargs["language-identification"] = {
-            "num_labels": num_labels,
-        }
-
-        logger.info("Using auxiliary task: language-identification")
-
-        total_auxiliary_tasks += 1
-    if "langid-and-urls_classification" in auxiliary_tasks:
-        all_tasks_kwargs["langid-and-urls_classification"] = {
-            "num_labels": num_labels,
-        }
-
-        logger.info("Using auxiliary task: langid-and-urls_classification")
-
-        total_auxiliary_tasks += 1
-
-    if total_auxiliary_tasks == 0:
-        logger.info("Not using any auxiliary task")
-
-    if total_auxiliary_tasks != len(auxiliary_tasks):
-        # We forgot something (e.g. update the code according to the new auxiliary tasks)
-        raise Exception("The specified auxiliary tasks could not be loaded (bug): "
-                        f"{' '.join(auxiliary_tasks)} ({len(auxiliary_tasks)})")
-
+    all_tasks_kwargs = load_tasks_kwargs(all_tasks, auxiliary_tasks, regression)
     model = load_model(all_tasks, all_tasks_kwargs, model_input=model_input, pretrained_model=pretrained_model, device=device)
 
     if model_output:

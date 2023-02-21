@@ -316,7 +316,6 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                        amp_context_manager)
 
         # Get results of each task
-
         for task in all_tasks:
             outputs = results[task]["outputs"].cpu()
             outputs_argmax = results[task]["outputs_classification"]
@@ -355,10 +354,22 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
                               parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=False,
-                              auxiliary_tasks_flags=[]):
+                              auxiliary_tasks=[], auxiliary_tasks_flags=[]):
     model.eval()
-    all_results = []
+    all_results = {}
     lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
+
+    for aux_task in auxiliary_tasks:
+        if aux_task in ("language-identification", "langid-and-urls_classification"):
+            pass
+        else:
+            raise Exception(f"Not supported or unknown task: {aux_task}")
+
+    all_tasks = ["urls_classification"] + auxiliary_tasks
+    task_langid = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
+
+    for task in all_tasks:
+        all_results[task] = []
 
     # Process URLs
     src_urls = [src_url.replace('\t', ' ') for src_url in src_urls]
@@ -368,7 +379,8 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower),
-                            inference=True, lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side)
+                            auxiliary_tasks=auxiliary_tasks, inference=True,
+                            lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side)
 
     for target_urls in urls_generator:
         target_urls = target_urls["urls"]
@@ -379,28 +391,28 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
         attention_mask = tokens["attention_mask"].to(device)
 
         # Inference
-        results = inference_with_heads(model, ["urls_classification"], tokenizer, {"urls": urls, "attention_mask": attention_mask},
-                                    amp_context_manager)
+        results = inference_with_heads(model, all_tasks, tokenizer, {"urls": urls, "attention_mask": attention_mask},
+                                       amp_context_manager)
 
-        # Get results only for main task
-        outputs = torch.sigmoid(results["urls_classification"]["outputs"]).cpu()
-        outputs_argmax = results["urls_classification"]["outputs_classification"]
-        regression = results["urls_classification"]["regression"]
+        # Get results
+        for task in all_tasks:
+            outputs = torch.sigmoid(results[task]["outputs"]).cpu()
+            outputs_argmax = results[task]["outputs_classification"]
+            regression = results[task]["regression"]
 
-        #if len(outputs_argmax.shape) == 0:
-        #    outputs_argmax = np.array([outputs_argmax])
+            if outputs.numpy().shape[0] != len(src_urls):
+                raise Exception("Output samples does not match with the length of src URLs: "
+                                f"{outputs.numpy().shape[0]} vs {len(src_urls)}")
+            if outputs.numpy().shape[0] != len(trg_urls):
+                raise Exception("Output samples does not match with the length of trg URLs: "
+                                f"{outputs.numpy().shape[0]} vs {len(trg_urls)}")
 
-        assert outputs.numpy().shape[0] == len(src_urls), "Output samples does not match with the length of src URLs " \
-                                                        f"({outputs.numpy().shape[0]} vs {len(src_urls)})"
-        assert outputs.numpy().shape[0] == len(trg_urls), "Output samples does not match with the length of trg URLs " \
-                                                        f"({outputs.numpy().shape[0]} vs {len(trg_urls)})"
+            if parallel_likelihood:
+                _results = [data if regression else data[1] for data in outputs.numpy()]
+                _results = [likelihood for likelihood in _results if likelihood >= threshold]
+            else:
+                _results = ['parallel' if argmax == 1 else 'non-parallel' for argmax in outputs_argmax]
 
-        if parallel_likelihood:
-            _results = [data if regression else data[1] for data in outputs.numpy()]
-            _results = [likelihood for likelihood in _results if likelihood >= threshold]
-        else:
-            _results = ['parallel' if argmax == 1 else 'non-parallel' for argmax in outputs_argmax]
-
-        all_results.extend(_results)
+            all_results[task].extend(_results)
 
     return all_results
