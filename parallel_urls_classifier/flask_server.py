@@ -213,6 +213,7 @@ def main(args):
     target_task = args.target_task
     regression = args.regression
     streamer_max_latency = args.streamer_max_latency
+    run_flask_server = not args.do_not_run_flask_server
 
     if auxiliary_tasks is None:
         auxiliary_tasks = []
@@ -249,8 +250,9 @@ def main(args):
     logger.info("Example: curl http://127.0.0.1:%d/hello-world", flask_port)
     logger.debug("Example: curl http://127.0.0.1:%d/inference -X POST -d \"src_urls=https://domain/resource1&trg_urls=https://domain/resource2\"", flask_port)
 
-    # Run flask server
-    app.run(debug=args.flask_debug, port=flask_port)
+    if run_flask_server:
+        # Run flask server
+        app.run(debug=args.flask_debug, port=flask_port)
 
 def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -278,6 +280,7 @@ def initialization():
                         help="Task which will be used as primary task and whose results will be used")
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
     parser.add_argument('--streamer-max-latency', type=float, default=0.1, help="Streamer max latency")
+    parser.add_argument('--do-not-run-flask-server', action="store_true", help="Do not run app.run")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")
