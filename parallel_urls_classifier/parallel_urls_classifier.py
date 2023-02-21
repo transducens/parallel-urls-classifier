@@ -58,9 +58,9 @@ _lr_scheduler_args = {
     "none": {},
     "linear": {
         "nargs": 1,
-        "metavar": ("warmup_steps_percentage",),
-        "default": (0.1,),
-        "type": utils.argparse_nargs_type(float),
+        "metavar": ("warmup_steps",),
+        "default": ("10%",), # '%' is optional, and if not provided, absolute number of steps is taken
+        "type": utils.argparse_nargs_type(str),
     },
     "CLR": {
         "nargs": 6,
@@ -71,9 +71,9 @@ _lr_scheduler_args = {
     },
     "inverse_sqrt": {
         "nargs": 1,
-        "metavar": ("warmup_steps_percentage",),
-        "default": (0.1,),
-        "type": utils.argparse_nargs_type(float),
+        "metavar": ("warmup_steps",),
+        "default": ("10%",), # '%' is optional, and if not provided, absolute number of steps is taken
+        "type": utils.argparse_nargs_type(str),
     }
 }
 _optimizer_args = {
@@ -135,11 +135,13 @@ def get_lr_scheduler(scheduler, optimizer, *args, **kwargs):
                 return float(current_step) / float(max(1, num_warmup_steps))
 
             # From https://fairseq.readthedocs.io/en/latest/_modules/fairseq/optim/lr_scheduler/inverse_square_root_schedule.html
+            # In fairseq they set directly the LR to the optimizer, but we use it for a LR scheduler, so for us is a value which will multiply the LR
             initial_lr = optimizer.defaults["lr"]
             decay_factor = initial_lr * num_warmup_steps**0.5
             lr = decay_factor * current_step**-0.5
 
-            return lr / initial_lr
+            return lr / initial_lr # This step makes that the multiplication of initial_lr doesn't affect, but the previous lines are just being similar
+                                   #  to the version of fairseq
 
         scheduler_instance = LambdaLR(optimizer, inverse_sqrt, **kwargs)
     else:
@@ -724,11 +726,14 @@ def main(args):
     if scheduler_str == "none":
         pass
     elif scheduler_str == "linear":
-        scheduler_args = [int(lr_scheduler_args[0] * training_steps), training_steps]
+        if lr_scheduler_args[0][-1] == '%':
+            scheduler_args = [int((float(lr_scheduler_args[0][:-1]) / 100.0) * training_steps), training_steps]
 
-        if multiple_shards and not pre_load_shards:
-            logger.warning("LR scheduler: '%s': multiple train files were provided, but only the first "
-                           "one has been used for calculating the total number of steps, which affects the selecter LR scheduler", scheduler_str)
+            if multiple_shards and not pre_load_shards:
+                logger.warning("LR scheduler: '%s': multiple train files were provided, but only the first "
+                            "one has been used for calculating the total number of steps, which affects the selecter LR scheduler", scheduler_str)
+        else:
+            scheduler_args = [int(lr_scheduler_args[0]), training_steps]
     elif scheduler_str == "CLR":
         scheduler_max_lr, scheduler_step_size, scheduler_mode, scheduler_gamma, scheduler_max_lr_factor, scheduler_step_size_factor \
             = lr_scheduler_args
@@ -758,11 +763,14 @@ def main(args):
             "cycle_momentum": False, # https://github.com/pytorch/pytorch/issues/73910
         }
     elif scheduler_str == "inverse_sqrt":
-        scheduler_args = [int(lr_scheduler_args[0] * training_steps)]
+        if lr_scheduler_args[0][-1] == '%':
+            scheduler_args = [int((float(lr_scheduler_args[0][:-1]) / 100.0) * training_steps)]
 
-        if multiple_shards and not pre_load_shards:
-            logger.warning("LR scheduler: '%s': multiple train files were provided, but only the first "
-                           "one has been used for calculating the total number of steps, which affects the selecter LR scheduler", scheduler_str)
+            if multiple_shards and not pre_load_shards:
+                logger.warning("LR scheduler: '%s': multiple train files were provided, but only the first "
+                               "one has been used for calculating the total number of steps, which affects the selecter LR scheduler", scheduler_str)
+        else:
+            scheduler_args = [int(lr_scheduler_args[0])]
     else:
         raise Exception(f"Unknown LR scheduler: {scheduler}")
 
