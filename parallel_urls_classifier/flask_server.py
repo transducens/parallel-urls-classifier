@@ -63,6 +63,25 @@ def inference():
 
         return jsonify({"ok": "null", "err": f"could not get some mandatory field: 'src_urls' and 'trg_urls' are mandatory"})
 
+    # Optional parameters
+    try:
+        if request.method == "GET":
+            # GET method should be used only for testing purposes since HTML encoding is not being handled
+            src_urls_lang = request.args.getlist("src_urls_lang")
+            trg_urls_lang = request.args.getlist("trg_urls_lang")
+        elif request.method == "POST":
+            src_urls_lang = request.form.getlist("src_urls_lang")
+            trg_urls_lang = request.form.getlist("trg_urls_lang")
+        else:
+            logger.warning("Unknown method: %s", request.method)
+
+            return jsonify({"ok": "null", "err": f"unknown method: {request.method}"})
+    except KeyError as e:
+        src_urls_lang = None
+        trg_urls_lang = None
+
+    langs_provided = src_urls_lang is not None and trg_urls_lang is not None
+
     if not src_urls or not trg_urls:
         logger.warning("Empty src or trg urls: %s | %s", src_urls, trg_urls)
 
@@ -78,6 +97,18 @@ def inference():
 
     if len(src_urls) != len(trg_urls):
         return jsonify({"ok": "null", "err": f"different src and trg length: {len(src_urls)} vs {len(trg_urls)}"})
+
+    if langs_provided:
+        if not isinstance(src_urls_lang, list) or not isinstance(trg_urls_lang, list):
+            if not isinstance(src_urls_lang, list):
+                src_urls_lang = [src_urls_lang]
+            if not isinstance(trg_urls_lang, list):
+                trg_urls_lang = [trg_urls_lang]
+
+        if len(src_urls_lang) != len(trg_urls_lang):
+            return jsonify({"ok": "null", "err": f"different src and trg langs length: {len(src_urls_lang)} vs {len(trg_urls_lang)}"})
+        if len(src_urls) != len(trg_urls_lang):
+            return jsonify({"ok": "null", "err": f"different urls and langs length: {len(src_urls)} vs {len(trg_urls_lang)}"})
 
     logger.debug("Got (%d, %d) src and trg URLs", len(src_urls), len(trg_urls))
 
@@ -102,8 +133,12 @@ def inference():
 
     disable_streamer = global_conf["disable_streamer"]
     get_results = global_conf["streamer"].predict if not disable_streamer else batch_prediction
+
     # We need one element per pair in order to do not break the streamer (it doesn't handle right the parallelism if there isn't 1:1 elements)
-    urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
+    if langs_provided:
+        urls = [f"{src_url}\t{trg_url}\t{src_url_lang}\t{trg_url_lang}" for src_url, trg_url, src_url_lang, trg_url_lang in zip(src_urls, trg_urls, src_urls_lang, trg_urls_lang)]
+    else:
+        urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
 
     results = get_results(urls)
 
@@ -130,6 +165,7 @@ def batch_prediction(urls):
     logger.debug("URLs batch size: %d", len(urls))
 
     src_urls, trg_urls = [], []
+    src_urls_lang, trg_urls_lang = [], []
     model = global_conf["model"]
     tokenizer = global_conf["tokenizer"]
     device = global_conf["device"]
@@ -145,17 +181,21 @@ def batch_prediction(urls):
     target_task = global_conf["target_task"]
 
     for url in urls:
-        src_url, trg_url = url.split('\t')
+        fields = url.split('\t')
 
-        src_urls.append(src_url)
-        trg_urls.append(trg_url)
+        src_urls.append(fields[0])
+        trg_urls.append(fields[1])
+
+        if len(fields) >= 4:
+            src_urls_lang.append(fields[2])
+            trg_urls_lang.append(fields[3])
 
     # Inference
     results = puc_inference.non_interactive_inference(
         model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager, src_urls, trg_urls,
         remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
         parallel_likelihood=parallel_likelihood, url_separator=url_separator, lower=lower,
-        auxiliary_tasks=auxiliary_tasks,
+        auxiliary_tasks=auxiliary_tasks, src_urls_lang=src_urls_lang, trg_urls_lang=trg_urls_lang,
     )
 
     return results[target_task] # TODO do we need a list if the streamer is used (it seems so)?

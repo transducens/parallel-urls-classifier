@@ -24,12 +24,12 @@ def fields2dict(fields, encode_base64=False):
                 result[k][idx] = base64.b64encode(result[k][idx].encode("utf-8", errors="backslashreplace")).decode("utf-8", errors="backslashreplace")
 
     if len(fields) in (4, 5):
-        result["src_langs"] = [fields[len(fields) - 2]]
-        result["trg_langs"] = [fields[len(fields) - 1]]
+        result["src_urls_lang"] = [fields[len(fields) - 2]]
+        result["trg_urls_lang"] = [fields[len(fields) - 1]]
     elif len(fields) in (6, 7):
         #result["src_langs"] = fields[len(fields) - 2]
-        result["src_langs"] = [fields[len(fields) - 4]] # Src lang is always expected to be correct
-        result["trg_langs"] = [fields[len(fields) - 1]]
+        result["src_urls_lang"] = [fields[len(fields) - 4]] # Src lang is always expected to be correct
+        result["trg_urls_lang"] = [fields[len(fields) - 1]]
 
     return result
 
