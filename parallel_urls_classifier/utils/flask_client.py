@@ -38,6 +38,7 @@ def main(args):
     urls_base64 = args.urls_base64
     flask_url = f"{args.flask_url.rstrip('/')}/inference"
     n_jobs = args.n_jobs
+    batch_size = args.batch_size
 
     if input_data == '-':
         input_data_fd = sys.stdin
@@ -85,8 +86,7 @@ def main(args):
         return None
 
     start, end = 0, 0
-    batch_size = 1000
-    end = min(end + batch_size, len(data))
+    end = min(end + batch_size, len(data)) if batch_size > 0 else len(data)
 
     while start != end:
         _results = joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)(joblib.delayed(process_data)(d) for d in data[start:end])
@@ -106,6 +106,7 @@ def initialization():
     parser.add_argument('--urls-base64', action="store_true", help="Encode BASE64 URLs")
     parser.add_argument('--flask-url', type=str, default="http://127.0.0.1:5000", help="Flask server URL")
     parser.add_argument('--n-jobs', type=int, default=16, help="Number of jobs")
+    parser.add_argument('--batch-size', type=int, default=1000, help="Batch of data provided for inference and wait until it's been infered")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 

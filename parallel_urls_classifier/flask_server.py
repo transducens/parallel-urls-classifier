@@ -279,7 +279,8 @@ def initialization():
     parser.add_argument('--target-task', type=str, default="urls_classification",
                         help="Task which will be used as primary task and whose results will be used")
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
-    parser.add_argument('--streamer-max-latency', type=float, default=0.1, help="Streamer max latency")
+    parser.add_argument('--streamer-max-latency', type=float, default=0.1,
+                        help="Streamer max latency. You will need to modify this parameter if you want to increase the GPU usage")
     parser.add_argument('--do-not-run-flask-server', action="store_true", help="Do not run app.run")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
@@ -299,7 +300,10 @@ def cli():
 
     main(args)
 
-    logger.info("Bye!")
+    if not args.do_not_run_flask_server:
+        logger.info("Bye!")
+    else:
+        logger.info("Execution has finished")
 
 if __name__ == "__main__":
     cli()
