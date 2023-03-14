@@ -3,8 +3,7 @@ def init(model_input, batch_size=16, streamer_max_latency=0.1, target_task="urls
     import sys
     import parallel_urls_classifier.flask_server as flask_server
 
-    initial_args = sys.argv[1:]
-    sys.argv = [sys.argv[0]] # Remove all provided args -> they'll be used later
+    sys.argv = [sys.argv[0]] # Remove all provided args
 
     # Inject args that will be used by the Flask server
     sys.argv.extend([
@@ -15,12 +14,11 @@ def init(model_input, batch_size=16, streamer_max_latency=0.1, target_task="urls
         "--regression",
         "--streamer-max-latency", str(streamer_max_latency),
         "--do-not-run-flask-server", # Necessary for gunicorn in order to work properly
-        "--verbose",
+        "--expect-urls-base64",
+        #"--verbose",
+        #"--disable-streamer",
         model_input
     ])
-
-    positional_args = 1 # model_input
-    sys.argv[-positional_args:-positional_args] = initial_args # Inject args which will override the current configuration. Don't override positional args
 
     flask_server.cli()
 

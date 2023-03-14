@@ -89,7 +89,10 @@ def main(args):
     end = min(end + batch_size, len(data)) if batch_size > 0 else len(data)
 
     while start != end:
-        _results = joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)(joblib.delayed(process_data)(d) for d in data[start:end])
+        if n_jobs:
+            _results = joblib.Parallel(n_jobs=n_jobs, max_nbytes=None)(joblib.delayed(process_data)(d) for d in data[start:end])
+        else:
+            _results = [process_data(d) for d in data[start:end]]
 
         for _r in _results:
             print(_r)

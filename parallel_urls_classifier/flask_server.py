@@ -214,6 +214,11 @@ def main(args):
     regression = args.regression
     streamer_max_latency = args.streamer_max_latency
     run_flask_server = not args.do_not_run_flask_server
+    disable_streamer = args.disable_streamer
+
+    if not disable_streamer:
+        logger.warning("Since streamer is enabled, you might get slightly different results: not recommended for production")
+        # Related to https://discuss.pytorch.org/t/slightly-different-results-in-same-machine-and-gpu-but-different-order/173581
 
     if auxiliary_tasks is None:
         auxiliary_tasks = []
@@ -240,7 +245,7 @@ def main(args):
     global_conf["parallel_likelihood"] = args.parallel_likelihood
     global_conf["url_separator"] = args.url_separator
     global_conf["streamer"] = ThreadedStreamer(batch_prediction, batch_size=args.batch_size, max_latency=streamer_max_latency)
-    global_conf["disable_streamer"] = args.disable_streamer
+    global_conf["disable_streamer"] = disable_streamer
     global_conf["expect_urls_base64"] = args.expect_urls_base64
     global_conf["lower"] = lower
     global_conf["auxiliary_tasks"] = auxiliary_tasks
