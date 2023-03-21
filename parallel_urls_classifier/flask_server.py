@@ -76,6 +76,11 @@ def inference():
             logger.warning("Unknown method: %s", request.method)
 
             return jsonify({"ok": "null", "err": f"unknown method: {request.method}"})
+
+        if len(src_urls_lang) == 0:
+            src_urls_lang = None
+        if len(trg_urls_lang) == 0:
+            trg_urls_lang = None
     except KeyError as e:
         src_urls_lang = None
         trg_urls_lang = None
@@ -85,7 +90,7 @@ def inference():
     if not src_urls or not trg_urls:
         logger.warning("Empty src or trg urls: %s | %s", src_urls, trg_urls)
 
-        return jsonify({"ok": "null", "err": "'src_url' and 'trg_url' are mandatory fields and can't be empty"})
+        return jsonify({"ok": "null", "err": "'src_urls' and 'trg_urls' are mandatory fields and can't be empty"})
 
     if not isinstance(src_urls, list) or not isinstance(trg_urls, list):
         logger.warning("Single src and/or trg URL was provided instead of a batch: this will slow the inference")
@@ -116,8 +121,8 @@ def inference():
 
     if base64_encoded:
         try:
-            src_urls = [base64.b64decode(f"{u}==").decode("utf-8", errors="backslashreplace").replace('\n', ' ') for u in src_urls]
-            trg_urls = [base64.b64decode(f"{u}==").decode("utf-8", errors="backslashreplace").replace('\n', ' ') for u in trg_urls]
+            src_urls = [base64.b64decode(f"{u.replace('_', '+')}==").decode("utf-8", errors="backslashreplace").replace('\n', ' ') for u in src_urls]
+            trg_urls = [base64.b64decode(f"{u.replace('_', '+')}==").decode("utf-8", errors="backslashreplace").replace('\n', ' ') for u in trg_urls]
         except Exception as e:
             logger.error("Exception when decoding BASE64: %s", e)
 

@@ -8,14 +8,15 @@ import numpy as np
 sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
 
 def mcc(tp, tn, fp, fn):
-    return 100 * (tp * tn - fp * fn) / np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+    almost_dividend = (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
+    return 100 * (tp * tn - fp * fn) / np.sqrt(almost_dividend) if almost_dividend != 0 else 0.0
 
 def pos_and_neg_prec_recall_and_f1(tp, tn, fp, fn):
     results = {
-        "pos_prec": 100 * tp / (tp + fp),
-        "pos_recall": 100 * tp / (tp + fn),
-        "neg_prec": 100 * tn / (tn + fn),
-        "neg_recall": 100 * tn / (tn + fp),
+        "pos_prec": 100 * tp / (tp + fp) if (tp + fp) != 0 else 100.0,
+        "pos_recall": 100 * tp / (tp + fn) if (tp + fn) != 0 else 100.0,
+        "neg_prec": 100 * tn / (tn + fn) if (tn + fn) != 0 else 100.0,
+        "neg_recall": 100 * tn / (tn + fp) if (tn + fp) != 0 else 100.0,
     }
 
     results["pos_f1"] = 2 * results["pos_prec"] * results["pos_recall"] / (results["pos_prec"] + results["pos_recall"])
