@@ -29,7 +29,7 @@ def init(model_input, batch_size=16, streamer_max_latency=0.1, target_task="urls
         "--do-not-run-flask-server", # Necessary for gunicorn in order to work properly
         "--expect-urls-base64",
         #"--verbose",
-        #"--disable-streamer",
+        #"--disable-streamer", # It should be enabled for crawls of multiple websites, but disabled for a few websites
         model_input
     ])
 

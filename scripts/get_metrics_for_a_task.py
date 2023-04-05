@@ -9,7 +9,7 @@ sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
 
 def mcc(tp, tn, fp, fn):
     almost_dividend = (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
-    return 100 * (tp * tn - fp * fn) / np.sqrt(almost_dividend) if almost_dividend != 0 else 0.0
+    return 100 * (tp * tn - fp * fn) / np.sqrt(float(almost_dividend)) if almost_dividend != 0 else 0.0
 
 def pos_and_neg_prec_recall_and_f1(tp, tn, fp, fn):
     results = {
