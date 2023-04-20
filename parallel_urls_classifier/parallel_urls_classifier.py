@@ -296,6 +296,7 @@ def load_dataset(filename_dataset, set_desc, shard_id, symmetric_samples, **kwar
     # Prepare datasets data
     dataset_tasks_data = {
         "labels_language_identification": target_lang_id,
+        "reward_if_only_langid_is_correct_too": "language-identification_target-applies-only-to-trg-side" in kwargs["auxiliary_tasks_flags"],
     }
 
     # Datasets
@@ -1402,13 +1403,17 @@ def initialization():
                              "task if --do-not-train-main-task is set")
 
     parser.add_argument('--auxiliary-tasks-flags', type=str, nargs='*',
-                        choices=["language-identification_add-solo-urls-too", "language-identification_target-applies-only-to-trg-side"],
+                        choices=["language-identification_add-solo-urls-too",
+                                 "language-identification_target-applies-only-to-trg-side",
+                                 "langid-and-urls_classification_reward-if-only-langid-is-correct-too"],
                         help="Set of options which will set up some aspects of the auxiliary tasks")
     # language-identification_add-solo-urls-too -> if task "language-identification", with this option set, model will be trained not only
     #   with "src_lang<sep>trg_lang<sep>src_url<sep>trg_url", but also with "src_url<sep>trg_url" but there will have twice times input data
     # language-identification_target-applies-only-to-trg-side -> by default, the target of task "language-identification" applies to both
     #   sides and, if both sides are correct, the target is expected to be 1. This option makes the assumption that the target only applies
     #   to the target side and source side is always correct
+    # langid-and-urls_classification_reward-if-only-langid-is-correct-too -> by default, both tasks has to be correct, but with this option
+    #   instead of expect both tasks to be correct, if the langid is correct, the reward will not be 0 but 0.5
 
     parser.add_argument('--do-not-train-main-task', action="store_true",
                         help="Main task (URLs classification) will not be trained. Auxiliary task will be needed")

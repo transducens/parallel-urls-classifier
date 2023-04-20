@@ -115,7 +115,11 @@ class SmartBatchingURLsDataset(Dataset):
 
             for idx, (label, lang_id_label) in enumerate(zip(self.labels["urls_classification"], tasks_data["labels_language_identification"])):
                 self.labels["language-identification"][idx] = lang_id_label
-                self.labels["langid-and-urls_classification"][idx] = lang_id_label * label
+
+                if tasks_data["reward_if_only_langid_is_correct_too"]:
+                    self.labels["langid-and-urls_classification"][idx] = (lang_id_label * label + lang_id_label) / 2 # (w * x * y + x) / (w + 1) ; w = 1
+                else:
+                    self.labels["langid-and-urls_classification"][idx] = lang_id_label * label
 
         # Imbalanced strategy?
         if imbalanced_strategy:
