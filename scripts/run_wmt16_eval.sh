@@ -71,15 +71,37 @@ if [[ ! -d "$PREFIX" ]]; then
 
   PUC_AWK_CMD=""
 
+  if [[ -z "$PUC_PROVIDE_LANGS" ]]; then
+    >&2 echo "WARNING: PUC_PROVIDE_LANGS was not defined, but is going to be 'yes'"
+
+    PUC_PROVIDE_LANGS="yes"
+  fi
+
+  if [[ "$PUC_PROVIDE_LANGS" != "yes" ]] && [[ "$PUC_PROVIDE_LANGS" != "no" ]]; then
+    >&2 echo "Allowed values for PUC_PROVIDE_LANGS are 'yes' or 'no'"
+
+    exit 1
+  fi
+
   if [[ "$PUC_DIR" == "src-trg" ]]; then
-    PUC_AWK_CMD='{print $1"\t"$2}'
+    PUC_AWK_CMD='{print $1"\t"$2'
+
+    if [[ "$PUC_PROVIDE_LANGS" != "yes" ]]; then
+        PUC_AWK_CMD=''"$PUC_AWK_CMD"'"\ten\tfr\ten\tfr"'
+    fi
   elif [[ "$PUC_DIR" == "trg-src" ]]; then
-    PUC_AWK_CMD='{print $2"\t"$1}'
+    PUC_AWK_CMD='{print $2"\t"$1'
+
+    if [[ "$PUC_PROVIDE_LANGS" != "yes" ]]; then
+        PUC_AWK_CMD=''"$PUC_AWK_CMD"'"\tfr\ten\tfr\ten"'
+    fi
   else
     >&2 echo "Bug? Unexpected PUC dir value: $PUC_DIR"
 
     exit 1
   fi
+
+  PUC_AWK_CMD=''"$PUC_AWK_CMD"'}'
 
   ls $PUC_PAIRS \
     | xargs -I{} -P250 bash -c \
@@ -153,13 +175,19 @@ for task in $(echo "$TASKS"); do
 
   echo "Running task '$task'..."
 
+  suffix="out.out"
+
+  if [[ "$(ls $PREFIX/*.$suffix 2> /dev/null | wc -l)" == "0" ]]; then
+    suffix="out"
+  fi
+
   ls "$LETT_DIR"/* \
     | xargs -I{} -P20 bash -c \
       'a=$(basename "{}"); \
         zcat "{}" \
         | cut -f1,4,6 \
         | python3 "'"$WMT16_SCRIPT"'" - "'"$GS"'" --classifier-command ":)" \
-          --classifier-results <(cat "'"$PREFIX"'/${a}.out.out" | egrep -a ^'"$task"' | awk -F'\''\t'\'' '\'' '"$AWK_CMD"' '\'') \
+          --classifier-results <(cat "'"$PREFIX"'/${a}.'"$suffix"'" | egrep -a ^'"$task"' | awk -F'\''\t'\'' '\'' '"$AWK_CMD"' '\'') \
           --results-are-fp '"$FLAGS"' \
           > '"$OUTPUT"'/${a}.out \
           2> '"$OUTPUT"'/${a}.log'
@@ -190,9 +218,9 @@ for task in $(echo "$TASKS"); do
   RECALL_DIV=$((TP + FN))
 
   if [[ "$RECALL_DIV" == "0" ]]; then
-      RECALL="undefined"
+      RECALL="undefined_because_recall_div_is_zero"
   else
-      RECALL=$(echo "scale=4; 100 * $TP/($TP + $FN)" | bc)
+      RECALL=$(echo "scale=2; 100 * $TP/$RECALL_DIV" | bc)
   fi
 
   echo "TN, FP, FN, TP: $TN $FP $FN $TP"
