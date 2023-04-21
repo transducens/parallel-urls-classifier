@@ -406,6 +406,19 @@ def main(args):
     dataset_workers = args.dataset_workers
     pre_load_shards = args.pre_load_shards
 
+    if "langid-and-urls_classification" in auxiliary_tasks and
+       "langid-and-urls_classification_reward-if-only-langid-is-correct-too" in auxiliary_tasks_flags:
+
+        if not regression and not inference:
+            raise Exception("If 'langid-and-urls_classification_reward-if-only-langid-is-correct-too' is set, you need to set --regression")
+
+        logger.warning("Due to 'langid-and-urls_classification_reward-if-only-langid-is-correct-too' option, evaluation metrics for "
+                       "task 'langid-and-urls_classification' can't be properly calculated (only loss can be trusted)")
+
+        if task_dev_metric == "langid-and-urls_classification" and best_dev_metric != "loss" and not inference:
+            logger.warning("You set 'langid-and-urls_classification' in --task-dev-metric, but metrics can't be properly calculated and "
+                           "you should use another task unless that --best-dev-metric is set to 'loss'")
+
     if auxiliary_tasks:
         _auxiliary_tasks_weights = {}
 
