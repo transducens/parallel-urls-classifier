@@ -6,7 +6,7 @@ html5lib==1.1
 beautifulsoup4==4.10.0
 Flask==2.2.2
 psutil==5.9.0
-git+https://github.com/ShannonAI/service-streamer@c273234#egg=service_streamer
+service_streamer @ git+https://github.com/ShannonAI/service-streamer@c273234#egg=service_streamer
 nltk==3.7
 Levenshtein==0.20.6
 more-itertools==9.0.0
