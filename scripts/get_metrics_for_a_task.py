@@ -19,14 +19,17 @@ def pos_and_neg_prec_recall_and_f1(tp, tn, fp, fn):
         "neg_recall": 100 * tn / (tn + fp) if (tn + fp) != 0 else 100.0,
     }
 
-    results["pos_f1"] = 2 * results["pos_prec"] * results["pos_recall"] / (results["pos_prec"] + results["pos_recall"])
-    results["neg_f1"] = 2 * results["neg_prec"] * results["neg_recall"] / (results["neg_prec"] + results["neg_recall"])
+    pos_dividend = results["pos_prec"] + results["pos_recall"]
+    neg_dividend = results["neg_prec"] + results["neg_recall"]
+    results["pos_f1"] = (2 * results["pos_prec"] * results["pos_recall"] / pos_dividend) if not np.isclose(pos_dividend, 0.0) else np.inf
+    results["neg_f1"] = (2 * results["neg_prec"] * results["neg_recall"] / neg_dividend) if not np.isclose(neg_dividend, 0.0) else np.inf
 
     return results
 
 inference_file = sys.argv[1]
 task_prefix = sys.argv[2]
 gs_file = sys.argv[3]
+print_samples = sys.argv[4].split(',') if len(sys.argv) > 4 else [] # e.g. "tp", "tp,tn"
 
 inference_pairs = {
     "urls": [],
@@ -59,34 +62,67 @@ for k in inference_pairs.keys():
 tp, tn, fp, fn = 0, 0, 0, 0
 threshold = 0.5 # TODO parametrize?
 
+if len(print_samples) != 0:
+    print("task_prefix\tscore\tsrc_url\ttrg_url\tparallelness\ttrg_url_lang_inference\ttrg_url_actual_lang\tresult")
+
 for inference_pair, gs_pair in zip(inference_pairs[task_prefix], gs_pairs):
     inference_pair = inference_pair[1:]
     inference_pair[0] = float(inference_pair[0])
+    result = "none"
 
     if task_prefix == "urls":
-        tp += 1 if gs_pair[2] == '1' and inference_pair[0] >= threshold else 0
-        fp += 1 if gs_pair[2] == '0' and inference_pair[0] >= threshold else 0
-        tn += 1 if gs_pair[2] == '0' and inference_pair[0] < threshold else 0
-        fn += 1 if gs_pair[2] == '1' and inference_pair[0] < threshold else 0
+        if gs_pair[2] == '1' and inference_pair[0] >= threshold:
+            tp += 1
+            result = "tp"
+        if gs_pair[2] == '0' and inference_pair[0] >= threshold:
+            fp += 1
+            result = "fp"
+        if gs_pair[2] == '0' and inference_pair[0] < threshold:
+            tn += 1
+            result = "tn"
+        if gs_pair[2] == '1' and inference_pair[0] < threshold:
+            fn += 1
+            result = "fn"
     elif task_prefix == "language":
-        tp += 1 if gs_pair[4] == gs_pair[6] and inference_pair[0] >= threshold else 0
-        fp += 1 if gs_pair[4] != gs_pair[6] and inference_pair[0] >= threshold else 0
-        tn += 1 if gs_pair[4] != gs_pair[6] and inference_pair[0] < threshold else 0
-        fn += 1 if gs_pair[4] == gs_pair[6] and inference_pair[0] < threshold else 0
+        if gs_pair[4] == gs_pair[6] and inference_pair[0] >= threshold:
+            tp += 1
+            result = "tp"
+        if gs_pair[4] != gs_pair[6] and inference_pair[0] >= threshold:
+            fp += 1
+            result = "fp"
+        if gs_pair[4] != gs_pair[6] and inference_pair[0] < threshold:
+            tn += 1
+            result = "tn"
+        if gs_pair[4] == gs_pair[6] and inference_pair[0] < threshold:
+            fn += 1
+            result = "fn"
     elif task_prefix == "langid":
-        tp += 1 if (gs_pair[4] == gs_pair[6] and gs_pair[2] == '1') and inference_pair[0] >= threshold else 0
-        fp += 1 if (gs_pair[4] != gs_pair[6] or gs_pair[2] == '0') and inference_pair[0] >= threshold else 0
-        tn += 1 if (gs_pair[4] != gs_pair[6] or gs_pair[2] == '0') and inference_pair[0] < threshold else 0
-        fn += 1 if (gs_pair[4] == gs_pair[6] and gs_pair[2] == '1') and inference_pair[0] < threshold else 0
+        if (gs_pair[4] == gs_pair[6] and gs_pair[2] == '1') and inference_pair[0] >= threshold:
+            tp += 1
+            result = "tp"
+        if (gs_pair[4] != gs_pair[6] or gs_pair[2] == '0') and inference_pair[0] >= threshold:
+            fp += 1
+            result = "fp"
+        if (gs_pair[4] != gs_pair[6] or gs_pair[2] == '0') and inference_pair[0] < threshold:
+            tn += 1
+            result = "tn"
+        if (gs_pair[4] == gs_pair[6] and gs_pair[2] == '1') and inference_pair[0] < threshold:
+            fn += 1
+            result = "fn"
     else:
         raise Exception(f"Unknown task: {task_prefix}")
+
+    if len(print_samples) != 0 and (result in print_samples or '-' in print_samples):
+        inference_pair = '\t'.join(map(lambda s: str(s), inference_pair))
+
+        print(f"{task_prefix}\t{inference_pair}\t{gs_pair[2]}\t{gs_pair[4]}\t{gs_pair[6]}\t{result}")
 
 mcc_value = mcc(tp, tn, fp, fn)
 pos_and_neg_prec_recall_and_f1_value = pos_and_neg_prec_recall_and_f1(tp, tn, fp, fn)
 macro_f1 = (pos_and_neg_prec_recall_and_f1_value["pos_f1"] + pos_and_neg_prec_recall_and_f1_value["neg_f1"]) / 2.0
 
-print(f"Conf. mat.: TP, TN, FP, FN: {tp}, {tn}, {fp}, {fn}")
-print(f"Neg prec, recall and F1: {pos_and_neg_prec_recall_and_f1_value['neg_prec']} {pos_and_neg_prec_recall_and_f1_value['neg_recall']} {pos_and_neg_prec_recall_and_f1_value['neg_f1']}")
-print(f"Pos prec, recall and F1: {pos_and_neg_prec_recall_and_f1_value['pos_prec']} {pos_and_neg_prec_recall_and_f1_value['pos_recall']} {pos_and_neg_prec_recall_and_f1_value['pos_f1']}")
-print(f"Macro F1: {macro_f1}")
-print(f"MCC: {mcc_value}")
+sys.stderr.write(f"Conf. mat.: TP, TN, FP, FN: {tp} {tn} {fp} {fn}\n")
+sys.stderr.write(f"Neg prec, recall and F1: {round(pos_and_neg_prec_recall_and_f1_value['neg_prec'], 2)} {round(pos_and_neg_prec_recall_and_f1_value['neg_recall'], 2)} {round(pos_and_neg_prec_recall_and_f1_value['neg_f1'], 2)}\n")
+sys.stderr.write(f"Pos prec, recall and F1: {round(pos_and_neg_prec_recall_and_f1_value['pos_prec'], 2)} {round(pos_and_neg_prec_recall_and_f1_value['pos_recall'], 2)} {round(pos_and_neg_prec_recall_and_f1_value['pos_f1'], 2)}\n")
+sys.stderr.write(f"Macro F1: {round(macro_f1, 2)}\n")
+sys.stderr.write(f"MCC: {round(mcc_value, 2)}\n")

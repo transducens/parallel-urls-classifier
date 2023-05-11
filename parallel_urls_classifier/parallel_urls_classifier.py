@@ -406,7 +406,7 @@ def main(args):
     dataset_workers = args.dataset_workers
     pre_load_shards = args.pre_load_shards
 
-    if "langid-and-urls_classification" in auxiliary_tasks and
+    if "langid-and-urls_classification" in auxiliary_tasks and \
        "langid-and-urls_classification_reward-if-only-langid-is-correct-too" in auxiliary_tasks_flags:
 
         if not regression and not inference:
@@ -1329,7 +1329,7 @@ def initialization():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Parallel URLs classifier")
     inference = "--inference" in sys.argv
-    lr_scheduler_conf = get_options_from_argv("--lr-scheduler", "CLR", _lr_scheduler_args)
+    lr_scheduler_conf = get_options_from_argv("--lr-scheduler", "inverse_sqrt", _lr_scheduler_args)
     optimizer_conf = get_options_from_argv("--optimizer", "adamw", _optimizer_args)
 
     if not inference:
@@ -1384,7 +1384,7 @@ def initialization():
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
     parser.add_argument('--url-separator', default='/', help="Separator to use when URLs are stringified")
     parser.add_argument('--url-separator-new-token', action="store_true", help="Add special token for URL separator")
-    parser.add_argument('--learning-rate', type=float, default=2e-5, help="Learning rate")
+    parser.add_argument('--learning-rate', type=float, default=1e-5, help="Learning rate")
     parser.add_argument('--optimizer', choices=optimizer_conf["choices"], default=optimizer_conf["default"], help="Optimizer")
     parser.add_argument('--optimizer-args', **optimizer_conf["options"],
                         help="Args. for the optimizer (in order to see the specific configuration for a optimizer, use -h and set --optimizer)")
@@ -1392,7 +1392,7 @@ def initialization():
     parser.add_argument('--lr-scheduler-args', **lr_scheduler_conf["options"],
                         help="Args. for LR scheduler (in order to see the specific configuration for a LR scheduler, "
                              "use -h and set --lr-scheduler)")
-    parser.add_argument('--re-initialize-last-n-layers', type=int, default=3,
+    parser.add_argument('--re-initialize-last-n-layers', type=int, default=1,
                         help="Re-initialize last N layers from pretained model (will be applied only when fine-tuning the model)")
     parser.add_argument('--cuda-amp', action="store_true", help="Use CUDA AMP (Automatic Mixed Precision)")
     parser.add_argument('--llrd', action="store_true", help="Apply LLRD (Layer-wise Learning Rate Decay)")
