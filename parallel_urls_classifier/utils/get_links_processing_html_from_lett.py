@@ -120,13 +120,14 @@ def main():
 
                     src_url_authority = '.'.join(part for part in [tsd, td, tsu] if part)
                     trg_url_authority = '.'.join(part for part in [tag_tsd, tag_td, tag_tsu] if part)
+                    authority_info = "different"
 
-                    authority_info = f"{ \
-                        'equal' if src_url_authority == trg_url_authority else \
-                        'domain and TLD' if td + '.' + tsu == tag_td + '.' + tag_tsu else \
-                        'TLD' if tsu == tag_tsu else \
-                        'different' \
-                    }"
+                    if src_url_authority == trg_url_authority:
+                        authority_info = "equal"
+                    elif (td or tag_td) and f"{td}.{tsu}" == f"{tag_td}.{tag_tsu}":
+                        authority_info = "domain and TLD"
+                    elif tsu == tag_tsu:
+                        authority_info = "TLD"
                 except Exception as e:
                     logging.warning("%s", str(e))
 
