@@ -5,6 +5,8 @@ import base64
 import logging
 from urllib.parse import urljoin, urlparse
 
+import utils
+
 from bs4 import BeautifulSoup
 from tldextract import extract
 import html5lib # We won't use it, but we want an exception if can't import
