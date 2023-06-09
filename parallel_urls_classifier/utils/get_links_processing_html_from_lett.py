@@ -106,6 +106,7 @@ def main():
         a_tags = parsed_html.find_all("a")
         print_data = []
         gs_info_found = False
+        seen_trg_urls = set()
 
         for tags, tag_name in ((link_tags, "link"), (a_tags, "a")):
             for idx_tag, tag in enumerate(tags):
@@ -187,13 +188,18 @@ def main():
 
                 entry = f"{lang}\t{tag_lang}\t{url}\t{tag_url}\t{tag_name}\t{tag_original_url}\t{authority_info}\t{gs_info}"
 
+                if tag_url in seen_trg_urls:
+                    continue
+
+                seen_trg_urls.add(tag_url)
+
                 print_data.append(entry)
 
         if len(gs) == 0 or gs_info_found:
             for entry in print_data:
                 print(entry)
         else:
-            logger.warning("Couldn't find the GS pair for the processed URL: %s", url)
+            logger.warning("Couldn't find the GS pair for the processed URL (lang: %s): %s", lang, url)
 
     if len(urls2process) != len(found_urls):
         logger.warning("%d found URLs were expected, but got %d", len(urls2process), len(found_urls))
