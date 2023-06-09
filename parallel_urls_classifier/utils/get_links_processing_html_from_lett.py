@@ -148,8 +148,6 @@ def main():
             logger.warning("Bug? URL: %s", url)
 
 if __name__ == "__main__":
-    global logger
-
     logger = utils.set_up_logging_logger(logger, level=logging.DEBUG)
 
     main()
