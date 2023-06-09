@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from tldextract import extract
 import html5lib # We won't use it, but we want an exception if can't import
 
+logger = logging.getLogger("parallel_urls_classifier")
 urls_to_process = sys.argv[1] if len(sys.argv) > 1 else None
 
 def is_url_absolute(url):
@@ -31,7 +32,7 @@ def main():
 
                 urls2process.add(url)
 
-        logging.info("urls2process: %d", len(urls2process))
+        logger.info("urls2process: %d", len(urls2process))
 
     print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original\tauthority_info") # Header
 
@@ -42,7 +43,7 @@ def main():
         lett_data[-1] = lett_data[-1].rstrip('\r\n')
 
         if len(lett_data) != 6:
-            logging.error("Line %d: unexpected length: %d vs 6", idx + 1, len(lett_data))
+            logger.error("Line %d: unexpected length: %d vs 6", idx + 1, len(lett_data))
 
             continue
 
@@ -58,7 +59,7 @@ def main():
         html = base64.b64decode(html_b64).decode("utf-8", errors="backslashreplace")
 
         if not html:
-            logging.error("Line %d: could not get HTML", idx + 1)
+            logger.error("Line %d: could not get HTML", idx + 1)
 
             continue
 
@@ -66,7 +67,7 @@ def main():
             #parsed_html = BeautifulSoup(html, features="html.parser")
             parsed_html = BeautifulSoup(html, features="html5lib")
         except Exception as e:
-            logging.error("Line %d: couldn't process the HTML: %s", idx + 1, str(e))
+            logger.error("Line %d: couldn't process the HTML: %s", idx + 1, str(e))
 
             continue
 
@@ -77,10 +78,10 @@ def main():
         except KeyError:
             pass
         except Exception as e:
-            logging.warning("Line %d: couldn't find lang attr in html tag: %s", idx + 1, str(e))
+            logger.warning("Line %d: couldn't find lang attr in html tag: %s", idx + 1, str(e))
 
         if lang_doc and lang_doc != lang:
-            logging.warning("Line %d: document lang and provided lang are not the same: %s vs %s (using %s as lang)", idx + 1, lang_doc, lang, lang)
+            logger.warning("Line %d: document lang and provided lang are not the same: %s vs %s (using %s as lang)", idx + 1, lang_doc, lang, lang)
 
         link_tags = parsed_html.find_all("link")
         a_tags = parsed_html.find_all("a")
@@ -108,7 +109,7 @@ def main():
                     pass
 
                 if not http_re_pattern.match(tag_url):
-                    logging.warning("Line %d: tag %d: tag url doesn't seem to match the pattern '^http': %s", idx, idx_tag, tag_url)
+                    logger.warning("Line %d: tag %d: tag url doesn't seem to match the pattern '^http': %s", idx, idx_tag, tag_url)
 
                     continue
 
@@ -129,22 +130,26 @@ def main():
                     elif tsu == tag_tsu:
                         authority_info = "TLD"
                 except Exception as e:
-                    logging.warning("%s", str(e))
+                    logger.warning("%s", str(e))
 
                 print(f"{lang}\t{tag_lang}\t{url}\t{tag_url}\t{tag_name}\t{tag_original_url}\t{authority_info}")
 
     if len(urls2process) != len(found_urls):
-        logging.warning("%d found URLs were expected, but got %d", len(urls2process), len(found_urls))
+        logger.warning("%d found URLs were expected, but got %d", len(urls2process), len(found_urls))
 
         d = urls2process.difference(found_urls)
 
         for url in d:
-            logging.warning("URL was expected to be found, but didn't: %s", url)
+            logger.warning("URL was expected to be found, but didn't: %s", url)
 
         d = found_urls.difference(urls2process)
 
         for url in d:
-            logging.warning("Bug? URL: %s", url)
+            logger.warning("Bug? URL: %s", url)
 
 if __name__ == "__main__":
+    global logger
+
+    logger = utils.set_up_logging_logger(logger, level=logging.DEBUG)
+
     main()
