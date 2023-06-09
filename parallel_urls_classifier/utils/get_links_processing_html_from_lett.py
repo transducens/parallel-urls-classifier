@@ -24,19 +24,36 @@ def main():
     http_re_pattern = re.compile(r"^http")
     url_re_sub_blank = re.compile(r"\t|\r|\n")
 
-    # Read urls to process
+    # Read urls to process (gold)
     urls2process = set()
+    gs = set()
+    gs_found = set()
 
     if urls_to_process is not None:
-        with open(urls_to_process, 'r', encoding='utf-8', errors="backslashreplace") as f:
-            for url in f:
-                url = url_re_sub_blank.sub(' ', url).strip()
+        logger.info("GS: expected format: english_url <tab> french_url")
 
-                urls2process.add(url)
+        with open(urls_to_process, 'r', encoding='utf-8', errors="backslashreplace") as f:
+            for pair in f:
+                pair = pair.split('\t')
+
+                if len(pair) != 2:
+                    logger.warning("GS: 2 fields were expected, but got %d", len(pair))
+
+                    continue
+
+                gs_pair_src_url, gs_pair_trg_url = pair
+
+                gs_pair_src_url = url_re_sub_blank.sub(' ', gs_pair_src_url).strip()
+                gs_pair_trg_url = url_re_sub_blank.sub(' ', gs_pair_trg_url).strip()
+
+                urls2process.add(gs_pair_src_url)
+                urls2process.add(gs_pair_trg_url)
+                gs.add(f"en\t{gs_pair_src_url}\t{gs_pair_trg_url}") # english side
+                gs.add(f"fr\t{gs_pair_trg_url}\t{gs_pair_src_url}") # french side
 
         logger.info("urls2process: %d", len(urls2process))
 
-    print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original\tauthority_info") # Header
+    print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original\tauthority_info\tgs_info") # Header
 
     found_urls = set()
 
@@ -87,6 +104,8 @@ def main():
 
         link_tags = parsed_html.find_all("link")
         a_tags = parsed_html.find_all("a")
+        print_data = []
+        gs_info_found = False
 
         for tags, tag_name in ((link_tags, "link"), (a_tags, "a")):
             for idx_tag, tag in enumerate(tags):
@@ -116,6 +135,38 @@ def main():
                     continue
 
                 authority_info = "unk"
+                gs_info = "none"
+
+                if len(gs) != 0:
+                    gs_pair = f"{lang}\t{url}\t{tag_url}"
+
+                    if gs_pair in gs:
+                        gs_info = "yes"
+                        gs_info_found = True
+
+                        gs_found.add(gs_pair)
+                    else:
+                        # Some websites seem to remove dinamically the extension (e.g. 1d-aquitaine.com), and
+                        #  the provided URLs seem to be from the dynamic content while the HTML don't
+                        #  e.g.: http://1d-aquitaine.com/en/artist/ex.html in the HTML but http://1d-aquitaine.com/en/artist/ex in the GS
+
+                        if tag_url.endswith(".html"):
+                            gs_pair = f"{lang}\t{url}\t{tag_url[:-5]}"
+
+                            if gs_pair in gs:
+                                gs_info = "almost"
+                                gs_info_found = True
+
+                                gs_found.add(gs_pair)
+
+                        if tag_url.endswith(".htm"):
+                            gs_pair = f"{lang}\t{url}\t{tag_url[:-4]}"
+
+                            if gs_pair in gs:
+                                gs_info = "almost"
+                                gs_info_found = True
+
+                                gs_found.add(gs_pair)
 
                 try:
                     tsd, td, tsu = extract(url)
@@ -134,7 +185,15 @@ def main():
                 except Exception as e:
                     logger.warning("%s", str(e))
 
-                print(f"{lang}\t{tag_lang}\t{url}\t{tag_url}\t{tag_name}\t{tag_original_url}\t{authority_info}")
+                entry = f"{lang}\t{tag_lang}\t{url}\t{tag_url}\t{tag_name}\t{tag_original_url}\t{authority_info}\t{gs_info}"
+
+                print_data.append(entry)
+
+        if len(gs) == 0 or gs_info_found:
+            for entry in print_data:
+                print(entry)
+        else:
+            logger.warning("Couldn't find the GS pair for the processed URL: %s", url)
 
     if len(urls2process) != len(found_urls):
         logger.warning("%d found URLs were expected, but got %d", len(urls2process), len(found_urls))
@@ -147,7 +206,20 @@ def main():
         d = found_urls.difference(urls2process)
 
         for url in d:
-            logger.warning("Bug? URL: %s", url)
+            logger.error("URL was not expected to be found, but did: bug?: %s", url)
+
+    if len(gs) != len(gs_found):
+        logger.warning("GS: %d found URLs were expected, but got %d", len(gs), len(gs_found))
+
+        d = gs.difference(gs_found)
+
+        for url in d:
+            logger.warning("GS: URL was expected to be found, but didn't: %s", url)
+
+        d = gs_found.difference(gs)
+
+        for url in d:
+            logger.error("GS: URL was not expected to be found, but did: bug?: %s", url)
 
 if __name__ == "__main__":
     logger = utils.set_up_logging_logger(logger, level=logging.DEBUG)
