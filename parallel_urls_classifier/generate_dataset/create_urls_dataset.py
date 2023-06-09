@@ -195,7 +195,7 @@ def main(args):
             skipped_urls += 1
 
             continue
-        if len(url_pair[0]) > 1000 or len(url_pair[1]) > 1000:
+        if len(url_pair[0]) > 2000 or len(url_pair[1]) > 2000:
             logging.warning("Skipping line #%d because there are URLs too long (%d and %d)", idx, len(url_pair[0]), len(url_pair[1]))
             skipped_urls += 1
 

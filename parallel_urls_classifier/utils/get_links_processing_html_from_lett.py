@@ -1,4 +1,5 @@
 
+import re
 import sys
 import base64
 import logging
@@ -8,15 +9,37 @@ from bs4 import BeautifulSoup
 from tldextract import extract
 import html5lib # We won't use it, but we want an exception if can't import
 
+urls_to_process = sys.argv[1] if len(sys.argv) > 1 else None
+
 def is_url_absolute(url):
     return bool(urlparse(url).netloc)
 
 def main():
+    # https://stackoverflow.com/questions/16549332/python-3-how-to-specify-stdin-encoding
+    sys.stdin.reconfigure(encoding='utf-8', errors="backslashreplace")
+
+    http_re_pattern = re.compile(r"^http")
+    url_re_sub_blank = re.compile(r"\t|\r|\n")
+
+    # Read urls to process
+    urls2process = set()
+
+    if urls_to_process is not None:
+        with open(urls_to_process, 'r', encoding='utf-8', errors="backslashreplace") as f:
+            for url in f:
+                url = url_re_sub_blank.sub(' ', url).strip()
+
+                urls2process.add(url)
+
+        logging.info("urls2process: %d", len(urls2process))
+
     print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original\tauthority_info") # Header
+
+    found_urls = set()
 
     for idx, lett_data in enumerate(sys.stdin):
         lett_data = lett_data.split('\t')
-        lett_data[-1] = lett_data[-1].rstrip('\n')
+        lett_data[-1] = lett_data[-1].rstrip('\r\n')
 
         if len(lett_data) != 6:
             logging.error("Line %d: unexpected length: %d vs 6", idx + 1, len(lett_data))
@@ -24,7 +47,13 @@ def main():
             continue
 
         lang, mime, encoding, url, html_b64, text_b64 = lett_data
-        url = url.replace('\t', ' ')
+        url = url_re_sub_blank.sub(' ', url).strip()
+
+        if len(urls2process) != 0:
+            if url not in urls2process:
+                continue
+
+            found_urls.add(url)
 
         html = base64.b64decode(html_b64).decode("utf-8", errors="backslashreplace")
 
@@ -37,7 +66,7 @@ def main():
             #parsed_html = BeautifulSoup(html, features="html.parser")
             parsed_html = BeautifulSoup(html, features="html5lib")
         except Exception as e:
-            logging.error("Line %d: %s", idx + 1, str(e))
+            logging.error("Line %d: couldn't process the HTML: %s", idx + 1, str(e))
 
             continue
 
@@ -48,7 +77,7 @@ def main():
         except KeyError:
             pass
         except Exception as e:
-            logging.warning("Line %d: %s", idx + 1, str(e))
+            logging.warning("Line %d: couldn't find lang attr in html tag: %s", idx + 1, str(e))
 
         if lang_doc and lang_doc != lang:
             logging.warning("Line %d: document lang and provided lang are not the same: %s vs %s (using %s as lang)", idx + 1, lang_doc, lang, lang)
@@ -60,13 +89,8 @@ def main():
             for idx_tag, tag in enumerate(tags):
                 try:
                     tag_url = tag["href"]
-                    tag_url = tag_url.replace('\t', ' ').rstrip('\n')
+                    tag_url = url_re_sub_blank.sub(' ', tag_url).strip()
                 except KeyError:
-                    continue
-
-                if tag_url.count('\n') != 0:
-                    logging.error("Line %d, URL %d: URL contains > 0 \\n: %d", idx + 1, idx_tag + 1, tag_url.count('\n'))
-
                     continue
 
                 try:
@@ -83,17 +107,43 @@ def main():
                 except ValueError:
                     pass
 
+                if not http_re_pattern.match(tag_url):
+                    logging.warning("Line %d: tag %d: tag url doesn't seem to match the pattern '^http': %s", idx, idx_tag, tag_url)
+
+                    continue
+
                 authority_info = "unk"
 
                 try:
                     tsd, td, tsu = extract(url)
                     tag_tsd, tag_td, tag_tsu = extract(tag_url)
 
-                    authority_info = f"{'equal' if tsd + '.' + td + '.' + tsu == tag_tsd + '.' + tag_td + '.' + tag_tsu else 'domain and TLD' if td + '.' + tsu == tag_td + '.' + tag_tsu else 'TLD' if tsu == tag_tsu else 'different'}"
+                    src_url_authority = '.'.join(part for part in [tsd, td, tsu] if part)
+                    trg_url_authority = '.'.join(part for part in [tag_tsd, tag_td, tag_tsu] if part)
+
+                    authority_info = f"{ \
+                        'equal' if src_url_authority == trg_url_authority else \
+                        'domain and TLD' if td + '.' + tsu == tag_td + '.' + tag_tsu else \
+                        'TLD' if tsu == tag_tsu else \
+                        'different' \
+                    }"
                 except Exception as e:
                     logging.warning("%s", str(e))
 
                 print(f"{lang}\t{tag_lang}\t{url}\t{tag_url}\t{tag_name}\t{tag_original_url}\t{authority_info}")
+
+    if len(urls2process) != len(found_urls):
+        logging.warning("%d found URLs were expected, but got %d", len(urls2process), len(found_urls))
+
+        d = urls2process.difference(found_urls)
+
+        for url in d:
+            logging.warning("URL was expected to be found, but didn't: %s", url)
+
+        d = found_urls.difference(urls2process)
+
+        for url in d:
+            logging.warning("Bug? URL: %s", url)
 
 if __name__ == "__main__":
     main()

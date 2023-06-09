@@ -55,7 +55,7 @@ if __name__ == "__main__":
         description="Parallel URLs classifier",
         long_description=long_description,
         long_description_content_type="text/markdown",
-        url="https://github.com/cgr71ii/parallel-urls-classifier",
+        url="https://github.com/transducens/parallel-urls-classifier",
         packages=["parallel_urls_classifier", "parallel_urls_classifier.utils"],
         #classifiers=[],
         #project_urls={},
