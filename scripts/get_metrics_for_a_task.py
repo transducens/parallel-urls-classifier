@@ -63,7 +63,7 @@ tp, tn, fp, fn = 0, 0, 0, 0
 threshold = 0.5 # TODO parametrize?
 
 if len(print_samples) != 0:
-    print("task_prefix\tscore\tsrc_url\ttrg_url\tparallelness\ttrg_url_lang_inference\ttrg_url_actual_lang\tresult")
+    print("task_prefix\tscore\tsrc_url\ttrg_url\tparallelness\ttrg_url_actual_lang\ttrg_url_lang_inference\tresult")
 
 for inference_pair, gs_pair in zip(inference_pairs[task_prefix], gs_pairs):
     inference_pair = inference_pair[1:]

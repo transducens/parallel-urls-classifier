@@ -56,6 +56,8 @@ def main():
     print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original\tauthority_info\tgs_info") # Header
 
     found_urls = set()
+    final_entries = []
+    urls2lang = {}
 
     for idx, lett_data in enumerate(sys.stdin):
         lett_data = lett_data.split('\t')
@@ -68,6 +70,11 @@ def main():
 
         lang, mime, encoding, url, html_b64, text_b64 = lett_data
         url = url_re_sub_blank.sub(' ', url).strip()
+
+        if url not in urls2lang:
+            urls2lang[url] = set()
+
+        urls2lang[url].add(lang)
 
         if len(urls2process) != 0:
             if url not in urls2process:
@@ -192,14 +199,24 @@ def main():
                     continue
 
                 seen_trg_urls.add(tag_url)
-
                 print_data.append(entry)
 
         if len(gs) == 0 or gs_info_found:
-            for entry in print_data:
-                print(entry)
+            final_entries.extend(print_data)
         else:
             logger.warning("Couldn't find the GS pair for the processed URL (lang: %s): %s", lang, url)
+
+    for entry in final_entries:
+        entry_parts = entry.split('\t')
+        url = entry_parts[2]
+        url_found_info = "not_in_data"
+
+        if url in urls2lang:
+            url_found_info = f"found_langs: {','.join(sorted(list(urls2lang[url])))}"
+
+        entry += f"\t{url_found_info}"
+
+        print(entry)
 
     if len(urls2process) != len(found_urls):
         logger.warning("%d found URLs were expected, but got %d", len(urls2process), len(found_urls))
