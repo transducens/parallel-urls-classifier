@@ -53,7 +53,7 @@ def main():
 
         logger.info("urls2process: %d", len(urls2process))
 
-    print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original\tauthority_info\tgs_info") # Header
+    print("src_lang\ttrg_lang\tsrc_url\ttrg_url\ttrg_tag\ttrg_url_original\tauthority_info\tgs_info\ttag_url_found_in_dataset") # Header
 
     found_urls = set()
     final_entries = []
@@ -208,11 +208,20 @@ def main():
 
     for entry in final_entries:
         entry_parts = entry.split('\t')
-        url = entry_parts[2]
+        tag_url = entry_parts[3]
         url_found_info = "not_in_data"
+        tag_url_processed = None
 
-        if url in urls2lang:
-            url_found_info = f"found_langs: {','.join(sorted(list(urls2lang[url])))}"
+        if tag_url in urls2lang:
+            tag_url_processed = ','.join(sorted(list(urls2lang[tag_url])))
+        else:
+            if tag_url.endswith(".html") and tag_url[:-5] in urls2lang:
+                tag_url_processed = f"almost: {','.join(sorted(list(urls2lang[tag_url[:-5]])))}"
+            if tag_url.endswith(".htm") and tag_url[:-4] in urls2lang:
+                tag_url_processed = f"almost: {','.join(sorted(list(urls2lang[tag_url[:-4]])))}"
+
+        if tag_url_processed:
+            url_found_info = f"found_langs: {tag_url_processed}"
 
         entry += f"\t{url_found_info}"
 
