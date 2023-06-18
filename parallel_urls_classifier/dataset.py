@@ -102,7 +102,7 @@ class SmartBatchingURLsDataset(Dataset):
             raise Exception("Number of input entries from the main task is different of the labels len: "
                             f"{len(self.tokens)} vs {len(self.labels['urls_classification'])}")
 
-        if "labels_language_identification" in tasks_data:
+        if "labels_language_identification" in tasks_data and len(tasks_data["labels_language_identification"]) != 0:
             logger.debug("Loading labels for task: language-identification and/or langid-and-urls_classification")
 
             if len(tasks_data["labels_language_identification"]) != len(self.labels["urls_classification"]):
