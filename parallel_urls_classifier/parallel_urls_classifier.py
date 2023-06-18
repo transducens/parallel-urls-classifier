@@ -1059,6 +1059,10 @@ def main(args):
             epoch_f1_per_class = metrics["f1"]
             epoch_macro_f1 = metrics["macro_f1"]
             epoch_mcc = metrics["mcc"]
+            epoch_tp = metrics["tp"]
+            epoch_fp = metrics["fp"]
+            epoch_tn = metrics["tn"]
+            epoch_fn = metrics["fn"]
 
             if aux_task == task_dev_metric:
                 epoch_loss /= idx + 1
@@ -1076,6 +1080,7 @@ def main(args):
                         epoch + 1, aux_task, epoch_f1_per_class[0] * 100.0, epoch_f1_per_class[1] * 100.0)
             logger.info("[train:epoch#%d] Macro F1 (task '%s'): %.2f %%", epoch + 1, aux_task, epoch_macro_f1 * 100.0)
             logger.info("[train:epoch#%d] MCC (task '%s'): %.2f %%", epoch + 1, aux_task, epoch_mcc * 100.0)
+            logger.info("[train:epoch#%d] TP, FP, TN, FN (task '%s'): %s %s %s %s", epoch + 1, aux_task, epoch_tp, epoch_fp, epoch_tn, epoch_fn)
 
             # Dev metrics
             dev_loss = dev_inference_metrics["loss"]
@@ -1086,6 +1091,10 @@ def main(args):
             dev_f1_per_class = dev_inference_metrics["metrics"][aux_task]["f1"]
             dev_macro_f1 = dev_inference_metrics["metrics"][aux_task]["macro_f1"]
             dev_mcc = dev_inference_metrics["metrics"][aux_task]["mcc"]
+            dev_tp = dev_inference_metrics["metrics"][aux_task]["tp"]
+            dev_fp = dev_inference_metrics["metrics"][aux_task]["fp"]
+            dev_tn = dev_inference_metrics["metrics"][aux_task]["tn"]
+            dev_fn = dev_inference_metrics["metrics"][aux_task]["fn"]
 
             logger.info("[dev:epoch#%d] Avg. loss: %f", epoch + 1, dev_loss)
             logger.info("[dev:epoch#%d] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)",
@@ -1096,6 +1105,7 @@ def main(args):
                         dev_precision_per_class[1] * 100.0, dev_recall_per_class[1] * 100.0, dev_f1_per_class[1] * 100.0)
             logger.info("[dev:epoch#%d] Macro F1 (task '%s'): %.2f %%", epoch + 1, aux_task, dev_macro_f1 * 100.0)
             logger.info("[dev:epoch#%d] MCC (task '%s'): %.2f %%", epoch + 1, aux_task, dev_mcc * 100.0)
+            logger.info("[dev:epoch#%d] TP, FP, TN, FN (task '%s'): %s %s %s %s", epoch + 1, aux_task, dev_tp, dev_fp, dev_tn, dev_fn)
 
             # TODO TBD get best model using multiple metrics from different tasks? E.g. macro F1 of main task and language identification task
             if aux_task == task_dev_metric:
@@ -1233,6 +1243,10 @@ def main(args):
         dev_f1_per_class = dev_inference_metrics["metrics"][aux_task]["f1"]
         dev_macro_f1 = dev_inference_metrics["metrics"][aux_task]["macro_f1"]
         dev_mcc = dev_inference_metrics["metrics"][aux_task]["mcc"]
+        dev_tp = dev_inference_metrics["metrics"][aux_task]["tp"]
+        dev_fp = dev_inference_metrics["metrics"][aux_task]["fp"]
+        dev_tn = dev_inference_metrics["metrics"][aux_task]["tn"]
+        dev_fn = dev_inference_metrics["metrics"][aux_task]["fn"]
 
         logger.info("[dev] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", aux_task,
                     dev_acc * 100.0, dev_acc_per_class[0] * 100.0, dev_acc_per_class[1] * 100.0)
@@ -1242,6 +1256,7 @@ def main(args):
                     dev_precision_per_class[1] * 100.0, dev_recall_per_class[1] * 100.0, dev_f1_per_class[1] * 100.0)
         logger.info("[dev] Macro F1 (task '%s'): %.2f %%", aux_task, dev_macro_f1 * 100.0)
         logger.info("[dev] MCC (task '%s'): %.2f %%", aux_task, dev_mcc * 100.0)
+        logger.info("[dev] TP, FP, TN, FN (task '%s'): %s %s %s %s", aux_task, dev_tp, dev_fp, dev_tn, dev_fn)
 
     test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_test,
                                        device, amp_context_manager, classes=classes, max_tokens=max_tokens)
@@ -1259,6 +1274,10 @@ def main(args):
         test_f1_per_class = test_inference_metrics["metrics"][aux_task]["f1"]
         test_macro_f1 = test_inference_metrics["metrics"][aux_task]["macro_f1"]
         test_mcc = test_inference_metrics["metrics"][aux_task]["mcc"]
+        test_tp = test_inference_metrics["metrics"][aux_task]["tp"]
+        test_fp = test_inference_metrics["metrics"][aux_task]["fp"]
+        test_tn = test_inference_metrics["metrics"][aux_task]["tn"]
+        test_fn = test_inference_metrics["metrics"][aux_task]["fn"]
 
         logger.info("[test] Acc (task '%s'): %.2f %% (%.2f %% non-parallel and %.2f %% parallel)", aux_task,
                     test_acc * 100.0, test_acc_per_class[0] * 100.0, test_acc_per_class[1] * 100.0)
@@ -1268,6 +1287,7 @@ def main(args):
                     test_precision_per_class[1] * 100.0, test_recall_per_class[1] * 100.0, test_f1_per_class[1] * 100.0)
         logger.info("[test] Macro F1 (task '%s'): %.2f %%", aux_task, test_macro_f1 * 100.0)
         logger.info("[test] MCC (task '%s'): %.2f %%", aux_task, test_mcc * 100.0)
+        logger.info("[test] TP, FP, TN, FN (task '%s'): %s %s %s %s", aux_task, test_tp, test_fp, test_tn, test_fn)
 
     if plot:
         plot_args = {
