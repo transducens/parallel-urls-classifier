@@ -187,10 +187,10 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
                     all_labels[task].extend(labels.tolist())
 
                     if logger_desc:
-                        for ut, output, label in zip(inputs_and_outputs["urls"].tolist(), outputs_classification.tolist(), labels.tolist()):
-                            original_str_from_tokens = tokenizer.decode(ut[ut != tokenizer.pad_token_id]) # Detokenize
+                        ut = inputs_and_outputs["urls"]
+                        original_str_from_tokens = tokenizer.decode(ut[ut != tokenizer.pad_token_id]) # Detokenize
 
-                            logger_results.info("%s\t%s\t%s\t%s\t%s", logger_desc, task, original_str_from_tokens, output, label)
+                        logger_results.info("%s\t%s\t%s\t%s\t%s", logger_desc, task, original_str_from_tokens, output, label)
                 elif task == "mlm":
                     # TODO propagate somehow? Statistics?
                     loss_mlm = results["mlm"]["loss_detach"]
