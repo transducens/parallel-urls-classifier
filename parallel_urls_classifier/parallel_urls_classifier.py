@@ -50,7 +50,10 @@ logging.getLogger("PIL.PngImagePlugin").setLevel(logging.WARNING)
 
 # Logging
 logger = logging.getLogger("parallel_urls_classifier")
-logger_verbose = {"tokens": logging}
+logger_verbose = {
+    "tokens": logging,
+    "inference_results": logging,
+}
 
 # Other
 DEBUG = bool(int(os.environ["PUC_DEBUG"])) if "PUC_DEBUG" in os.environ else False
@@ -1044,7 +1047,8 @@ def main(args):
         logger.debug("Has the model layer been updated? %s", 'yes' if layer_updated else 'no')
 
         dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
-                                          device, amp_context_manager, classes=classes, max_tokens=max_tokens)
+                                          device, amp_context_manager, classes=classes, max_tokens=max_tokens,
+                                          logger_desc=f"dev:epoch#{epoch + 1}")
 
         for aux_task in all_tasks:
             if aux_task in ("mlm",):
@@ -1224,7 +1228,8 @@ def main(args):
         model = load_model(all_tasks, all_tasks_kwargs, model_input=model_output, pretrained_model=pretrained_model, device=device)
 
     dev_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_dev,
-                                      device, amp_context_manager, classes=classes, max_tokens=max_tokens)
+                                      device, amp_context_manager, classes=classes, max_tokens=max_tokens,
+                                      logger_desc="dev")
 
     metrics_auxiliary_tasks = copy.deepcopy(all_tasks)
 
@@ -1259,7 +1264,8 @@ def main(args):
         logger.info("[dev] TP, FP, TN, FN (task '%s'): %s %s %s %s", aux_task, dev_tp, dev_fp, dev_tn, dev_fn)
 
     test_inference_metrics = inference(model, block_size, batch_size, all_tasks, tokenizer, criteria, dataset_test,
-                                       device, amp_context_manager, classes=classes, max_tokens=max_tokens)
+                                       device, amp_context_manager, classes=classes, max_tokens=max_tokens,
+                                       logger_desc="test")
 
     # Test metrics
     test_loss = test_inference_metrics["loss"]
@@ -1509,11 +1515,15 @@ def cli():
     # Verbose loggers
     logger_verbose["tokens"] = logging.getLogger("parallel_urls_classifier.tokens")
     logger_verbose["tokens"].propagate = False
+    logger_verbose["inference_results"] = logging.getLogger("parallel_urls_classifier.inference")
+    logger_verbose["inference_results"].propagate = False
 
     fix_log_directory(args) # We are going to use args.log_directory, so fix it if needed
 
     logger_verbose["tokens"] = utils.set_up_logging_logger(logger_verbose["tokens"], level=logging.DEBUG if args.verbose else logging.INFO,
                                                            filename=f"{args.log_directory}/tokens", format="%(asctime)s\t%(levelname)s\t%(message)s")
+    logger_verbose["inference_results"] = utils.set_up_logging_logger(logger_verbose["inference_results"], level=logging.DEBUG if args.verbose else logging.INFO,
+                                                                      filename=f"{args.log_directory}/inference", format="%(asctime)s\t%(levelname)s\t%(message)s")
 
     main(args)
 

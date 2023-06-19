@@ -17,6 +17,7 @@ import transformers
 
 logger = logging.getLogger("parallel_urls_classifier")
 logger_tokens = logging.getLogger("parallel_urls_classifier.tokens")
+logger_results = logging.getLogger("parallel_urls_classifier.inference")
 
 def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_context_manager,
                          tasks_weights=None, criteria=None, device=None):
@@ -137,7 +138,7 @@ def inference_with_heads(model, tasks, tokenizer, inputs_and_outputs, amp_contex
 
 @torch.no_grad()
 def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset, device,
-              amp_context_manager, classes=2, max_tokens=None):
+              amp_context_manager, classes=2, max_tokens=None, logger_desc=''):
     model.eval()
 
     total_loss = 0.0
@@ -184,10 +185,18 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
 
                     all_outputs[task].extend(outputs_classification.tolist())
                     all_labels[task].extend(labels.tolist())
+
+                    if logger_desc:
+                        for ut, output, label in zip(inputs_and_outputs["urls"].tolist(), outputs_classification.tolist(), labels.tolist()):
+                            original_str_from_tokens = tokenizer.decode(ut[ut != tokenizer.pad_token_id]) # Detokenize
+
+                            logger_results.info("%s\t%s\t%s\t%s\t%s", logger_desc, task, original_str_from_tokens, output, label)
                 elif task == "mlm":
                     # TODO propagate somehow? Statistics?
                     loss_mlm = results["mlm"]["loss_detach"]
                     outputs_mlm = results["mlm"]["outputs"].cpu()
+
+                    # TODO use logger_results?
                 else:
                     raise Exception(f"Unknown task: {task}")
 
