@@ -167,6 +167,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
                 if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
                     loss_task = results[task]["loss_detach"] # TODO propagate somehow? Statistics?
                     outputs_classification = results[task]["outputs_classification"].cpu()
+                    outputs = results[task]["outputs"].cpu()
                     regression = results[task]["regression"]
 
                     if task == "urls_classification":
@@ -187,14 +188,15 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
                     all_labels[task].extend(labels.tolist())
 
                     if logger_desc:
-                        for ut, output, label in zip(inputs_and_outputs["urls"], outputs_classification.tolist(), labels.tolist()):
-                            original_str_from_tokens = tokenizer.decode(ut[ut != tokenizer.pad_token_id]) # Detokenize
+                        for ut, output, output_classification, label in zip(inputs_and_outputs["urls"], outputs.tolist(), outputs_classification.tolist(), labels.tolist()):
+                            original_str_from_tokens = tokenizer.decode(ut[ut != tokenizer.pad_token_id], clean_up_tokenization_spaces=False) # Detokenize
                             original_str_from_tokens = original_str_from_tokens.rstrip(tokenizer.eos_token)
                             original_str_from_tokens = original_str_from_tokens.lstrip(tokenizer.bos_token)
                             original_str_from_tokens = original_str_from_tokens.replace(tokenizer.sep_token, '\t').split('\t')
                             original_str_from_tokens = '\t'.join(list(map(lambda s: s.strip(), original_str_from_tokens)))
+                            original_str_from_tokens = original_str_from_tokens.replace(' ', '') # Greedy detokenization!
 
-                            logger_results.info("%s\t%s\t%s\t%s\t%s", logger_desc, task, original_str_from_tokens, output, label)
+                            logger_results.info("%s\t%s\t%s\t%s\t%s\t%s", logger_desc, task, original_str_from_tokens, output, output_classification, label)
                 elif task == "mlm":
                     # TODO propagate somehow? Statistics?
                     loss_mlm = results["mlm"]["loss_detach"]
@@ -312,7 +314,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
         for idx, ut in enumerate(urls_tokens):
             url_tokens = ut[ut != tokenizer.pad_token_id]
-            original_str_from_tokens = tokenizer.decode(url_tokens) # Detokenize
+            original_str_from_tokens = tokenizer.decode(url_tokens, clean_up_tokenization_spaces=False) # Detokenize
             str_from_tokens = '<tok_sep>'.join([tokenizer.decode(t) for t in url_tokens]) # Detokenize adding a mark between tokens
             ## Unk
             unk = torch.sum((url_tokens == tokenizer.unk_token_id).int()) # Unk tokens (this should happen just with very strange chars)
