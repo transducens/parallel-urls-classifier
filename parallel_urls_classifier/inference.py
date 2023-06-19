@@ -183,6 +183,7 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
 
                     if regression:
                         labels = torch.round(labels).type(torch.long)
+                        outputs = torch.sigmoid(outputs)
 
                     all_outputs[task].extend(outputs_classification.tolist())
                     all_labels[task].extend(labels.tolist())
