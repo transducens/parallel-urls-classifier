@@ -189,6 +189,10 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
                     if logger_desc:
                         for ut, output, label in zip(inputs_and_outputs["urls"], outputs_classification.tolist(), labels.tolist()):
                             original_str_from_tokens = tokenizer.decode(ut[ut != tokenizer.pad_token_id]) # Detokenize
+                            original_str_from_tokens = original_str_from_tokens.rstrip(tokenizer.eos_token)
+                            original_str_from_tokens = original_str_from_tokens.lstrip(tokenizer.bos_token)
+                            original_str_from_tokens = original_str_from_tokens.replace(sep_token, '\t').split('\t')
+                            original_str_from_tokens = '\t'.join(list(map(lambda s: s.strip(), original_str_from_tokens)))
 
                             logger_results.info("%s\t%s\t%s\t%s\t%s", logger_desc, task, original_str_from_tokens, output, label)
                 elif task == "mlm":
