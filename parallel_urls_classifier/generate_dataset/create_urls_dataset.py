@@ -120,6 +120,10 @@ def store_dataset(parallel_urls, target_domains, parallel_filename, non_parallel
                 extra_kwargs["min_replacements"] = 2
                 extra_kwargs["side"] = "all-any"
                 negative_samples_generator_f = nsg.get_negative_samples_replace_freq_words
+            elif generator == "random-same-lang":
+                negative_samples_generator_f = nsg.get_negative_samples_random_same_lang
+
+                del extra_kwargs["n_jobs"]
             else:
                 logging.warning("Generator %d: unknown negative samples generator (%s): skipping", idx, generator)
 
@@ -342,7 +346,7 @@ def initialization():
     parser.add_argument('input_file_parallel_urls', type=argparse.FileType('rt', errors="backslashreplace"), help="Input TSV file with parallel URLs")
     parser.add_argument('output_files_prefix', help="Output files prefix")
 
-    parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens", "replace-freq-words"],
+    parser.add_argument('--generator-technique', choices=["none", "random", "bow-overlapping-metric", "remove-random-tokens", "replace-freq-words", "random-same-lang"],
                         default=["random"], nargs='+',
                         help="Strategy to create negative samples from positive samples")
     parser.add_argument('--max-negative-samples-alignments', type=int, default=3, help="Max. number of alignments of negative samples per positive samples per generator")

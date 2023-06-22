@@ -418,6 +418,50 @@ def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
 
     return list(urls)
 
+def get_negative_samples_random_same_lang(parallel_urls, limit_max_alignments_per_url=10):
+    # limit_max_alignments_per_url will be applied to each URL, so limit_max_alignments_per_url * 2 pairs will be returned
+    idxs = range(len(parallel_urls)) # Do not convert to list for performance reasons!
+    urls = set()
+    k = min(limit_max_alignments_per_url, len(parallel_urls))
+
+    if len(parallel_urls) < limit_max_alignments_per_url:
+        if len(parallel_urls) > 0:
+            src_domain = extract(parallel_urls[0][0])[1]
+            trg_domain = extract(parallel_urls[0][1])[1]
+
+            logging.warning("Will not be possible to generate the required %d random pairs (same lang) of URLs: "
+                            "%d pairs will not be generated for the src/trg domain '%s'/'%s'",
+                            limit_max_alignments_per_url, limit_max_alignments_per_url - len(parallel_urls),
+                            src_domain, trg_domain)
+        else:
+            logging.warning("Will not be possible to generate the required %d random pairs (same lang) of URLs: "
+                            "%d pairs will not be generated since no parallel URLs were provided",
+                            limit_max_alignments_per_url, limit_max_alignments_per_url - len(parallel_urls))
+
+    for same_lang_idx in (0, 1):
+        for idx1 in idxs:
+            max_alignments_per_url = limit_max_alignments_per_url
+            sample_idxs = random.sample(idxs, k)
+
+            for sort_idx2, idx2 in enumerate(sample_idxs, 1):
+                if idx1 == idx2:
+                    # Skip same pair
+                    max_alignments_per_url += 1
+
+                    continue
+
+                if sort_idx2 > max_alignments_per_url:
+                    break
+
+                src_url = parallel_urls[idx1][same_lang_idx]
+                trg_url = parallel_urls[idx2][same_lang_idx]
+
+                urls.add((src_url, trg_url))
+
+    common_last_checks(urls, parallel_urls)
+
+    return list(urls)
+
 _long_warning_raised = False
 
 def common_last_checks(negative_samples_set, parallel_urls_set):
