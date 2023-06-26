@@ -254,27 +254,27 @@ def get_negative_samples_remove_random_tokens(parallel_urls, limit_max_alignment
 
     return list(urls)
 
-_bow_logging_parallelization_variable_once = False
-def get_negative_samples_intersection_metric(parallel_urls, limit_max_alignments_per_url=10, append_metric=False, n_jobs=1,
+_jaccard_logging_parallelization_variable_once = False
+def get_negative_samples_jaccard(parallel_urls, limit_max_alignments_per_url=10, append_metric=False, n_jobs=1,
                                              apply_resource_forward=True):
     # Download NLTK model if not available
     utils.check_nltk_model("tokenizers/punkt", "punkt", download=True) # Download before parallel: https://github.com/nltk/nltk/issues/1576
 
-    global _bow_logging_parallelization_variable_once
+    global _jaccard_logging_parallelization_variable_once
     metrics_parallel = False # Parallelization disabled by default since it seems to be slower due to sorted()
 
     try:
         metrics_parallel = bool(int(os.environ["PUC_NSG_BOW_METRIC_PARALLEL"]))
     except ValueError:
-        if not _bow_logging_parallelization_variable_once:
+        if not _jaccard_logging_parallelization_variable_once:
             logging.error("Envvar PUC_NSG_BOW_METRIC_PARALLEL was defined but couldn't be casted to int")
     except KeyError:
         pass
 
-    if not _bow_logging_parallelization_variable_once:
+    if not _jaccard_logging_parallelization_variable_once:
         logging.debug("BOW metrics are going to be calculated using parallelization (envvar PUC_NSG_BOW_METRIC_PARALLEL): %s", metrics_parallel)
 
-    _bow_logging_parallelization_variable_once = True
+    _jaccard_logging_parallelization_variable_once = True
     urls = set()
     max_pairs_to_be_generated = min(limit_max_alignments_per_url, len(parallel_urls) - 1) * len(parallel_urls)
 
@@ -418,49 +418,33 @@ def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
 
     return list(urls)
 
-def get_negative_samples_random_same_lang(parallel_urls, limit_max_alignments_per_url=10):
-    # limit_max_alignments_per_url will be applied to each URL, so limit_max_alignments_per_url * 2 pairs will be returned
-    idxs = range(len(parallel_urls)) # Do not convert to list for performance reasons!
-    urls = set()
-    k = min(limit_max_alignments_per_url, len(parallel_urls))
+def get_negative_samples_monolingual_generic(parallel_urls, *args, monolingual_method=None, monolingual_side="both", **kwargs):
+    if method is None:
+        raise Exception("No method was provided")
 
-    if len(parallel_urls) < limit_max_alignments_per_url:
-        if len(parallel_urls) > 0:
-            src_domain = extract(parallel_urls[0][0])[1]
-            trg_domain = extract(parallel_urls[0][1])[1]
+    all_urls = []
+    sides = []
 
-            logging.warning("Will not be possible to generate the required %d random pairs (same lang) of URLs: "
-                            "%d pairs will not be generated for the src/trg domain '%s'/'%s'",
-                            limit_max_alignments_per_url, limit_max_alignments_per_url - len(parallel_urls),
-                            src_domain, trg_domain)
-        else:
-            logging.warning("Will not be possible to generate the required %d random pairs (same lang) of URLs: "
-                            "%d pairs will not be generated since no parallel URLs were provided",
-                            limit_max_alignments_per_url, limit_max_alignments_per_url - len(parallel_urls))
+    if monolingual_side == "both":
+        sides = (0, 1)
+    elif monolingual_side == "src":
+        sides = (0,)
+    elif monolingual_side == "trg":
+        sides = (1,)
+    else:
+        raise Exception(f"Unexpected side: {monolingual_side}")
 
-    for same_lang_idx in (0, 1):
-        for idx1 in idxs:
-            max_alignments_per_url = limit_max_alignments_per_url
-            sample_idxs = random.sample(idxs, k)
+    for i in sides: # src and trg URLs
+        monolingual_urls = [parallel_urls[j][i] for j in range(len(parallel_urls))]
+        result = method(monolingual_urls, *args, **kwargs)
 
-            for sort_idx2, idx2 in enumerate(sample_idxs, 1):
-                if idx1 == idx2:
-                    # Skip same pair
-                    max_alignments_per_url += 1
+        all_urls.extend(result)
 
-                    continue
+    all_urls = set(all_urls) # Dedup
 
-                if sort_idx2 > max_alignments_per_url:
-                    break
+    common_last_checks(all_urls, parallel_urls)
 
-                src_url = parallel_urls[idx1][same_lang_idx]
-                trg_url = parallel_urls[idx2][same_lang_idx]
-
-                urls.add((src_url, trg_url))
-
-    common_last_checks(urls, parallel_urls)
-
-    return list(urls)
+    return list(all_urls)
 
 _long_warning_raised = False
 
