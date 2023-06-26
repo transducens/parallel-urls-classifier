@@ -218,7 +218,18 @@ def load_tasks_kwargs(all_tasks, auxiliary_tasks, regression):
     return all_tasks_kwargs
 
 def load_tokenizer(pretrained_model):
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+    for i in range(3):
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
+
+            break
+        except Exception as e:
+            if i == 3 - 1:
+                logger.error("Couldn't load the tokenizer after 3 retries of 5 min")
+
+                raise e
+
+            time.sleep(60 * 5) # 5 min
 
     return tokenizer
 

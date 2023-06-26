@@ -3,6 +3,7 @@ import os
 import sys
 import logging
 import argparse
+import time
 
 cdir = os.path.dirname(os.path.realpath(__file__))
 
@@ -19,7 +20,18 @@ def main(args):
     threshold = args.threshold
     lower = not args.do_not_lower
 
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model, max_length_tokens=int(1e30))
+    for i in range(3):
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(pretrained_model, max_length_tokens=int(1e30))
+
+            break
+        except Exception as e:
+            if i == 3 - 1:
+                logger.error("Couldn't load the tokenizer after 3 retries of 5 min")
+
+                raise e
+
+            time.sleep(60 * 5) # 5 min
 
     tokenizer.max_model_input_sizes[pretrained_model] = int(1e30) # Fake max length of the model to avoid warnings
 

@@ -1,6 +1,7 @@
 
 import os
 import logging
+import time
 
 import parallel_urls_classifier.utils.utils as utils
 
@@ -80,7 +81,19 @@ class MultitaskModel(nn.Module):
                 raise Exception(f"Unknown task: {task}")
 
             task_kwargs = tasks_kwargs[task] if tasks_kwargs and task in tasks_kwargs else {}
-            heads_config[task] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
+
+            for i in range(3):
+                try:
+                    heads_config[task] = transformers.AutoConfig.from_pretrained(model_source, **task_kwargs)
+
+                    break
+                except Exception as e:
+                    if i == 3 - 1:
+                        logger.error("Couldn't load the config after 3 retries of 5 min")
+
+                        raise e
+
+                    time.sleep(60 * 5) # 5 min
 
         return heads, heads_config
 
@@ -98,7 +111,19 @@ class MultitaskModel(nn.Module):
 
     @classmethod
     def get_base_and_heads(cls, heads, heads_config, config, model_name):
-        shared_encoder = transformers.AutoModel.from_pretrained(model_name)
+        for i in range(3):
+            try:
+                shared_encoder = transformers.AutoModel.from_pretrained(model_name)
+
+                break
+            except Exception as e:
+                if i == 3 - 1:
+                    logger.error("Couldn't load the model after 3 retries of 5 min")
+
+                    raise e
+
+                time.sleep(60 * 5) # 5 min
+
         task_models_dict = {}
 
         for task_name, head_cls in heads.items():
@@ -115,7 +140,19 @@ class MultitaskModel(nn.Module):
         We do this by creating each single-task model, and having them share
         the same encoder transformer.
         """
-        config = transformers.AutoConfig.from_pretrained(model_name)
+        for i in range(3):
+            try:
+                config = transformers.AutoConfig.from_pretrained(model_name)
+
+                break
+            except Exception as e:
+                if i == 3 - 1:
+                    logger.error("Couldn't load the config after 3 retries of 5 min")
+
+                    raise e
+
+                time.sleep(60 * 5) # 5 min
+
         c = config.to_dict()
         c["puc_tasks"] = tasks
         c["puc_tasks_kwargs"] = tasks_kwargs
