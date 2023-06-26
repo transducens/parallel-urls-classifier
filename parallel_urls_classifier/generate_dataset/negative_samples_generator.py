@@ -436,7 +436,6 @@ def get_negative_samples_monolingual_generic(parallel_urls, *args, monolingual_m
 
     for i in sides: # src and trg URLs
         monolingual_urls = [(parallel_urls[j][i], parallel_urls[j][i]) for j in range(len(parallel_urls))]
-        monolingual_urls = set(monolingual_urls)
         result = monolingual_method(monolingual_urls, *args, **kwargs)
 
         all_urls.extend(result)
