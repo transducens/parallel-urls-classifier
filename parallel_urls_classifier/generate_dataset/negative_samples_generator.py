@@ -419,7 +419,7 @@ def get_negative_samples_random(parallel_urls, limit_max_alignments_per_url=10):
     return list(urls)
 
 def get_negative_samples_monolingual_generic(parallel_urls, *args, monolingual_method=None, monolingual_side="both", **kwargs):
-    if method is None:
+    if monolingual_method is None:
         raise Exception("No method was provided")
 
     all_urls = []
@@ -436,7 +436,7 @@ def get_negative_samples_monolingual_generic(parallel_urls, *args, monolingual_m
 
     for i in sides: # src and trg URLs
         monolingual_urls = [parallel_urls[j][i] for j in range(len(parallel_urls))]
-        result = method(monolingual_urls, *args, **kwargs)
+        result = monolingual_method(monolingual_urls, *args, **kwargs)
 
         all_urls.extend(result)
 
