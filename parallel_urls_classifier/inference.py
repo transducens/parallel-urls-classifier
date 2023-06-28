@@ -238,7 +238,8 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
 def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                           inference_from_stdin=False, remove_authority=False, remove_positional_data_from_resource=False,
                           parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True,
-                          auxiliary_tasks=[], auxiliary_tasks_flags=[]):
+                          auxiliary_tasks=[], auxiliary_tasks_flags=[], inference_url2lang=False):
+    # TODO inference_url2lang
     logger.info("Inference mode enabled")
 
     for aux_task in auxiliary_tasks:
@@ -371,7 +372,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
                               parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=False,
-                              auxiliary_tasks=[], auxiliary_tasks_flags=[], src_urls_lang=[], trg_urls_lang=[]):
+                              auxiliary_tasks=[], auxiliary_tasks_flags=[], src_urls_lang=[], trg_urls_lang=[],
+                              inference_url2lang=False):
+    # TODO inference_url2lang
     model.eval()
     all_results = {}
     lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags

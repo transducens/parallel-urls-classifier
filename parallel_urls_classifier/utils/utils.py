@@ -7,7 +7,10 @@ import gzip
 import lzma
 from contextlib import contextmanager
 import argparse
+import base64
+import json
 
+import requests
 import torch
 
 logger = logging.getLogger("parallel_urls_classifier")
@@ -559,3 +562,46 @@ def check_nltk_model(model_path, model, download=True, quiet=False):
             logger.info("Downloading model: %s", model)
 
             nltk.download(model, quiet=quiet)
+
+def get_result_from_url2lang(urls, apply_base64=True):
+    # expected langs from url2lang: ISO 639-2 or "unk"
+    # Additional possible value to be returned by this method: "unk_err"
+
+    if "PUC_URL2LANG_SERVER_URL" in os.environ:
+        server_url = os.environ["PUC_URL2LANG_SERVER_URL"]
+    else:
+        server_url="http://localhost:8000"
+
+    if "PUC_URL2LANG_APPLY_BASE64" in os.environ:
+        apply_base64 = bool(int(os.environ("PUC_URL2LANG_APPLY_BASE64")))
+
+    server_url = f"{server_url.rstrip('/')}/inference"
+
+    if isinstance(urls, str):
+        urls = [urls]
+
+    if apply_base64:
+        urls = list(map(lambda url: base64.b64encode(url.encode("utf-8", errors="backslashreplace")).decode("utf-8", errors="backslashreplace").replace('+', '_'), urls))
+
+    data = {"urls": urls}
+    res = requests.post(url="http://127.0.0.1:8000/inference", data=data)
+    res_text = res.text
+    response = json.loads(res_text)
+
+    if response["err"] != "null":
+            logger.warning("Response error: %s", response["err"])
+    else:
+        if not isinstance(response["ok"], list):
+            logger.error("A list of values were expected, but got: %s", response["ok"])
+        else:
+            if len(response["ok"]) != len(urls):
+                logger.error("Length mismatch: %d were expected, but got %d", len(urls), len(response["ok"]))
+
+                if len(response["ok"]) < len(urls):
+                    response["ok"].extend(["unk_err"] * (len(urls) - len(response["ok"])))
+                else:
+                    response["ok"] = response["ok"][:len(response["ok"])] # Get only the first len(response["ok"]) elements
+
+            return response["ok"]
+
+        return ["unk_err"] * len(urls)

@@ -184,6 +184,7 @@ def batch_prediction(urls):
     lower = global_conf["lower"]
     auxiliary_tasks = global_conf["auxiliary_tasks"]
     target_task = global_conf["target_task"]
+    inference_url2lang = global_conf["inference_url2lang"]
 
     for url in urls:
         fields = url.split('\t')
@@ -201,6 +202,7 @@ def batch_prediction(urls):
         remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
         parallel_likelihood=parallel_likelihood, url_separator=url_separator, lower=lower,
         auxiliary_tasks=auxiliary_tasks, src_urls_lang=src_urls_lang, trg_urls_lang=trg_urls_lang,
+        inference_url2lang=inference_url2lang,
     )
 
     return results[target_task] # TODO do we need a list if the streamer is used (it seems so)?
@@ -220,6 +222,7 @@ def main(args):
     streamer_max_latency = args.streamer_max_latency
     run_flask_server = not args.do_not_run_flask_server
     disable_streamer = args.disable_streamer
+    inference_url2lang = args.inference_lang_using_url2lang
 
     if not disable_streamer:
         logger.warning("Since streamer is enabled, you might get slightly different results: not recommended for production")
@@ -255,6 +258,7 @@ def main(args):
     global_conf["lower"] = lower
     global_conf["auxiliary_tasks"] = auxiliary_tasks
     global_conf["target_task"] = target_task
+    global_conf["inference_url2lang"] = inference_url2lang
 
     # Some guidance
     logger.info("Example: curl http://127.0.0.1:%d/hello-world", flask_port)
@@ -292,6 +296,10 @@ def initialization():
     parser.add_argument('--streamer-max-latency', type=float, default=0.1,
                         help="Streamer max latency. You will need to modify this parameter if you want to increase the GPU usage")
     parser.add_argument('--do-not-run-flask-server', action="store_true", help="Do not run app.run")
+    parser.add_argument('--inference-lang-using-url2lang', action="store_true",
+                        help="When --inference is provided, if the language is necessary, url2lang will be used. The langs will be provided anyway "
+                             "to the model if needed, but the result will be ignored. The results of the language tasks will be either 1 or 0 if "
+                             "the lang matchs")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
     parser.add_argument('--flask-debug', action="store_true", help="Flask debug mode. Warning: this option might load the model multiple times")

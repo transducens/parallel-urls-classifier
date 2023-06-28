@@ -419,6 +419,7 @@ def main(args):
     do_not_train_main_task = args.do_not_train_main_task
     dataset_workers = args.dataset_workers
     pre_load_shards = args.pre_load_shards
+    inference_url2lang = args.inference_lang_using_url2lang
 
     if "langid-and-urls_classification" in auxiliary_tasks and \
        "langid-and-urls_classification_reward-if-only-langid-is-correct-too" in auxiliary_tasks_flags:
@@ -571,7 +572,8 @@ def main(args):
                               inference_from_stdin=inference_from_stdin, remove_authority=remove_authority,
                               parallel_likelihood=parallel_likelihood, threshold=threshold, url_separator=url_separator,
                               remove_positional_data_from_resource=remove_positional_data_from_resource, lower=lower,
-                              auxiliary_tasks=auxiliary_tasks, auxiliary_tasks_flags=auxiliary_tasks_flags)
+                              auxiliary_tasks=auxiliary_tasks, auxiliary_tasks_flags=auxiliary_tasks_flags,
+                              inference_url2lang=inference_url2lang)
 
         logger.info("Done!")
 
@@ -1396,6 +1398,10 @@ def initialization():
                         help="Do not train, just apply inference (flag --model-input is recommended). "
                              "If this option is set, it will not be necessary to provide the input dataset")
     parser.add_argument('--inference-from-stdin', action="store_true", help="Read inference from stdin")
+    parser.add_argument('--inference-lang-using-url2lang', action="store_true",
+                        help="When --inference is provided, if the language is necessary, url2lang will be used. The langs will be provided anyway "
+                             "to the model if needed, but the result will be ignored. The results of the language tasks will be either 1 or 0 if "
+                             "the lang matchs")
     parser.add_argument('--parallel-likelihood', action="store_true",
                         help="Print parallel likelihood instead of classification string (inference)")
     parser.add_argument('--threshold', type=float, default=-np.inf,
