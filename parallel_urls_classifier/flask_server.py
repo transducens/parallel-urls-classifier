@@ -205,6 +205,7 @@ def batch_prediction(urls):
         inference_url2lang=inference_url2lang,
     )
 
+    # target_task can be the defined auxiliary tasks or the "url2lang" tasks version
     return results[target_task] # TODO do we need a list if the streamer is used (it seems so)?
                                 # https://github.com/ShannonAI/service-streamer/issues/97
 

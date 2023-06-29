@@ -265,6 +265,10 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     task_langid = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
     lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
 
+    if inference_url2lang:
+        if len(set.intersection(set(_url2lang_synthetic_tasks), set(all_tasks))) > 0:
+            raise Exception("Unexpected tasks in the declared tasks: couldn't add the new synthetic tasks")
+
     while True:
         if inference_from_stdin:
             try:
@@ -368,19 +372,10 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         # Inference
         results = inference_with_heads(model, all_tasks, tokenizer, {"urls": urls, "attention_mask": attention_mask},
                                        amp_context_manager)
-
-        if inference_url2lang:
-            # Add synthetic tasks in order to print the results from url2lang
-
-            if len(set.intersection(set(_url2lang_synthetic_tasks), set(all_tasks))) > 0:
-                raise Exception("Unexpected tasks in the declared tasks: couldn't add the new synthetic tasks")
-
-            all_tasks.extend(_url2lang_synthetic_tasks)
-
         regression = None
 
         # Get results of each task
-        for task in all_tasks:
+        for task in all_tasks + (_url2lang_synthetic_tasks if inference_url2lang else []):
             if task in _url2lang_synthetic_tasks:
                 if task == "url2lang-langid-and-urls_classification" and "urls_classification" not in all_tasks:
                     logger.warning("Can't calculate the result for the task langid-and-urls_classification using url2lang since task "
@@ -459,12 +454,6 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                     else:
                         print(f"{task}\t{classification}\t{initial_src_url}\t{initial_trg_url}")
 
-        if inference_url2lang:
-            # Remove synthetic tasks
-
-            for task in _url2lang_synthetic_tasks:
-                all_tasks.remove(task)
-
 @torch.no_grad()
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                               src_urls, trg_urls, remove_authority=False, remove_positional_data_from_resource=False,
@@ -473,7 +462,6 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                               inference_url2lang=False):
     model.eval()
     all_results = {}
-    lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
 
     for aux_task in auxiliary_tasks:
         if aux_task in ("language-identification", "langid-and-urls_classification"):
@@ -483,8 +471,13 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
 
     all_tasks = ["urls_classification"] + auxiliary_tasks
     task_langid = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
+    lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
 
-    for task in all_tasks:
+    if inference_url2lang:
+        if len(set.intersection(set(_url2lang_synthetic_tasks), set(all_tasks))) > 0:
+            raise Exception("Unexpected tasks in the declared tasks: couldn't add the new synthetic tasks")
+
+    for task in all_tasks + (_url2lang_synthetic_tasks if inference_url2lang else []):
         all_results[task] = []
 
     # Process URLs
@@ -545,19 +538,10 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
         # Inference
         results = inference_with_heads(model, all_tasks, tokenizer, {"urls": urls, "attention_mask": attention_mask},
                                        amp_context_manager)
-
-        if inference_url2lang:
-            # Add synthetic tasks in order to print the results from url2lang
-
-            if len(set.intersection(set(_url2lang_synthetic_tasks), set(all_tasks))) > 0:
-                raise Exception("Unexpected tasks in the declared tasks: couldn't add the new synthetic tasks")
-
-            all_tasks.extend(_url2lang_synthetic_tasks)
-
         regression = None
 
         # Get results
-        for task in all_tasks:
+        for task in all_tasks + (_url2lang_synthetic_tasks if inference_url2lang else []):
             if task in _url2lang_synthetic_tasks:
                 if task == "url2lang-langid-and-urls_classification" and "urls_classification" not in all_tasks:
                     logger.warning("Can't calculate the result for the task langid-and-urls_classification using url2lang since task "
@@ -622,11 +606,5 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                 _results = ['parallel' if classification == 1 else 'non-parallel' for classification in outputs_classification]
 
             all_results[task].extend(_results)
-
-        if inference_url2lang:
-            # Remove synthetic tasks
-
-            for task in _url2lang_synthetic_tasks:
-                all_tasks.remove(task)
 
     return all_results
