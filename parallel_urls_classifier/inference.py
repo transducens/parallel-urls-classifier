@@ -335,6 +335,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             if len(trg_url_lang) != len(trg_langs_url2lang):
                 raise Exception(f"Mismatch langs length: got {len(trg_langs_url2lang)} elements, but {len(trg_url_lang)} were expected")
 
+            logger.debug("Langs detected using url2lang: %s", ' '.join([f"({src_lang}, {trg_lang})" for src_lang, trg_lang in zip(src_langs_url2lang, trg_langs_url2lang)]))
+
         # Tokens
         tokens = utils.encode(tokenizer, target_urls, max_length_tokens, padding="longest", return_attention_mask=True)
         urls = tokens["input_ids"].to(device)
