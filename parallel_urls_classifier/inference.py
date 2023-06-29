@@ -287,8 +287,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             initial_trg_urls = [input("trg url: ").strip()]
 
             if task_langid or inference_url2lang:
-                src_url_lang = input("src url lang: ").strip()
-                trg_url_lang = input("trg url lang: ").strip()
+                src_url_lang = [input("src url lang: ").strip()]
+                trg_url_lang = [input("trg url lang: ").strip()]
 
             if not initial_src_urls[0] and not initial_trg_urls[0]:
                 break
@@ -297,7 +297,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             trg_url = initial_trg_urls[0]
 
             if task_langid:
-                data = f"{src_url}\t{trg_url}\t{src_url_lang}\t{trg_url_lang}"
+                data = f"{src_url}\t{trg_url}\t{src_url_lang[0]}\t{trg_url_lang[0]}"
             else:
                 data = f"{src_url}\t{trg_url}"
 
