@@ -326,9 +326,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                 trg_langs_url2lang = langs[len(src_url_lang):]
 
             _src_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in src_langs_url2lang]
-            src_langs_url2lang = [lang if lang else initial_lang for lang, initial_lang in zip(_src_langs_url2lang, src_langs_url2lang)]
+            src_langs_url2lang = [lang.alpha_2 if lang and lang.alpha_2 else initial_lang for lang, initial_lang in zip(_src_langs_url2lang, src_langs_url2lang)]
             _trg_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in trg_langs_url2lang]
-            trg_langs_url2lang = [lang if lang else initial_lang for lang, initial_lang in zip(_trg_langs_url2lang, trg_langs_url2lang)]
+            trg_langs_url2lang = [lang.alpha_2 if lang and lang.alpha_2 else initial_lang for lang, initial_lang in zip(_trg_langs_url2lang, trg_langs_url2lang)]
 
             if len(src_url_lang) != len(src_langs_url2lang):
                 raise Exception(f"Mismatch langs length: got {len(src_langs_url2lang)} elements, but {len(src_url_lang)} were expected")
@@ -391,9 +391,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                     continue
 
                 if regression:
-                    outputs = [float(lang1 == lang2) for lang1, lang2 in zip(src_url_lang, src_langs_url2lang)]
+                    outputs = [float(lang1 == lang2 and lang3 == lang4) for lang1, lang2, lang3, lang4 in zip(src_url_lang, src_langs_url2lang, trg_url_lang, trg_langs_url2lang)]
                 else:
-                    outputs = [[float(lang1 != lang2), float(lang1 == lang2)] for lang1, lang2 in zip(src_url_lang, src_langs_url2lang)]
+                    outputs = [[float(lang1 != lang2 or lang3 != lang4), float(lang1 == lang2 and lang3 == lang4)] for lang1, lang2, lang3, lang4 in zip(src_url_lang, src_langs_url2lang, trg_url_lang, trg_langs_url2lang)]
 
                 outputs = np.array(outputs)
 
