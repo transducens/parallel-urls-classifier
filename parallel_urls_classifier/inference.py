@@ -235,12 +235,16 @@ def inference(model, block_size, batch_size, tasks, tokenizer, criteria, dataset
         "metrics": metrics,
     }
 
+_url2lang_synthetic_tasks = [
+    "url2lang-language-identification", # Discrete results if the langs match
+    "url2lang-langid-and-urls_classification", # Multiplication with "urls_classification" task
+]
+
 @torch.no_grad()
 def interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
                           inference_from_stdin=False, remove_authority=False, remove_positional_data_from_resource=False,
                           parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=True,
                           auxiliary_tasks=[], auxiliary_tasks_flags=[], inference_url2lang=False):
-    # TODO inference_url2lang
     logger.info("Inference mode enabled")
 
     for aux_task in auxiliary_tasks:
@@ -260,10 +264,6 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     all_tasks = ["urls_classification"] + auxiliary_tasks
     task_langid = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
     lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
-    url2lang_synthetic_tasks = [
-        "url2lang-language-identification", # Discrete results if the langs match
-        "url2lang-langid-and-urls_classification", # Multiplication with "urls_classification" task
-    ]
 
     while True:
         if inference_from_stdin:
@@ -372,16 +372,16 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         if inference_url2lang:
             # Add synthetic tasks in order to print the results from url2lang
 
-            if len(set.intersection(set(url2lang_synthetic_tasks), set(all_tasks))) > 0:
+            if len(set.intersection(set(_url2lang_synthetic_tasks), set(all_tasks))) > 0:
                 raise Exception("Unexpected tasks in the declared tasks: couldn't add the new synthetic tasks")
 
-            all_tasks.extend(url2lang_synthetic_tasks)
+            all_tasks.extend(_url2lang_synthetic_tasks)
 
         regression = None
 
         # Get results of each task
         for task in all_tasks:
-            if task in url2lang_synthetic_tasks:
+            if task in _url2lang_synthetic_tasks:
                 if task == "url2lang-langid-and-urls_classification" and "urls_classification" not in all_tasks:
                     logger.warning("Can't calculate the result for the task langid-and-urls_classification using url2lang since task "
                                    "urls_classification is not defined")
@@ -440,7 +440,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             if parallel_likelihood:
                 for data, initial_src_url, initial_trg_url in zip(outputs, initial_src_urls, initial_trg_urls):
-                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification") or task in url2lang_synthetic_tasks:
+                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification") or task in _url2lang_synthetic_tasks:
                         if regression is None:
                             logger.error("regression is not defined: bug?")
 
@@ -454,7 +454,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                         print(f"{task}\t{data}\t{initial_src_url}\t{initial_trg_url}")
             else:
                 for classification, initial_src_url, initial_trg_url in zip(outputs_classification, initial_src_urls, initial_trg_urls):
-                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification") or task in url2lang_synthetic_tasks:
+                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification") or task in _url2lang_synthetic_tasks:
                         print(f"{task}\t{'positive' if classification == 1 else 'negative'}\t{initial_src_url}\t{initial_trg_url}")
                     else:
                         print(f"{task}\t{classification}\t{initial_src_url}\t{initial_trg_url}")
@@ -462,7 +462,7 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         if inference_url2lang:
             # Remove synthetic tasks
 
-            for task in url2lang_synthetic_tasks:
+            for task in _url2lang_synthetic_tasks:
                 all_tasks.remove(task)
 
 @torch.no_grad()
@@ -471,7 +471,6 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                               parallel_likelihood=False, threshold=-np.inf, url_separator=' ', lower=False,
                               auxiliary_tasks=[], auxiliary_tasks_flags=[], src_urls_lang=[], trg_urls_lang=[],
                               inference_url2lang=False):
-    # TODO inference_url2lang
     model.eval()
     all_results = {}
     lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
@@ -493,7 +492,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     trg_urls = [trg_url.replace('\t', ' ') for trg_url in trg_urls]
     str_urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
 
-    if len(src_urls_lang) != 0:
+    if len(src_urls_lang) != 0 or inference_url2lang:
         if len(src_urls_lang) != len(src_urls):
             raise Exception(f"Unexpected different lengths: {len(src_urls_lang)} vs {len(src_urls)}")
         if len(trg_urls_lang) != len(trg_urls):
@@ -501,12 +500,39 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
 
         str_urls = list(map(lambda s: '\t'.join(s), zip(str_urls, src_urls_lang, trg_urls_lang)))
 
-    urls_generator = utils.tokenize_batch_from_iterator(str_urls, tokenizer, batch_size,
-                            f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
-                                                                  remove_positional_data=remove_positional_data_from_resource,
-                                                                  separator=url_separator, lower=lower),
-                            auxiliary_tasks=auxiliary_tasks, inference=True,
-                            lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side)
+    urls_generator = \
+        utils.tokenize_batch_from_iterator(str_urls, tokenizer, batch_size,
+            f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
+                                                    remove_positional_data=remove_positional_data_from_resource,
+                                                    separator=url_separator, lower=lower),
+            auxiliary_tasks=auxiliary_tasks, inference=True, return_urls=True,
+            lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side)
+
+    if inference_url2lang:
+        src_langs_url2lang, trg_langs_url2lang = [], []
+
+        if lang_id_target_applies_to_trg_side:
+            langs = utils.get_result_from_url2lang(trg_urls)
+
+            src_langs_url2lang = src_urls_lang
+            trg_langs_url2lang = langs
+        else:
+            langs = utils.get_result_from_url2lang(src_urls + trg_urls)
+
+            src_langs_url2lang = langs[:len(src_urls_lang)]
+            trg_langs_url2lang = langs[len(src_urls_lang):]
+
+        _src_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in src_langs_url2lang]
+        src_langs_url2lang = [lang.alpha_2 if lang and lang.alpha_2 else initial_lang for lang, initial_lang in zip(_src_langs_url2lang, src_langs_url2lang)]
+        _trg_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in trg_langs_url2lang]
+        trg_langs_url2lang = [lang.alpha_2 if lang and lang.alpha_2 else initial_lang for lang, initial_lang in zip(_trg_langs_url2lang, trg_langs_url2lang)]
+
+        if len(src_urls_lang) != len(src_langs_url2lang):
+            raise Exception(f"Mismatch langs length: got {len(src_langs_url2lang)} elements, but {len(src_urls_lang)} were expected")
+        if len(trg_urls_lang) != len(trg_langs_url2lang):
+            raise Exception(f"Mismatch langs length: got {len(trg_langs_url2lang)} elements, but {len(trg_urls_lang)} were expected")
+
+        logger.debug("Langs detected using url2lang: %s", ' '.join([f"({src_lang}, {trg_lang})" for src_lang, trg_lang in zip(src_langs_url2lang, trg_langs_url2lang)]))
 
     for target_urls in urls_generator:
         target_urls = target_urls["urls"]
@@ -520,25 +546,87 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
         results = inference_with_heads(model, all_tasks, tokenizer, {"urls": urls, "attention_mask": attention_mask},
                                        amp_context_manager)
 
+        if inference_url2lang:
+            # Add synthetic tasks in order to print the results from url2lang
+
+            if len(set.intersection(set(_url2lang_synthetic_tasks), set(all_tasks))) > 0:
+                raise Exception("Unexpected tasks in the declared tasks: couldn't add the new synthetic tasks")
+
+            all_tasks.extend(_url2lang_synthetic_tasks)
+
+        regression = None
+
         # Get results
         for task in all_tasks:
-            outputs = torch.sigmoid(results[task]["outputs"]).cpu()
-            outputs_classification = results[task]["outputs_classification"]
-            regression = results[task]["regression"]
+            if task in _url2lang_synthetic_tasks:
+                if task == "url2lang-langid-and-urls_classification" and "urls_classification" not in all_tasks:
+                    logger.warning("Can't calculate the result for the task langid-and-urls_classification using url2lang since task "
+                                   "urls_classification is not defined")
 
-            if outputs.numpy().shape[0] != len(src_urls):
+                    continue
+
+                if regression is None:
+                    logger.error("regression should be defined: bug?")
+
+                    continue
+
+                if regression:
+                    outputs = [float(lang1 == lang2 and lang3 == lang4) for lang1, lang2, lang3, lang4 in zip(src_urls_lang, src_langs_url2lang, trg_urls_lang, trg_langs_url2lang)]
+                else:
+                    outputs = [[float(lang1 != lang2 or lang3 != lang4), float(lang1 == lang2 and lang3 == lang4)] for lang1, lang2, lang3, lang4 in zip(src_urls_lang, src_langs_url2lang, trg_urls_lang, trg_langs_url2lang)]
+
+                outputs = np.array(outputs)
+
+                if task == "url2lang-language-identification":
+                    pass
+                elif task == "url2lang-langid-and-urls_classification":
+                    for idx, (current_val, parallelness_val) in enumerate(zip(outputs, torch.sigmoid(results["urls_classification"]["outputs"].cpu()).numpy())):
+                        outputs[idx] = current_val * parallelness_val
+                else:
+                    raise Exception(f"Unknown task: {task}")
+
+                if regression:
+                    outputs_classification = list(map(lambda n: int(n >= 0.5), outputs)) # TODO use threshold
+                else:
+                    outputs_classification = list(np.argmax(outputs, axis=1))
+
+                outputs_classification = torch.tensor(outputs_classification).cpu().numpy()
+            else:
+                outputs = results[task]["outputs"].cpu()
+                outputs_classification = results[task]["outputs_classification"].cpu().numpy()
+
+                if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+                    outputs = torch.sigmoid(outputs)
+
+                    if regression is None:
+                        regression = results[task]["regression"]
+                    else:
+                        _regression = results[task]["regression"]
+
+                        if _regression != regression:
+                            logger.error("Unexpected regression value: %s vs %s", regression, _regression)
+
+                outputs = outputs.numpy()
+
+            if outputs.shape[0] != len(src_urls):
                 raise Exception("Output samples does not match with the length of src URLs: "
-                                f"{outputs.numpy().shape[0]} vs {len(src_urls)}")
-            if outputs.numpy().shape[0] != len(trg_urls):
+                                f"{outputs.shape[0]} vs {len(src_urls)}")
+            if outputs.shape[0] != len(trg_urls):
                 raise Exception("Output samples does not match with the length of trg URLs: "
-                                f"{outputs.numpy().shape[0]} vs {len(trg_urls)}")
+                                f"{outputs.shape[0]} vs {len(trg_urls)}")
 
             if parallel_likelihood:
-                _results = [data if regression else data[1] for data in outputs.numpy()]
+                _results = [data if regression else data[1] for data in outputs]
                 _results = [likelihood for likelihood in _results if likelihood >= threshold]
             else:
                 _results = ['parallel' if classification == 1 else 'non-parallel' for classification in outputs_classification]
 
             all_results[task].extend(_results)
+
+        if inference_url2lang:
+            # Remove synthetic tasks
+
+            for task in _url2lang_synthetic_tasks:
+                all_tasks.remove(task)
 
     return all_results
