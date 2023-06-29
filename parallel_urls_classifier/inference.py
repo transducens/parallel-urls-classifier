@@ -260,6 +260,10 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
     all_tasks = ["urls_classification"] + auxiliary_tasks
     task_langid = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
     lang_id_target_applies_to_trg_side = "language-identification_target-applies-only-to-trg-side" in auxiliary_tasks_flags
+    url2lang_synthetic_tasks = [
+        "url2lang-language-identification", # Discrete results if the langs match
+        "url2lang-langid-and-urls_classification", # Multiplication with "urls_classification" task
+    ]
 
     while True:
         if inference_from_stdin:
@@ -368,17 +372,16 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         if inference_url2lang:
             # Add synthetic tasks in order to print the results from url2lang
 
-            if len(set.intersection({"url2lang-language-identification", "url2lang-langid-and-urls_classification"}, set(all_tasks))) > 0:
+            if len(set.intersection(set(url2lang_synthetic_tasks), set(all_tasks))) > 0:
                 raise Exception("Unexpected tasks in the declared tasks: couldn't add the new synthetic tasks")
 
-            all_tasks.append("url2lang-language-identification") # Discrete results if the langs match
-            all_tasks.append("url2lang-langid-and-urls_classification") # Multiplication with "urls_classification" task
+            all_tasks.extend(url2lang_synthetic_tasks)
 
         regression = None
 
         # Get results of each task
         for task in all_tasks:
-            if task in ("url2lang-language-identification", "url2lang-langid-and-urls_classification"):
+            if task in url2lang_synthetic_tasks:
                 if task == "url2lang-langid-and-urls_classification" and "urls_classification" not in all_tasks:
                     logger.warning("Can't calculate the result for the task langid-and-urls_classification using url2lang since task "
                                    "urls_classification is not defined")
@@ -437,8 +440,12 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
 
             if parallel_likelihood:
                 for data, initial_src_url, initial_trg_url in zip(outputs, initial_src_urls, initial_trg_urls):
-                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
-                        regression = results[task]["regression"]
+                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification") or task in url2lang_synthetic_tasks:
+                        if regression is None:
+                            logger.error("regression is not defined: bug?")
+
+                            regression = results[task]["regression"]
+
                         likelihood = data if regression else data[1] # parallel
 
                         if likelihood >= threshold:
@@ -447,10 +454,16 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                         print(f"{task}\t{data}\t{initial_src_url}\t{initial_trg_url}")
             else:
                 for classification, initial_src_url, initial_trg_url in zip(outputs_classification, initial_src_urls, initial_trg_urls):
-                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+                    if task in ("urls_classification", "language-identification", "langid-and-urls_classification") or task in url2lang_synthetic_tasks:
                         print(f"{task}\t{'positive' if classification == 1 else 'negative'}\t{initial_src_url}\t{initial_trg_url}")
                     else:
                         print(f"{task}\t{classification}\t{initial_src_url}\t{initial_trg_url}")
+
+        if inference_url2lang:
+            # Remove synthetic tasks
+
+            for task in url2lang_synthetic_tasks:
+                all_tasks.remove(task)
 
 @torch.no_grad()
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
