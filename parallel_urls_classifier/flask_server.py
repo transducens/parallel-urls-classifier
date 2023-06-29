@@ -185,6 +185,7 @@ def batch_prediction(urls):
     auxiliary_tasks = global_conf["auxiliary_tasks"]
     target_task = global_conf["target_task"]
     inference_url2lang = global_conf["inference_url2lang"]
+    auxiliary_tasks_flags = global_conf["auxiliary_tasks_flags"]
 
     for url in urls:
         fields = url.split('\t')
@@ -202,7 +203,7 @@ def batch_prediction(urls):
         remove_authority=remove_authority, remove_positional_data_from_resource=remove_positional_data_from_resource,
         parallel_likelihood=parallel_likelihood, url_separator=url_separator, lower=lower,
         auxiliary_tasks=auxiliary_tasks, src_urls_lang=src_urls_lang, trg_urls_lang=trg_urls_lang,
-        inference_url2lang=inference_url2lang,
+        inference_url2lang=inference_url2lang, auxiliary_tasks_flags=auxiliary_tasks_flags,
     )
 
     # target_task can be the defined auxiliary tasks or the "url2lang" tasks version
@@ -224,6 +225,7 @@ def main(args):
     run_flask_server = not args.do_not_run_flask_server
     disable_streamer = args.disable_streamer
     inference_url2lang = args.inference_lang_using_url2lang
+    auxiliary_tasks_flags = args.auxiliary_tasks_flags
 
     if not disable_streamer:
         logger.warning("Since streamer is enabled, you might get slightly different results: not recommended for production")
@@ -231,6 +233,8 @@ def main(args):
 
     if auxiliary_tasks is None:
         auxiliary_tasks = []
+    if auxiliary_tasks_flags is None:
+        auxiliary_tasks_flags = []
 
     logger.debug("Device: %s", device)
 
@@ -260,6 +264,7 @@ def main(args):
     global_conf["auxiliary_tasks"] = auxiliary_tasks
     global_conf["target_task"] = target_task
     global_conf["inference_url2lang"] = inference_url2lang
+    global_conf["auxiliary_tasks_flags"] = auxiliary_tasks_flags
 
     # Some guidance
     logger.info("Example: curl http://127.0.0.1:%d/hello-world", flask_port)
@@ -291,6 +296,9 @@ def initialization():
     parser.add_argument('--lowercase', action="store_true", help="Lowercase URLs while preprocessing")
     parser.add_argument('--auxiliary-tasks', type=str, nargs='*', choices=["mlm", "language-identification", "langid-and-urls_classification"],
                         help="Tasks which will try to help to the main task (multitasking)")
+    parser.add_argument('--auxiliary-tasks-flags', type=str, nargs='*',
+                        choices=["language-identification_target-applies-only-to-trg-side",],
+                        help="Set of options which will set up some aspects of the auxiliary tasks")
     parser.add_argument('--target-task', type=str, default="urls_classification",
                         help="Task which will be used as primary task and whose results will be used")
     parser.add_argument('--regression', action="store_true", help="Apply regression instead of binary classification")
