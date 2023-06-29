@@ -498,7 +498,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
             f=lambda u: preprocess.preprocess_url(u, remove_protocol_and_authority=remove_authority,
                                                     remove_positional_data=remove_positional_data_from_resource,
                                                     separator=url_separator, lower=lower),
-            auxiliary_tasks=auxiliary_tasks, inference=True, return_urls=True,
+            auxiliary_tasks=auxiliary_tasks, inference=True,
             lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side)
 
     if inference_url2lang:
