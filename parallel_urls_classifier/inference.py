@@ -322,8 +322,8 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             else:
                 langs = utils.get_result_from_url2lang(initial_src_urls + initial_trg_urls)
 
-                src_langs_url2lang = langs[:len(src_langs_url2lang)]
-                trg_langs_url2lang = langs[len(src_langs_url2lang):]
+                src_langs_url2lang = langs[:len(src_url_lang)]
+                trg_langs_url2lang = langs[len(src_url_lang):]
 
             _src_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in src_langs_url2lang]
             src_langs_url2lang = [lang if lang else initial_lang for lang, initial_lang in zip(_src_langs_url2lang, src_langs_url2lang)]
