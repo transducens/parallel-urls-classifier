@@ -78,7 +78,7 @@ def apply_model(model, tokenizer, tokens, encode=False):
 
 def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return_urls=False, add_symmetric_samples=False,
                                  auxiliary_tasks=[], lang_id_add_solo_urls_too=False, lang_id_target_applies_to_trg_side=False,
-                                 inference=False):
+                                 inference=False, add_langs_to_initial_urls=False):
     def reset():
         urls = {
             "urls": [],
@@ -89,6 +89,9 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
         return urls, initial_urls
 
     urls, initial_urls = reset()
+
+    if add_langs_to_initial_urls and not inference:
+        raise Exception("Arg add_langs_to_initial_urls and inference disabled are not supported")
 
     # Tasks
     task_language_identification = "language-identification" in auxiliary_tasks or "langid-and-urls_classification" in auxiliary_tasks
@@ -112,7 +115,7 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
             if len(url) in (2, 3):
                 add_only_urls_too = True
 
-            if len(url) in (4, 5, 6, 7) and not task_language_identification:
+            if len(url) in (4, 5, 6, 7) and not task_language_identification and not add_langs_to_initial_urls:
                 raise Exception("Got lengths in (4, 5, 6, 7) but not langid task, so is unexpected")
         else:
             if task_language_identification:
@@ -159,9 +162,7 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
                                                                             #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
             urls["labels"].append(parallel_urls_output)
 
-        initial_urls.append((url[0], url[1]))
-
-        if task_language_identification and len(url) in (4, 5, 6, 7):
+        if (task_language_identification or add_langs_to_initial_urls) and len(url) in (4, 5, 6, 7):
             if len(url) in (6, 7):
                 true_src_url_lang, true_trg_url_lang = url[3 if len(url) == 7 else 2], url[4 if len(url) == 7 else 3]
                 src_url_lang, trg_url_lang = url[5 if len(url) == 7 else 4], url[6 if len(url) == 7 else 5]
@@ -175,27 +176,32 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
             else:
                 raise Exception(f"Unexpected length: {len(url)}")
 
-            urls["urls"].append(f"{_src_url_lang}{tokenizer.sep_token}{trg_url_lang}{tokenizer.sep_token}"
-                                f"{src_url}{tokenizer.sep_token}{trg_url}") # We first add the lang ids in order to avoid to lose them if
-                                                                            #  the URLs are too long
-            urls["labels"].append(parallel_urls_output)
+            if task_language_identification:
+                urls["urls"].append(f"{_src_url_lang}{tokenizer.sep_token}{trg_url_lang}{tokenizer.sep_token}"
+                                    f"{src_url}{tokenizer.sep_token}{trg_url}") # We first add the lang ids in order to avoid to lose them if
+                                                                                #  the URLs are too long
+                urls["labels"].append(parallel_urls_output)
 
-            if "target-language-identification" not in urls:
-                urls["target-language-identification"] = []
+                if "target-language-identification" not in urls:
+                    urls["target-language-identification"] = []
 
-            if add_only_urls_too:
-                urls["target-language-identification"].append(0) # Result for the URLs without language identificators
+                if add_only_urls_too:
+                    urls["target-language-identification"].append(0) # Result for the URLs without language identificators
 
-            urls["target-language-identification"].append(_target)
+                urls["target-language-identification"].append(_target)
+
+            if add_langs_to_initial_urls:
+                initial_urls.append((url[0], url[1], _src_url_lang, trg_url_lang))
+
+        if not add_langs_to_initial_urls:
+            initial_urls.append((url[0], url[1]))
 
         if add_symmetric_samples:
             if add_only_urls_too:
                 urls["urls"].append(f"{trg_url}{tokenizer.sep_token}{src_url}")
                 urls["labels"].append(parallel_urls_output)
 
-            initial_urls.append((url[1], url[0]))
-
-            if task_language_identification and len(url) in (4, 5, 6, 7):
+            if (task_language_identification or add_langs_to_initial_urls) and len(url) in (4, 5, 6, 7):
                 if len(url) in (6, 7):
                     _trg_url_lang = true_trg_url_lang if lang_id_target_applies_to_trg_side else trg_url_lang
                     _target = int(src_url_lang == true_src_url_lang and trg_url_lang == true_trg_url_lang)
@@ -206,14 +212,21 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
                 else:
                     raise Exception(f"Unexpected length: {len(url)}")
 
-                urls["urls"].append(f"{_trg_url_lang}{tokenizer.sep_token}{src_url_lang}{tokenizer.sep_token}"
-                                    f"{trg_url}{tokenizer.sep_token}{src_url}")
-                urls["labels"].append(parallel_urls_output)
+                if task_language_identification:
+                    urls["urls"].append(f"{_trg_url_lang}{tokenizer.sep_token}{src_url_lang}{tokenizer.sep_token}"
+                                        f"{trg_url}{tokenizer.sep_token}{src_url}")
+                    urls["labels"].append(parallel_urls_output)
 
-                if add_only_urls_too:
-                    urls["target-language-identification"].append(0) # If languages are not provided, target will be 0
+                    if add_only_urls_too:
+                        urls["target-language-identification"].append(0) # If languages are not provided, target will be 0
 
-                urls["target-language-identification"].append(_target)
+                    urls["target-language-identification"].append(_target)
+
+                if add_langs_to_initial_urls:
+                    initial_urls.append((url[1], url[0], _trg_url_lang, src_url_lang))
+
+            if not add_langs_to_initial_urls:
+                initial_urls.append((url[1], url[0]))
 
         if len(urls["urls"]) >= batch_size:
             if return_urls:

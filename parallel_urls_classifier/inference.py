@@ -14,6 +14,7 @@ import numpy as np
 import torch
 #import torch.nn.functional as F
 import transformers
+import pycountry
 
 logger = logging.getLogger("parallel_urls_classifier")
 logger_tokens = logging.getLogger("parallel_urls_classifier.tokens")
@@ -269,18 +270,23 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                                                   remove_positional_data=remove_positional_data_from_resource,
                                                                   separator=url_separator, lower=lower),
                             return_urls=True, auxiliary_tasks=auxiliary_tasks, inference=True,
-                            lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side))
+                            lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side,
+                            add_langs_to_initial_urls=task_langid or inference_url2lang))
 
             except StopIteration:
                 break
 
             initial_src_urls = [u[0] for u in initial_urls]
             initial_trg_urls = [u[1] for u in initial_urls]
+
+            if task_langid or inference_url2lang:
+                src_url_lang = [u[2] for u in initial_urls]
+                trg_url_lang = [u[3] for u in initial_urls]
         else:
             initial_src_urls = [input("src url: ").strip()]
             initial_trg_urls = [input("trg url: ").strip()]
 
-            if task_langid:
+            if task_langid or inference_url2lang:
                 src_url_lang = input("src url lang: ").strip()
                 trg_url_lang = input("trg url lang: ").strip()
 
@@ -304,6 +310,30 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                                lang_id_target_applies_to_trg_side=lang_id_target_applies_to_trg_side))
 
         target_urls = target_urls["urls"]
+
+        if inference_url2lang:
+            src_langs_url2lang, trg_langs_url2lang = [], []
+
+            if lang_id_target_applies_to_trg_side:
+                langs = utils.get_result_from_url2lang(initial_trg_urls)
+
+                src_langs_url2lang = src_url_lang
+                trg_langs_url2lang = langs
+            else:
+                langs = utils.get_result_from_url2lang(initial_src_urls + initial_trg_urls)
+
+                src_langs_url2lang = langs[:len(src_langs_url2lang)]
+                trg_langs_url2lang = langs[len(src_langs_url2lang):]
+
+            _src_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in src_langs_url2lang]
+            src_langs_url2lang = [lang if lang else initial_lang for lang, initial_lang in zip(_src_langs_url2lang, src_langs_url2lang)]
+            _trg_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in trg_langs_url2lang]
+            trg_langs_url2lang = [lang if lang else initial_lang for lang, initial_lang in zip(_trg_langs_url2lang, trg_langs_url2lang)]
+
+            if len(src_url_lang) != len(src_langs_url2lang):
+                raise Exception(f"Mismatch langs length: got {len(src_langs_url2lang)} elements, but {len(src_url_lang)} were expected")
+            if len(trg_url_lang) != len(trg_langs_url2lang):
+                raise Exception(f"Mismatch langs length: got {len(trg_langs_url2lang)} elements, but {len(trg_url_lang)} were expected")
 
         # Tokens
         tokens = utils.encode(tokenizer, target_urls, max_length_tokens, padding="longest", return_attention_mask=True)
@@ -333,26 +363,78 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
         results = inference_with_heads(model, all_tasks, tokenizer, {"urls": urls, "attention_mask": attention_mask},
                                        amp_context_manager)
 
+        if inference_url2lang:
+            # Add synthetic tasks in order to print the results from url2lang
+
+            if len(set.intersection({"url2lang-language-identification", "url2lang-langid-and-urls_classification"}, set(all_tasks))) > 0:
+                raise Exception("Unexpected tasks in the declared tasks: couldn't add the new synthetic tasks")
+
+            all_tasks.append("url2lang-language-identification") # Discrete results if the langs match
+            all_tasks.append("url2lang-langid-and-urls_classification") # Multiplication with "urls_classification" task
+
+        regression = None
+
         # Get results of each task
         for task in all_tasks:
-            outputs = results[task]["outputs"].cpu()
-            outputs_argmax = results[task]["outputs_classification"]
+            if task in ("url2lang-language-identification", "url2lang-langid-and-urls_classification"):
+                if task == "url2lang-langid-and-urls_classification" and "urls_classification" not in all_tasks:
+                    logger.warning("Can't calculate the result for the task langid-and-urls_classification using url2lang since task "
+                                   "urls_classification is not defined")
 
-            if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
-                outputs = torch.sigmoid(outputs)
+                    continue
 
-            #if len(outputs_argmax.shape) == 0:
-            #    outputs_argmax = np.array([outputs_argmax])
+                if regression is None:
+                    logger.error("regression should be defined: bug?")
 
-            if outputs.numpy().shape[0] != len(initial_src_urls):
+                    continue
+
+                if regression:
+                    outputs = [float(lang1 == lang2) for lang1, lang2 in zip(src_url_lang, src_langs_url2lang)]
+                else:
+                    outputs = [[float(lang1 != lang2), float(lang1 == lang2)] for lang1, lang2 in zip(src_url_lang, src_langs_url2lang)]
+
+                outputs = np.array(outputs)
+
+                if task == "url2lang-language-identification":
+                    pass
+                elif task == "url2lang-langid-and-urls_classification":
+                    for idx, (current_val, parallelness_val) in enumerate(zip(outputs, torch.sigmoid(results["urls_classification"]["outputs"].cpu()).numpy())):
+                        outputs[idx] = current_val * parallelness_val
+                else:
+                    raise Exception(f"Unknown task: {task}")
+
+                if regression:
+                    outputs_classification = list(map(lambda n: int(n >= 0.5), outputs)) # TODO use threshold
+                else:
+                    outputs_classification = list(np.argmax(outputs, axis=1))
+
+                outputs_classification = torch.tensor(outputs_classification).cpu().numpy()
+            else:
+                outputs = results[task]["outputs"].cpu()
+                outputs_classification = results[task]["outputs_classification"].cpu().numpy()
+
+                if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
+                    outputs = torch.sigmoid(outputs)
+
+                    if regression is None:
+                        regression = results[task]["regression"]
+                    else:
+                        _regression = results[task]["regression"]
+
+                        if _regression != regression:
+                            logger.error("Unexpected regression value: %s vs %s", regression, _regression)
+
+                outputs = outputs.numpy()
+
+            if outputs.shape[0] != len(initial_src_urls):
                 raise Exception("Output samples does not match with the length of src URLs "
-                                f"({outputs.numpy().shape[0]} vs {len(initial_src_urls)})")
-            if outputs.numpy().shape[0] != len(initial_trg_urls):
+                                f"({outputs.shape[0]} vs {len(initial_src_urls)})")
+            if outputs.shape[0] != len(initial_trg_urls):
                 raise Exception("Output samples does not match with the length of trg URLs "
-                                f"({outputs.numpy().shape[0]} vs {len(initial_trg_urls)})")
+                                f"({outputs.shape[0]} vs {len(initial_trg_urls)})")
 
             if parallel_likelihood:
-                for data, initial_src_url, initial_trg_url in zip(outputs.numpy(), initial_src_urls, initial_trg_urls):
+                for data, initial_src_url, initial_trg_url in zip(outputs, initial_src_urls, initial_trg_urls):
                     if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
                         regression = results[task]["regression"]
                         likelihood = data if regression else data[1] # parallel
@@ -362,11 +444,11 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                     else:
                         print(f"{task}\t{data}\t{initial_src_url}\t{initial_trg_url}")
             else:
-                for argmax, initial_src_url, initial_trg_url in zip(outputs_argmax, initial_src_urls, initial_trg_urls):
+                for classification, initial_src_url, initial_trg_url in zip(outputs_classification, initial_src_urls, initial_trg_urls):
                     if task in ("urls_classification", "language-identification", "langid-and-urls_classification"):
-                        print(f"{task}\t{'positive' if argmax == 1 else 'negative'}\t{initial_src_url}\t{initial_trg_url}")
+                        print(f"{task}\t{'positive' if classification == 1 else 'negative'}\t{initial_src_url}\t{initial_trg_url}")
                     else:
-                        print(f"{task}\t{argmax}\t{initial_src_url}\t{initial_trg_url}")
+                        print(f"{task}\t{classification}\t{initial_src_url}\t{initial_trg_url}")
 
 @torch.no_grad()
 def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, device, amp_context_manager,
@@ -426,7 +508,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
         # Get results
         for task in all_tasks:
             outputs = torch.sigmoid(results[task]["outputs"]).cpu()
-            outputs_argmax = results[task]["outputs_classification"]
+            outputs_classification = results[task]["outputs_classification"]
             regression = results[task]["regression"]
 
             if outputs.numpy().shape[0] != len(src_urls):
@@ -440,7 +522,7 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                 _results = [data if regression else data[1] for data in outputs.numpy()]
                 _results = [likelihood for likelihood in _results if likelihood >= threshold]
             else:
-                _results = ['parallel' if argmax == 1 else 'non-parallel' for argmax in outputs_argmax]
+                _results = ['parallel' if classification == 1 else 'non-parallel' for classification in outputs_classification]
 
             all_results[task].extend(_results)
 

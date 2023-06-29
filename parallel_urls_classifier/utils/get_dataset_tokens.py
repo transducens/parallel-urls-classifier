@@ -47,6 +47,7 @@ def main(args):
         tokens_batch = tokenizer(pre_tokenized_urls_batch)["input_ids"]
 
         assert len(tokens_batch) == len(pre_tokenized_urls_batch), f"len(tokens_batch) != len(pre_tokenized_urls_batch): {len(tokens_batch)} vs {len(pre_tokenized_urls_batch)}"
+        # TODO BE AWARE that following assert might fail due to language detecion task, but not sure!
         assert len(tokens_batch) == len(initial_urls_batch), f"len(tokens_batch) != len(initial_urls_batch): {len(tokens_batch)} vs {len(initial_urls_batch)}"
 
         for initial_urls, pre_tokenized_urls, tokens in zip(initial_urls_batch, pre_tokenized_urls_batch, tokens_batch):
