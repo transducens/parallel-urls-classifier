@@ -14,7 +14,6 @@ import numpy as np
 import torch
 #import torch.nn.functional as F
 import transformers
-import pycountry
 
 logger = logging.getLogger("parallel_urls_classifier")
 logger_tokens = logging.getLogger("parallel_urls_classifier.tokens")
@@ -323,20 +322,15 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             src_langs_url2lang, trg_langs_url2lang = [], []
 
             if lang_id_target_applies_to_trg_side:
-                langs = utils.get_result_from_url2lang(initial_trg_urls)
+                langs = utils.get_result_from_url2lang(initial_trg_urls, result_is_float_instead_of_langs=True)
 
-                src_langs_url2lang = src_url_lang
+                src_langs_url2lang = [1.0] * len(src_url_lang)
                 trg_langs_url2lang = langs
             else:
-                langs = utils.get_result_from_url2lang(initial_src_urls + initial_trg_urls)
+                langs = utils.get_result_from_url2lang(initial_src_urls + initial_trg_urls, result_is_float_instead_of_langs=True)
 
                 src_langs_url2lang = langs[:len(src_url_lang)]
                 trg_langs_url2lang = langs[len(src_url_lang):]
-
-            _src_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in src_langs_url2lang]
-            src_langs_url2lang = [lang.alpha_2 if lang and "alpha_2" in dir(lang) else initial_lang for lang, initial_lang in zip(_src_langs_url2lang, src_langs_url2lang)]
-            _trg_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in trg_langs_url2lang]
-            trg_langs_url2lang = [lang.alpha_2 if lang and "alpha_2" in dir(lang) else initial_lang for lang, initial_lang in zip(_trg_langs_url2lang, trg_langs_url2lang)]
 
             if len(src_url_lang) != len(src_langs_url2lang):
                 raise Exception(f"Mismatch langs length: got {len(src_langs_url2lang)} elements, but {len(src_url_lang)} were expected")
@@ -389,9 +383,9 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
                     continue
 
                 if regression:
-                    outputs = [float(lang1 == lang2 and lang3 == lang4) for lang1, lang2, lang3, lang4 in zip(src_url_lang, src_langs_url2lang, trg_url_lang, trg_langs_url2lang)]
+                    outputs = [lang1 * lang2 for lang1, lang2 in zip(src_langs_url2lang, trg_langs_url2lang)]
                 else:
-                    outputs = [[float(lang1 != lang2 or lang3 != lang4), float(lang1 == lang2 and lang3 == lang4)] for lang1, lang2, lang3, lang4 in zip(src_url_lang, src_langs_url2lang, trg_url_lang, trg_langs_url2lang)]
+                    outputs = [[1.0 - lang1 * lang2, lang1 * lang2] for lang1, lang2 in zip(src_langs_url2lang, trg_langs_url2lang)]
 
                 outputs = np.array(outputs)
 
@@ -505,20 +499,15 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
         src_langs_url2lang, trg_langs_url2lang = [], []
 
         if lang_id_target_applies_to_trg_side:
-            langs = utils.get_result_from_url2lang(trg_urls)
+            langs = utils.get_result_from_url2lang(trg_urls, result_is_float_instead_of_langs=True)
 
-            src_langs_url2lang = src_urls_lang
+            src_langs_url2lang = [1.0] * len(src_urls_lang)
             trg_langs_url2lang = langs
         else:
-            langs = utils.get_result_from_url2lang(src_urls + trg_urls)
+            langs = utils.get_result_from_url2lang(src_urls + trg_urls, result_is_float_instead_of_langs=True)
 
             src_langs_url2lang = langs[:len(src_urls_lang)]
             trg_langs_url2lang = langs[len(src_urls_lang):]
-
-        _src_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in src_langs_url2lang]
-        src_langs_url2lang = [lang.alpha_2 if lang and "alpha_2" in dir(lang) else initial_lang for lang, initial_lang in zip(_src_langs_url2lang, src_langs_url2lang)]
-        _trg_langs_url2lang = [pycountry.languages.get(alpha_3=lang) for lang in trg_langs_url2lang]
-        trg_langs_url2lang = [lang.alpha_2 if lang and "alpha_2" in dir(lang) else initial_lang for lang, initial_lang in zip(_trg_langs_url2lang, trg_langs_url2lang)]
 
         if len(src_urls_lang) != len(src_langs_url2lang):
             raise Exception(f"Mismatch langs length: got {len(src_langs_url2lang)} elements, but {len(src_urls_lang)} were expected")
@@ -555,9 +544,9 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
                     continue
 
                 if regression:
-                    outputs = [float(lang1 == lang2 and lang3 == lang4) for lang1, lang2, lang3, lang4 in zip(src_urls_lang, src_langs_url2lang, trg_urls_lang, trg_langs_url2lang)]
+                    outputs = [lang1 * lang2 for lang1, lang2 in zip(src_langs_url2lang, trg_langs_url2lang)]
                 else:
-                    outputs = [[float(lang1 != lang2 or lang3 != lang4), float(lang1 == lang2 and lang3 == lang4)] for lang1, lang2, lang3, lang4 in zip(src_urls_lang, src_langs_url2lang, trg_urls_lang, trg_langs_url2lang)]
+                    outputs = [[1.0 - lang1 * lang2, lang1 * lang2] for lang1, lang2 in zip(src_langs_url2lang, trg_langs_url2lang)]
 
                 outputs = np.array(outputs)
 

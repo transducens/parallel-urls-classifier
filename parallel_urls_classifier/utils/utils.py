@@ -576,7 +576,7 @@ def check_nltk_model(model_path, model, download=True, quiet=False):
 
             nltk.download(model, quiet=quiet)
 
-def get_result_from_url2lang(urls, apply_base64=True):
+def get_result_from_url2lang(urls, apply_base64=True, result_is_float_instead_of_langs=True):
     # expected langs from url2lang: ISO 639-2 or "unk"
     # Additional possible value to be returned by this method: "unk_err"
 
@@ -611,10 +611,13 @@ def get_result_from_url2lang(urls, apply_base64=True):
                 logger.error("Length mismatch: %d were expected, but got %d", len(urls), len(response["ok"]))
 
                 if len(response["ok"]) < len(urls):
-                    response["ok"].extend(["unk_err"] * (len(urls) - len(response["ok"])))
+                    response["ok"].extend(([0.0] if result_is_float_instead_of_langs else ["unk_err"]) * (len(urls) - len(response["ok"])))
                 else:
                     response["ok"] = response["ok"][:len(response["ok"])] # Get only the first len(response["ok"]) elements
 
+            if result_is_float_instead_of_langs:
+                response["ok"] = list(map(float, response["ok"]))
+
             return response["ok"]
 
-        return ["unk_err"] * len(urls)
+        return ([0.0] if result_is_float_instead_of_langs else ["unk_err"]) * len(urls)
