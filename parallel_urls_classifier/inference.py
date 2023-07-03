@@ -322,12 +322,12 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             src_langs_url2lang, trg_langs_url2lang = [], []
 
             if lang_id_target_applies_to_trg_side:
-                langs = utils.get_result_from_url2lang(initial_trg_urls, result_is_float_instead_of_langs=True)
+                langs = utils.get_result_from_url2lang(initial_trg_urls, result_is_float_instead_of_langs=True, langs=trg_url_lang)
 
                 src_langs_url2lang = [1.0] * len(src_url_lang)
                 trg_langs_url2lang = langs
             else:
-                langs = utils.get_result_from_url2lang(initial_src_urls + initial_trg_urls, result_is_float_instead_of_langs=True)
+                langs = utils.get_result_from_url2lang(initial_src_urls + initial_trg_urls, result_is_float_instead_of_langs=True, langs=src_url_lang + trg_url_lang)
 
                 src_langs_url2lang = langs[:len(src_url_lang)]
                 trg_langs_url2lang = langs[len(src_url_lang):]
@@ -479,12 +479,13 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
     trg_urls = [trg_url.replace('\t', ' ') for trg_url in trg_urls]
     str_urls = [f"{src_url}\t{trg_url}" for src_url, trg_url in zip(src_urls, trg_urls)]
 
-    if len(src_urls_lang) != 0 or inference_url2lang:
+    if task_langid or inference_url2lang:
         if len(src_urls_lang) != len(src_urls):
             raise Exception(f"Unexpected different lengths: {len(src_urls_lang)} vs {len(src_urls)}")
         if len(trg_urls_lang) != len(trg_urls):
             raise Exception(f"Unexpected different lengths: {len(trg_urls_lang)} vs {len(trg_urls)}")
 
+    if task_langid:
         str_urls = list(map(lambda s: '\t'.join(s), zip(str_urls, src_urls_lang, trg_urls_lang)))
 
     urls_generator = \
@@ -499,12 +500,12 @@ def non_interactive_inference(model, tokenizer, batch_size, max_length_tokens, d
         src_langs_url2lang, trg_langs_url2lang = [], []
 
         if lang_id_target_applies_to_trg_side:
-            langs = utils.get_result_from_url2lang(trg_urls, result_is_float_instead_of_langs=True)
+            langs = utils.get_result_from_url2lang(trg_urls, result_is_float_instead_of_langs=True, langs=trg_urls_lang)
 
             src_langs_url2lang = [1.0] * len(src_urls_lang)
             trg_langs_url2lang = langs
         else:
-            langs = utils.get_result_from_url2lang(src_urls + trg_urls, result_is_float_instead_of_langs=True)
+            langs = utils.get_result_from_url2lang(src_urls + trg_urls, result_is_float_instead_of_langs=True, langs=src_urls_lang + trg_urls_lang)
 
             src_langs_url2lang = langs[:len(src_urls_lang)]
             trg_langs_url2lang = langs[len(src_urls_lang):]

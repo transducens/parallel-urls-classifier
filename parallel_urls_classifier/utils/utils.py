@@ -576,7 +576,7 @@ def check_nltk_model(model_path, model, download=True, quiet=False):
 
             nltk.download(model, quiet=quiet)
 
-def get_result_from_url2lang(urls, apply_base64=True, result_is_float_instead_of_langs=True):
+def get_result_from_url2lang(urls, apply_base64=True, result_is_float_instead_of_langs=True, langs=[]):
     # expected langs from url2lang: ISO 639-2 or "unk"
     # Additional possible value to be returned by this method: "unk_err"
 
@@ -597,6 +597,10 @@ def get_result_from_url2lang(urls, apply_base64=True, result_is_float_instead_of
         urls = list(map(lambda url: base64.b64encode(url.encode("utf-8", errors="backslashreplace")).decode("utf-8", errors="backslashreplace").replace('+', '_'), urls))
 
     data = {"urls": urls}
+
+    if langs:
+        data["langs"] = langs
+
     res = requests.post(url="http://127.0.0.1:8000/inference", data=data)
     res_text = res.text
     response = json.loads(res_text)
