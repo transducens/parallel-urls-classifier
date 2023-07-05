@@ -583,7 +583,7 @@ def get_result_from_url2lang(urls, apply_base64=True, result_is_float_instead_of
     if "PUC_URL2LANG_SERVER_URL" in os.environ:
         server_url = os.environ["PUC_URL2LANG_SERVER_URL"]
     else:
-        server_url="http://localhost:8000"
+        server_url="http://127.0.0.1:8000"
 
     if "PUC_URL2LANG_APPLY_BASE64" in os.environ:
         apply_base64 = bool(int(os.environ("PUC_URL2LANG_APPLY_BASE64")))
@@ -601,7 +601,7 @@ def get_result_from_url2lang(urls, apply_base64=True, result_is_float_instead_of
     if langs:
         data["langs"] = langs
 
-    res = requests.post(url="http://127.0.0.1:8000/inference", data=data)
+    res = requests.post(url=server_url, data=data)
     res_text = res.text
     response = json.loads(res_text)
 

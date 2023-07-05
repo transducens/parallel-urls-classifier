@@ -131,9 +131,6 @@ def inference():
     src_urls = [u.replace('\t', ' ') for u in src_urls]
     trg_urls = [u.replace('\t', ' ') for u in trg_urls]
 
-    for src_url, trg_url in zip(src_urls, trg_urls):
-        logger.debug("'src<tab>trg' URLs: %s\t%s", src_url, trg_url)
-
     # Inference
 
     disable_streamer = global_conf["disable_streamer"]
@@ -159,7 +156,15 @@ def inference():
 
     results = [str(r) for r in results]
 
-    logger.debug("Results: %s", results)
+    for idx, (url, result) in enumerate(zip(urls, results), 1):
+        src_url_lang, trg_url_lang = '-', '-'
+
+        if langs_provided:
+            src_url, trg_url, src_url_lang, trg_url_lang = url.split('\t')
+        else:
+            src_url, trg_url = url.split('\t')
+
+        logger.debug("Results #%d: %s (src lang: %s) - %s (trg lang: %s): %s", idx, src_url, src_url_lang, trg_url, trg_url_lang, result)
 
     return jsonify({
         "ok": results,
