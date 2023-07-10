@@ -57,7 +57,12 @@ with open(gs_file, 'r', encoding='utf-8', errors="backslashreplace") as fd:
 
 for k in inference_pairs.keys():
     if len(gs_pairs) != len(inference_pairs[k]):
-        raise Exception(f"Different len(gs_pairs) and len(inference_pairs) for task {k}: {len(gs_pairs)} != {len(inference_pairs[k])}")
+        msg = f"Different len(gs_pairs) and len(inference_pairs) for task {k}: {len(gs_pairs)} != {len(inference_pairs[k])}"
+
+        if k == task_prefix:
+            raise Exception(msg)
+        else:
+            sys.stderr.write(f"WARNING: {msg}\n")
 
 tp, tn, fp, fn = 0, 0, 0, 0
 threshold = 0.5 # TODO parametrize?
