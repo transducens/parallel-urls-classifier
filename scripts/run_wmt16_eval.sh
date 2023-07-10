@@ -87,13 +87,13 @@ if [[ ! -d "$PREFIX" ]]; then
   if [[ "$PUC_DIR" == "src-trg" ]]; then
     PUC_AWK_CMD='{print $1"\t"$2'
 
-    if [[ "$PUC_PROVIDE_LANGS" != "yes" ]]; then
+    if [[ "$PUC_PROVIDE_LANGS" == "yes" ]]; then
         PUC_AWK_CMD=''"$PUC_AWK_CMD"'"\ten\tfr\ten\tfr"'
     fi
   elif [[ "$PUC_DIR" == "trg-src" ]]; then
     PUC_AWK_CMD='{print $2"\t"$1'
 
-    if [[ "$PUC_PROVIDE_LANGS" != "yes" ]]; then
+    if [[ "$PUC_PROVIDE_LANGS" == "yes" ]]; then
         PUC_AWK_CMD=''"$PUC_AWK_CMD"'"\tfr\ten\tfr\ten"'
     fi
   else

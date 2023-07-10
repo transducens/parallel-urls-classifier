@@ -161,6 +161,7 @@ def tokenize_batch_from_iterator(iterator, tokenizer, batch_size, f=None, return
                                                                             #  (or other special tokens) since they are automatically added
                                                                             #  by tokenizer.encode_plus / tokenizer.batch_encode_plus
             urls["labels"].append(parallel_urls_output)
+            initial_urls.append((src_url, trg_url))
 
         if (task_language_identification or add_langs_to_initial_urls) and len(url) in (4, 5, 6, 7):
             if len(url) in (6, 7):
