@@ -43,12 +43,12 @@ if [[ ! -d "$PREFIX" ]]; then
   mkdir -p "$PREFIX"
 
   if [[ -z "$PUC_TASKS" ]]; then
-    PUC_TASKS="--auxiliary-tasks language-identification langid-and-urls_classification"
-
-    echo "PUC: auxiliary tasks: $PUC_TASKS"
-  else
-    PUC_TASKS=""
     echo "PUC: auxiliary tasks not defined"
+    PUC_TASKS=""
+  else
+    #PUC_TASKS="--auxiliary-tasks language-identification langid-and-urls_classification"
+    echo "PUC: auxiliary tasks: $PUC_TASKS"
+    PUC_TASKS="--auxiliary-tasks $PUC_TASKS"
   fi
 
   if [[ -z "$PUC_BATCH_SIZE" ]]; then
