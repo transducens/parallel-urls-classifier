@@ -18,7 +18,7 @@ PUC_DIR="$5"
 WMT16_FLAGS="$6"
 
 if [[ ! -d "$LETT_DIR" ]] || ([[ ! -f "$GS" ]] && [[ ! -h "$GS" ]]) || [[ -z "$TASKS" ]] \
-   || [[ -z "$PUC_DIR" ]] language-identification langid-and-urls_classification|| ([[ "$PUC_DIR" != "src-trg" ]] && [[ "$PUC_DIR" != "trg-src" ]]) \
+   || [[ -z "$PUC_DIR" ]] || ([[ "$PUC_DIR" != "src-trg" ]] && [[ "$PUC_DIR" != "trg-src" ]]) \
    || [[ -z "$WMT16_FLAGS" ]] || ([[ "$WMT16_FLAGS" != "none" ]] && [[ "$WMT16_FLAGS" != "r11" ]] \
       && [[ "$WMT16_FLAGS" != "sr" ]] && [[ "$WMT16_FLAGS" != "r11-sr" ]]); then
   >&2 echo "Syntax: script <lett_dir> <path_prefix> <gold_standard> <tasks=urls|language|langid> <dir=src-trg|trg-src>" \
