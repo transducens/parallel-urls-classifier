@@ -18,7 +18,7 @@ PUC_DIR="$5"
 WMT16_FLAGS="$6"
 
 if [[ ! -d "$LETT_DIR" ]] || ([[ ! -f "$GS" ]] && [[ ! -h "$GS" ]]) || [[ -z "$TASKS" ]] \
-   || [[ -z "$PUC_DIR" ]] || ([[ "$PUC_DIR" != "src-trg" ]] && [[ "$PUC_DIR" != "trg-src" ]]) \
+   || [[ -z "$PUC_DIR" ]] language-identification langid-and-urls_classification|| ([[ "$PUC_DIR" != "src-trg" ]] && [[ "$PUC_DIR" != "trg-src" ]]) \
    || [[ -z "$WMT16_FLAGS" ]] || ([[ "$WMT16_FLAGS" != "none" ]] && [[ "$WMT16_FLAGS" != "r11" ]] \
       && [[ "$WMT16_FLAGS" != "sr" ]] && [[ "$WMT16_FLAGS" != "r11-sr" ]]); then
   >&2 echo "Syntax: script <lett_dir> <path_prefix> <gold_standard> <tasks=urls|language|langid> <dir=src-trg|trg-src>" \
@@ -43,12 +43,13 @@ if [[ ! -d "$PREFIX" ]]; then
   mkdir -p "$PREFIX"
 
   if [[ -z "$PUC_TASKS" ]]; then
-    PUC_TASKS="language-identification langid-and-urls_classification"
+    PUC_TASKS="--auxiliary-tasks language-identification langid-and-urls_classification"
 
     echo "PUC: auxiliary tasks: $PUC_TASKS"
+  else
+    PUC_TASKS=""
+    echo "PUC: auxiliary tasks not defined"
   fi
-
-  PUC_TASKS="--auxiliary-tasks $PUC_TASKS"
 
   if [[ -z "$PUC_BATCH_SIZE" ]]; then
     PUC_BATCH_SIZE="400"
@@ -72,9 +73,9 @@ if [[ ! -d "$PREFIX" ]]; then
   PUC_AWK_CMD=""
 
   if [[ -z "$PUC_PROVIDE_LANGS" ]]; then
-    >&2 echo "WARNING: PUC_PROVIDE_LANGS was not defined, but is going to be 'yes'"
+    >&2 echo "ERROR: PUC_PROVIDE_LANGS was not defined"
 
-    PUC_PROVIDE_LANGS="yes"
+    exit 1
   fi
 
   if [[ "$PUC_PROVIDE_LANGS" != "yes" ]] && [[ "$PUC_PROVIDE_LANGS" != "no" ]]; then
@@ -142,6 +143,8 @@ elif [[ "$WMT16_FLAGS" == "r11-sr" ]]; then
   FLAGS=""
 else
   >&2 echo "Bug? Unexpected WMT16 flags value: $WMT16_FLAGS"
+
+  exit 1
 fi
 
 echo "Running WMT16 eval..."
@@ -181,7 +184,7 @@ for task in $(echo "$TASKS"); do
     suffix="out"
   fi
 
-  ls "$LETT_DIR"/* \
+  ls "$LETT_DIR"/*.lett.gz \
     | xargs -I{} -P20 bash -c \
       'a=$(basename "{}"); \
         zcat "{}" \
