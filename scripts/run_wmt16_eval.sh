@@ -151,14 +151,28 @@ echo "Running WMT16 eval..."
 
 AWK_CMD=""
 
-if [[ "$PUC_DIR" == "src-trg" ]]; then
-  AWK_CMD='{print $2"\t"$3"\t"$4}'
-elif [[ "$PUC_DIR" == "trg-src" ]]; then
-  AWK_CMD='{print $2"\t"$4"\t"$3}'
-else
-  >&2 echo "Bug? Unexpected PUC dir value: $PUC_DIR"
+if [[ ! -z "$BASELINE" ]]; then
+  if [[ "$BASELINE" != "yes" ]] && [[ "$BASELINE" != "no" ]]; then
+    >&2 echo "Allowed values for BASELINE are 'yes' or 'no'"
 
-  exit 1
+    exit 1
+  fi
+
+  if [[ "$BASELINE" == "yes" ]]; then
+    echo "Using baseline configuration"
+
+    AWK_CMD='{print $3"\t"$1"\t"$2}'
+  fi
+else
+  if [[ "$PUC_DIR" == "src-trg" ]]; then
+    AWK_CMD='{print $2"\t"$3"\t"$4}'
+  elif [[ "$PUC_DIR" == "trg-src" ]]; then
+    AWK_CMD='{print $2"\t"$4"\t"$3}'
+  else
+    >&2 echo "Bug? Unexpected PUC dir value: $PUC_DIR"
+
+    exit 1
+  fi
 fi
 
 PYTHON3_SUM_SCRIPT='import sys; print(sum([int(l.strip()) for l in sys.stdin]))'
@@ -182,6 +196,10 @@ for task in $(echo "$TASKS"); do
 
   if [[ "$(ls $PREFIX/*.$suffix 2> /dev/null | wc -l)" == "0" ]]; then
     suffix="out"
+  fi
+
+  if [[ "$BASELINE" == "yes" ]]; then
+    task=""
   fi
 
   ls "$LETT_DIR"/*.lett.gz \

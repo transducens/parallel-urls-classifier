@@ -286,13 +286,14 @@ def interactive_inference(model, tokenizer, batch_size, max_length_tokens, devic
             initial_src_urls = [u[0] for u in initial_urls]
             initial_trg_urls = [u[1] for u in initial_urls]
 
-            if task_langid or inference_url2lang:
+            if (task_langid or inference_url2lang) and len(initial_urls) >= 1 and len(initial_urls[0]) > 2:
                 src_url_lang = [u[2] for u in initial_urls]
                 trg_url_lang = [u[3] for u in initial_urls]
         else:
             initial_src_urls = [input("src url: ").strip()]
             initial_trg_urls = [input("trg url: ").strip()]
 
+            # TODO add envvar in order to avoid asking for the languages (debug purposes)
             if task_langid or inference_url2lang:
                 src_url_lang = [input("src url lang: ").strip()]
                 trg_url_lang = [input("trg url lang: ").strip()]
