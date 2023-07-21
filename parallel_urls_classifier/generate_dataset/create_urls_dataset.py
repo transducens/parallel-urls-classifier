@@ -231,7 +231,16 @@ def main(args):
         url_pair = preprocess.preprocess_url(url_pair, separator='/', remove_protocol=False, tokenization=False)
         src_subdomain, src_domain, src_tld = extract(url_pair[0])
         trg_subdomain, trg_domain, trg_tld = extract(url_pair[1])
-        domains = (src_domain, trg_domain) # We are grouping by domain
+        target_src_domain = src_domain
+        target_trg_domain = trg_domain
+
+        if not target_src_domain:
+            # e.g. http://test.tj
+            target_src_domain = src_tld
+        if not target_trg_domain:
+            target_trg_domain = trg_tld
+
+        domains = (target_src_domain, target_trg_domain) # We are grouping by domain
         src_check, trg_check = '', ''
 
         if check_same == "authority":
