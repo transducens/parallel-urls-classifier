@@ -170,12 +170,12 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
     if len(gs_pairs) == 0:
         logging.warning("GS does not contain values")
 
+    # Check positive pairs (might be either TP or FP)
     for idx, (src_pair, trg_pair) in enumerate(zip(src_pairs, trg_pairs)):
         pair = f"{src_pair}\t{trg_pair}"
         pair_hit = False
         near_match = False
 
-        #if pair in gs_pairs and src_pair not in seen_src_pairs and trg_pair not in seen_trg_pairs:
         if rule_1_1 and (src_pair in seen_src_pairs or trg_pair in seen_trg_pairs):
             if pair in gs_pairs:
                 found_pairs.add(pair)
@@ -223,48 +223,48 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
                     nm_gs_pair = f"{src_gs_pair}\t{trg_gs_pair}"
                     force_fp = False
 
-                    if nm_gs_pair in found_pairs:
-                        # This GS pair has already been processed
+                    if rule_1_1 and (src_gs_pair in seen_src_pairs or trg_gs_pair in seen_trg_pairs):
+                        # This pair has already been processed
+                        force_fp = True
 
-                        if rule_1_1:
-                            # This can happen once per pair since a near-match can be found for src and trg side independently
-                            force_fp = True
+                        logging.debug("This near-match is going to be ignored since the GS pair has already been processed: %s", nm_gs_pair)
 
-                            logging.debug("This near-match is going to be ignored since the GS pair has already been processed")
-
-                    # Early stopping: if the documents are the same, the documents will have a very similar length, and if they are not, we want to
-                    #  avoid calculation as many as possible, so we use min of the doc lengths. Since we are looking for a similarity >= 95%, out
-                    #  criteria has to be >= 5% of the difference, and since documents might not be equal but very similar, we use a 15% of difference
-                    early_stopping = int(0.15 * min(len(doc_1), len(doc_2))) if min(len(doc_1), len(doc_2)) > 20 else None
-                    lev_distance = Levenshtein.distance(doc_1, doc_2, score_cutoff=early_stopping if early_stopping != 0 else None)
-
-                    if early_stopping and lev_distance == early_stopping + 1:
-                        # Early stopping hit
-                        similarity = 0.0
-                    else:
-                        # Calculate actual similarity
-                        similarity = 1.0 - lev_distance / max(len(doc_1), len(doc_2))
-
-                    #nolines_doc_1 = doc_1.strip().count('\n') + (1 if doc_1.strip() != '' else 0)
-                    #nolines_doc_2 = doc_2.strip().count('\n') + (1 if doc_2.strip() != '' else 0)
-                    # This early stopping approach doesn't work since similar documents will have similar nolines (even the same), what would
-                    #  lead to, likely, skip just the documents we want to check with Levenshtein
-                    #early_stopping = abs(nolines_doc_1 - nolines_doc_2) * 75.0 if max(nolines_doc_1, nolines_doc_2) > 10 else np.inf
-                    #similarity = levenshtein.levenshtein_opt_space_and_band(doc_1, doc_2, nfactor=max(len(doc_1), len(doc_2)), percentage=0.06, early_stopping=early_stopping)["similarity"]
-
-                    logging.debug("Near-match similarity (url_1, url_2, similarity_score):\t%s\t%s\t%f", url_1, url_2, similarity)
-
-                    if not force_fp and similarity >= 0.95:
-                        logging.debug("Near-match found")
-
-                        tp += 1
-                        positive_near_matches += 1
-                        pair_hit = True
-                        near_match = True
-
-                        found_pairs.add(nm_gs_pair)
-                    else:
+                    if force_fp:
                         negative_near_matches += 1
+                    else:
+                        # Early stopping: if the documents are the same, the documents will have a very similar length, and if they are not, we want to
+                        #  avoid calculation as many as possible, so we use min of the doc lengths. Since we are looking for a similarity >= 95%, out
+                        #  criteria has to be >= 5% of the difference, and since documents might not be equal but very similar, we use a 15% of difference
+                        early_stopping = int(0.15 * min(len(doc_1), len(doc_2))) if min(len(doc_1), len(doc_2)) > 20 else None
+                        lev_distance = Levenshtein.distance(doc_1, doc_2, score_cutoff=early_stopping if early_stopping != 0 else None)
+
+                        if early_stopping and lev_distance == early_stopping + 1:
+                            # Early stopping hit
+                            similarity = 0.0
+                        else:
+                            # Calculate actual similarity
+                            similarity = 1.0 - lev_distance / max(len(doc_1), len(doc_2))
+
+                        #nolines_doc_1 = doc_1.strip().count('\n') + (1 if doc_1.strip() != '' else 0)
+                        #nolines_doc_2 = doc_2.strip().count('\n') + (1 if doc_2.strip() != '' else 0)
+                        # This early stopping approach doesn't work since similar documents will have similar nolines (even the same), what would
+                        #  lead to, likely, skip just the documents we want to check with Levenshtein
+                        #early_stopping = abs(nolines_doc_1 - nolines_doc_2) * 75.0 if max(nolines_doc_1, nolines_doc_2) > 10 else np.inf
+                        #similarity = levenshtein.levenshtein_opt_space_and_band(doc_1, doc_2, nfactor=max(len(doc_1), len(doc_2)), percentage=0.06, early_stopping=early_stopping)["similarity"]
+
+                        logging.debug("Near-match similarity (url_1, url_2, similarity_score):\t%s\t%s\t%f", url_1, url_2, similarity)
+
+                        if similarity >= 0.95:
+                            logging.debug("Near-match found")
+
+                            tp += 1
+                            positive_near_matches += 1
+                            pair_hit = True
+                            near_match = True
+
+                            found_pairs.add(nm_gs_pair)
+                        else:
+                            negative_near_matches += 1
 
         nm_mark = "[NM]" if near_match else ''
         tp_mark = "[TP]" if pair_hit else "[FP]"
@@ -284,7 +284,7 @@ def evaluate_recall(src_pairs, trg_pairs, src_gs_pairs, trg_gs_pairs, src_urls, 
         seen_trg_pairs.add(trg_pair)
 
     if not disable_near_matchs:
-        logging.debug("(Positive, Negative) near-matches found: (%d, %d)", positive_near_matches, negative_near_matches)
+        logging.info("(Positive, Negative) near-matches found: (%d, %d)", positive_near_matches, negative_near_matches)
 
     logging.info("(True, False) positives: (%d, %d)", tp, fp)
 
