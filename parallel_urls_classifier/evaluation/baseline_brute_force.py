@@ -64,7 +64,8 @@ def get_same_case(s, reference, apply=True):
     return result
 
 def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs,
-                         lowercase_tokens=False, print_pairs=True, print_negative_matches=False, print_score=False):
+                         lowercase_tokens=False, print_pairs=True, print_negative_matches=False, print_score=False,
+                         evaluate_pairs=False):
     def evaluate(src_url, trg_url):
         src_url_tokenized = tokenizer.tokenize(src_url, check_gaps=False)
         trg_url_tokenized = tokenizer.tokenize(trg_url, check_gaps=False)
@@ -107,8 +108,13 @@ def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, u
     total_pairs = 0
     seen_src_urls, seen_trg_urls = set(), set()
 
-    for src_url in src_urls:
-        for trg_url in trg_urls:
+    for src_url_idx in range(len(src_urls)):
+        for trg_url_idx in range(len(trg_urls)):
+            if evaluate_pairs:
+              trg_url_idx = src_url_idx
+
+            src_url = src_urls[src_url_idx]
+            trg_url = trg_urls[trg_url_idx]
             pair = False
 
             if use_gs:
@@ -138,6 +144,9 @@ def evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, u
                     seen_trg_urls.add(trg_url)
 
                     # We don't break because we need to evaluate all the URLs from the cart. product
+
+            if evaluate_pairs:
+                break
 
     return y_pred, y_true, matches, total_pairs
 
@@ -269,10 +278,14 @@ def main(args):
     evaluate_m_x_n = args.evaluate_m_x_n
     print_negative_matches = args.print_negative_matches
     print_score = args.print_score
+    input_are_pairs = args.input_are_pairs
 
     gs, src_gs, trg_gs = get_gs(gs_file) if gs_file else (set(), set(), set())
     src_urls, trg_urls = [], []
     use_gs = evaluate_urls_in_gs and gs_file
+
+    if input_are_pairs and not evaluate_m_x_n:
+      raise Exception("Not supported")
 
     # Read URLs
     for idx, line in enumerate(input_file, 1):
@@ -283,14 +296,20 @@ def main(args):
 
             continue
 
-        url, lang = line
+        if input_are_pairs:
+          src_url, trg_url = line
 
-        if lang == src_lang:
-            src_urls.append(url)
-        elif lang == trg_lang:
-            trg_urls.append(url)
+          src_urls.append(src_url)
+          trg_urls.append(trg_url)
         else:
-            logging.warning("Unexpected lang in TSV entry #%d: %s", idx, lang)
+          url, lang = line
+
+          if lang == src_lang:
+              src_urls.append(url)
+          elif lang == trg_lang:
+              trg_urls.append(url)
+          else:
+              logging.warning("Unexpected lang in TSV entry #%d: %s", idx, lang)
 
     logging.info("Src and trg URLs: %d, %d", len(src_urls), len(trg_urls))
 
@@ -307,7 +326,7 @@ def main(args):
         y_pred, y_true, matches, total_pairs =\
             evaluate_pairs_m_x_n(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs, trg_gs,
                                  lowercase_tokens=lowercase_tokens, print_negative_matches=print_negative_matches,
-                                 print_score=print_score)
+                                 print_score=print_score, evaluate_pairs=input_are_pairs)
     else:
         y_pred, y_true, matches, total_pairs =\
             evaluate_section_42(src_lang_tokens, trg_lang_tokens, src_urls, trg_urls, use_gs, gs, src_gs,
@@ -360,6 +379,9 @@ def initialization():
                         help="Print negative matches (i.e. not only possitive matches)")
     parser.add_argument('--print-score', action="store_true",
                         help="Print 0 or 1 for positive or negative matches, respectively")
+    parser.add_argument('--input-are-pairs', action="store_true",
+                        help="Input is expected to be pairs instead of 'URL <tab> lang'. Input is expected to be 'URL1 <tab> URL2' where "
+                             "URL1 is expected to be in language provided in --src-lang (same for URL2 and --trg-lang)")
 
     parser.add_argument('-v', '--verbose', action="store_true", help="Verbose logging mode")
 
