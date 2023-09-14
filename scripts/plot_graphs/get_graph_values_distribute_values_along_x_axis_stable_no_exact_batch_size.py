@@ -23,8 +23,8 @@ with open(fn) as fd:
     parallel_docs_classifier = int(l[6])
     parallel_docs_none = int(l[7])
 
-    if actual_docs_cld2 % batch_size != 0 or actual_docs_classifier % batch_size != 0 or actual_docs_none % batch_size != 0:
-      continue
+#    if actual_docs_cld2 % batch_size != 0 or actual_docs_classifier % batch_size != 0 or actual_docs_none % batch_size != 0:
+#      continue
 
     websites.add(website)
     all_processed_warcs.add(processed_warcs)
@@ -58,6 +58,11 @@ final_data = {}
 
 processed_docs = batch_size
 last_n_websites_available = None
+processed_docs_individually = {
+    "cld2": 0,
+    "classifier": 0,
+    "none": 0,
+}
 
 for processed_warcs in sorted(all_processed_warcs, reverse=False):
   available_n_websites = len(warc2websites[processed_warcs])
@@ -76,26 +81,38 @@ for processed_warcs in sorted(all_processed_warcs, reverse=False):
       "cld2": data[website][processed_warcs]["cld2"]["parallel_docs"],
       "classifier": data[website][processed_warcs]["classifier"]["parallel_docs"],
       "none": data[website][processed_warcs]["none"]["parallel_docs"],
+      "docs_cld2": data[website][processed_warcs]["cld2"]["actual_docs"],
+      "docs_classifier": data[website][processed_warcs]["classifier"]["actual_docs"],
+      "docs_none": data[website][processed_warcs]["none"]["actual_docs"],
     }
 
     if processed_docs - batch_size > 0:
       final_data[processed_docs]["cld2"] += final_data[processed_docs - batch_size]["cld2"]
       final_data[processed_docs]["classifier"] += final_data[processed_docs - batch_size]["classifier"]
       final_data[processed_docs]["none"] += final_data[processed_docs - batch_size]["none"]
+      final_data[processed_docs]["docs_cld2"] += final_data[processed_docs - batch_size]["docs_cld2"]
+      final_data[processed_docs]["docs_classifier"] += final_data[processed_docs - batch_size]["docs_classifier"]
+      final_data[processed_docs]["docs_none"] += final_data[processed_docs - batch_size]["docs_none"]
 
     if processed_warcs - batch_size > 0:
       # Subtract previous documents of the previous batch
       final_data[processed_docs]["cld2"] -= data[website][processed_warcs - batch_size]["cld2"]["parallel_docs"]
       final_data[processed_docs]["classifier"] -= data[website][processed_warcs - batch_size]["classifier"]["parallel_docs"]
       final_data[processed_docs]["none"] -= data[website][processed_warcs - batch_size]["none"]["parallel_docs"]
+      final_data[processed_docs]["docs_cld2"] -= data[website][processed_warcs - batch_size]["cld2"]["actual_docs"]
+      final_data[processed_docs]["docs_classifier"] -= data[website][processed_warcs - batch_size]["classifier"]["actual_docs"]
+      final_data[processed_docs]["docs_none"] -= data[website][processed_warcs - batch_size]["none"]["actual_docs"]
 
     processed_docs += batch_size
 
-print("warcs\tdownloaded documents\tcld2\tclassifier\tnone\tclassifier - cld2\tclassifier - none\tcld2 - none")
+print("warcs\tdownloaded documents\tcld2_docs\tclassifier_docs\tnone_docs\tcld2\tclassifier\tnone\tclassifier - cld2\tclassifier - none\tcld2 - none")
 
 for docs in sorted(final_data.keys()):
   cld2 = final_data[docs]["cld2"]
   classifier = final_data[docs]["classifier"]
   none = final_data[docs]["none"]
+  docs_cld2 = final_data[docs]["docs_cld2"]
+  docs_classifier = final_data[docs]["docs_classifier"]
+  docs_none = final_data[docs]["docs_none"]
 
-  print(f"-\t{docs}\t{cld2}\t{classifier}\t{none}\t{classifier - cld2}\t{classifier - none}\t{cld2 - none}")
+  print(f"-\t{docs}\t{docs_cld2}\t{docs_classifier}\t{docs_none}\t{cld2}\t{classifier}\t{none}\t{classifier - cld2}\t{classifier - none}\t{cld2 - none}")
