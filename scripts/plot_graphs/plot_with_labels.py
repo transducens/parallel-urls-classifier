@@ -12,8 +12,8 @@ provided_files = (len(sys.argv) - 3 - 1) // 2
 if provided_files * 2 + 3 + 1 != len(sys.argv):
   raise Exception("Unexpected provided args")
 
-labels = sys.argv[4 + 0 * provided_args:4 + 1 * provided_args]
-files = sys.argv[4 + 1 * provided_args:4 + 2 * provided_args]
+labels = sys.argv[4 + 0 * provided_files:4 + 1 * provided_files]
+files = sys.argv[4 + 1 * provided_files:4 + 2 * provided_files]
 
 def read_file(f):
   x, y = [], []
@@ -34,8 +34,8 @@ for f in files:
   xn.append(x)
   yn.append(y)
 
-for f, x, y in zip(files, xn, yn):
-  plt.plot(x, y, label=f)
+for label, x, y in zip(labels, xn, yn):
+  plt.plot(x, y, label=label)
 
 plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15))
 plt.xlabel(xlabel)
