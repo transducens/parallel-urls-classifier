@@ -28,7 +28,7 @@ for f in files:
   yn.append(y)
 
 for f, x, y in zip(files, xn, yn):
-  plt.plot(x, y, label=f)
+  plt.plot(x, y, 'o', label=f)
 
 plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15))
 plt.xlabel(xlabel)
