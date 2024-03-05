@@ -22,14 +22,16 @@ def init(model_input, batch_size=16, streamer_max_latency=0.1, target_task="urls
     sys.argv.extend([
         "--batch-size", str(batch_size),
         "--parallel-likelihood",
-        "--auxiliary-tasks", "language-identification", "langid-and-urls_classification",
+        #"--auxiliary-tasks", "language-identification", "langid-and-urls_classification",
         "--target-task", target_task,
         "--regression",
         "--streamer-max-latency", str(streamer_max_latency),
         "--do-not-run-flask-server", # Necessary for gunicorn in order to work properly
         "--expect-urls-base64",
-        #"--verbose",
+        "--verbose",
         #"--disable-streamer", # It should be enabled for crawls of multiple websites, but disabled for a few websites
+        "--auxiliary-tasks-flags", "language-identification_target-applies-only-to-trg-side",
+        "--inference-lang-using-url2lang",
         model_input
     ])
 
