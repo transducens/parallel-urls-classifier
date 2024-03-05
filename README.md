@@ -260,6 +260,7 @@ optional arguments:
   --waiting-time WAITING_TIME
                         Waiting time, if needed for letting the user react
                         (default: 20)
+  -v, --verbose         Verbose logging mode (default: False)
 ```
 
 ## CLI examples
