@@ -1,0 +1,41 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: parallel-urls-classifier
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Cristian
+    family-names: García-Romero
+    email: cgarcia@dlsi.ua.es
+    affiliation: >-
+      Universitat d'Alacant, Transducens research group,
+      Spain
+    orcid: 'https://orcid.org/0000-0002-0483-4358'
+  - given-names: Miquel
+    family-names: Esplà-Gomis
+    email: mespla@dlsi.ua.es
+    affiliation: >-
+      Universitat d'Alacant, Transducens research group,
+      Spain
+    orcid: 'https://orcid.org/0000-0002-2682-066X'
+  - given-names: Felipe
+    family-names: Sánchez-Martínez
+    email: fsanchez@dlsi.ua.es
+    affiliation: >-
+      Universitat d'Alacant, Transducens research group,
+      Spain
+    orcid: 'https://orcid.org/0000-0002-2295-2630'
+repository-code: 'https://github.com/transducens/parallel-urls-classifier'
+repository: >-
+  https://huggingface.co/Transducens/xlm-roberta-base-parallel-urls-classifier
+abstract: PUC (parallel-urls-classifier) infers if two URLs link to parallel documents using their URLs.
+keywords:
+  - url
+  - crawling
+  - document aligner
+license: Apache-2.0
+commit: a5a8c91f17305e267182ab9aced0435d194685a5
